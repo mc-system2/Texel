@@ -1,0 +1,16 @@
+﻿name: Deploy prod (Azure Static Web Apps)
+on:
+  push: { branches: [ "main" ] }
+  workflow_dispatch:
+jobs:
+  build_and_deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/static-web-apps-deploy@v1
+        with:
+          azure_static_web_apps_api_token: ${{ secrets.SWA_TOKEN_TEXEL_PROD }}
+          action: upload
+          app_location: "frontend/src"
+          api_location: ""
+          output_location: ""
