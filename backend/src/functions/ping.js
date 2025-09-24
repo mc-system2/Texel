@@ -10,7 +10,7 @@ app.http("ping", {
       ok: true,
       env: process.env.APP_ENV ?? "local",
       time: new Date().toISOString(),
-      "YES/NO",
+      "YES",
     },
   }),
 });
