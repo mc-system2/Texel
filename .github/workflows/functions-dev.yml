@@ -10,29 +10,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
-        with:
-          node-version: "20"
+        with: { node-version: "20" }
 
-      # 依存を入れる（backend 配下）
       - name: Install deps
         working-directory: backend
         run: |
-          if [ -f package-lock.json ]; then
-            npm ci
-          else
-            npm install
-          fi
+          if [ -f package-lock.json ]; then npm ci; else npm install; fi
 
-      # Azure Functions Core Tools をインストール
-      - name: Install Azure Functions Core Tools
-        run: npm i -g azure-functions-core-tools@4 --unsafe-perm true
-
-      # Publish（ローカルと同じ）
-      - name: Publish to Azure Functions (dev)
-        working-directory: backend
-        env:
-          PUBLISH_PROFILE: ${{ secrets.AZURE_FUNCTIONAPP_PUBLISH_PROFILE_DEV }}
-        run: |
-          echo "$PUBLISH_PROFILE" > publishProfile.xml
-          func azure functionapp publish func-texel-api-dev-jpe-001 --publish-profile publishProfile.xml
-          rm -f publishProfile.xml
+      - name: Deploy to Azure Functions (dev)
+        uses: Azure/functions-action@v1
+        with:
+          app-name: func-texel-api-dev-jpe-001
+          package: backend
+          publish-profile: ${{ secrets.AZURE_FUNCTIONAPP_PUBLISH_PROFILE_DEV }}
