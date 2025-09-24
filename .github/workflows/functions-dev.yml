@@ -9,12 +9,25 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-node@v4
-        with: { node-version: "20" }
-      - run: cd backend && npm ci
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: "backend/package-lock.json"
+
+      - name: Install deps
+        working-directory: backend
+        run: |
+          if [ -f package-lock.json ]; then
+            npm ci
+          else
+            npm install
+          fi
+
       - name: Deploy to Azure Functions (dev)
         uses: Azure/functions-action@v1
         with:
-          app-name: func-texel-api-dev-jpe-001          # ← ここで指定！
+          app-name: func-texel-api-dev-jpe-001
           package: backend
           publish-profile: ${{ secrets.AZURE_FUNCTIONAPP_PUBLISH_PROFILE_DEV }}
