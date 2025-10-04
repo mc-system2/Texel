@@ -1,0 +1,30 @@
+{
+  "manifest_version": 3,
+  "name": "Texel",
+  "version": "0.1.0",
+  "description": "Texel: PDF・間取図・写真を分析して販促テキストを生成するサイドパネル拡張。",
+  "icons": {
+    "16": "icons/texel-icon16-v3.png",
+    "48": "icons/texel-icon48-v3.png",
+    "128": "icons/texel-icon128-v3.png",
+    "256": "icons/texel-icon256-v3.png"
+  },
+  "action": {
+    "default_title": "Texel",
+    "default_icon": "icons/texel-icon128-v3.png"
+  },
+  "permissions": ["sidePanel"],
+  "side_panel": {
+    "default_path": "panel.html"
+  },
+  "host_permissions": [
+    "https://*.azurewebsites.net/*",
+    "https://*.blob.core.windows.net/*"
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["icons/*"],
+      "matches": ["<all_urls>"]
+    }
+  ]
+}

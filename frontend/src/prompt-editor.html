@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Texel プロンプト編集</title>
+  <link rel="stylesheet" href="./prompt-editor.css" />
+</head>
+<body>
+  <h2>Texel プロンプト編集画面 <span class="label" id="label"></span></h2>
+  <div class="panel">
+    <div class="tips">
+      BLOBストレージのプロンプト・パラメータを編集します。<br />
+      <span class="api-path">HTTP <b>/LoadPromptText</b> / <b>/SavePromptText</b></span>
+      <br />種別: <code id="filename"></code>
+    </div>
+
+    <!-- タブ -->
+    <div class="tab-header">
+      <button class="tab-button active" id="tabPromptBtn">プロンプト</button>
+      <button class="tab-button" id="tabParamsBtn">パラメータ</button>
+    </div>
+
+    <!-- プロンプト編集タブ -->
+    <div class="tab-panel active" id="promptTab">
+      <textarea id="promptEditor" placeholder="ここにプロンプトが読み込まれます..."></textarea>
+    </div>
+
+    <!-- パラメータ編集タブ -->
+    <div class="tab-panel" id="paramsTab">
+      <div>
+        <div class="slider-group">
+          <div class="slider-label">
+            入力補完トークンの最大数（100～32768）
+            <span class="info-icon" tabindex="0">
+              <svg viewBox="0 0 20 20" fill="currentColor"><circle cx="10" cy="10" r="9" stroke="#666" stroke-width="1" fill="#eef6fb"/><text x="10" y="15" text-anchor="middle" font-size="12" fill="#0AA0A6" font-weight="bold">i</text></svg>
+              <span class="tooltip">モデル応答の最大出力トークン数を制限します。<br>大きくすると長い応答になります。</span>
+            </span>
+            <span class="slider-value" id="val_max_tokens">800</span>
+          </div>
+          <input type="range" id="param_max_tokens" min="100" max="32768" step="1" value="800" />
+        </div>
+
+        <div class="slider-group">
+          <div class="slider-label">
+            温度 [temperature]（0.00～1.00）
+            <span class="info-icon" tabindex="0">
+              <svg viewBox="0 0 20 20" fill="currentColor"><circle cx="10" cy="10" r="9" stroke="#666" stroke-width="1" fill="#eef6fb"/><text x="10" y="15" text-anchor="middle" font-size="12" fill="#0AA0A6" font-weight="bold">i</text></svg>
+              <span class="tooltip">応答のランダム性（多様性）を制御します。</span>
+            </span>
+            <span class="slider-value" id="val_temperature">1.00</span>
+          </div>
+          <input type="range" id="param_temperature" min="0" max="1" step="0.01" value="1.00" />
+        </div>
+
+        <div class="slider-group">
+          <div class="slider-label">
+            Top P（0.01～1.00）
+            <span class="info-icon" tabindex="0">
+              <svg viewBox="0 0 20 20" fill="currentColor"><circle cx="10" cy="10" r="9" stroke="#666" stroke-width="1" fill="#eef6fb"/><text x="10" y="15" text-anchor="middle" font-size="12" fill="#0AA0A6" font-weight="bold">i</text></svg>
+              <span class="tooltip">累積確率で最も高い単語グループを選択します。</span>
+            </span>
+            <span class="slider-value" id="val_top_p">1.00</span>
+          </div>
+          <input type="range" id="param_top_p" min="0.01" max="1" step="0.01" value="1.00" />
+        </div>
+
+        <div class="slider-group">
+          <div class="slider-label">
+            頻度ペナルティ [frequency_penalty]（-2.00～2.00）
+            <span class="info-icon" tabindex="0">
+              <svg viewBox="0 0 20 20" fill="currentColor"><circle cx="10" cy="10" r="9" stroke="#666" stroke-width="1" fill="#eef6fb"/><text x="10" y="15" text-anchor="middle" font-size="12" fill="#0AA0A6" font-weight="bold">i</text></svg>
+              <span class="tooltip">これまでに出た単語の再出現を抑制します。</span>
+            </span>
+            <span class="slider-value" id="val_frequency_penalty">0.00</span>
+          </div>
+          <input type="range" id="param_frequency_penalty" min="-2" max="2" step="0.01" value="0.00" />
+        </div>
+
+        <div class="slider-group">
+          <div class="slider-label">
+            プレゼンスペナルティ [presence_penalty]（-2.00～2.00）
+            <span class="info-icon" tabindex="0">
+              <svg viewBox="0 0 20 20" fill="currentColor"><circle cx="10" cy="10" r="9" stroke="#666" stroke-width="1" fill="#eef6fb"/><text x="10" y="15" text-anchor="middle" font-size="12" fill="#0AA0A6" font-weight="bold">i</text></svg>
+              <span class="tooltip">新しい話題を促進します。</span>
+            </span>
+            <span class="slider-value" id="val_presence_penalty">0.00</span>
+          </div>
+          <input type="range" id="param_presence_penalty" min="-2" max="2" step="0.01" value="0.00" />
+        </div>
+
+        <div class="slider-group">
+          <div class="slider-label">
+            応答数 n（1～4）
+            <span class="info-icon" tabindex="0">
+              <svg viewBox="0 0 20 20" fill="currentColor"><circle cx="10" cy="10" r="9" stroke="#666" stroke-width="1" fill="#eef6fb"/><text x="10" y="15" text-anchor="middle" font-size="12" fill="#0AA0A6" font-weight="bold">i</text></svg>
+              <span class="tooltip">同時に複数応答を返します。</span>
+            </span>
+            <span class="slider-value" id="val_n">1</span>
+          </div>
+          <input type="range" id="param_n" min="1" max="4" step="1" value="1" />
+        </div>
+      </div>
+    </div>
+
+    <br />
+    <button id="loadButton">Load</button>
+    <button id="saveButton">Save</button>
+    <div id="statusMessage"></div>
+  </div>
+
+  <script src="./prompt-editor.js"></script>
+</body>
+</html>

@@ -8,7 +8,10 @@
     "test": "echo \"No tests yet...\""
   },
   "dependencies": {
-    "@azure/functions": "^4.0.0"
+    "@azure/functions": "^4.0.0",
+    "@azure/storage-blob": "^12.28.0",
+    "axios": "^1.12.2",
+    "uuid": "^13.0.0"
   },
   "devDependencies": {
     "azure-functions-core-tools": "^4.x"
