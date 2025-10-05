@@ -5,6 +5,7 @@
  *  - PDF 要約 / 間取り図解析 / 部屋写真解析 / SUUMO / athome 文言生成
  *  - 画像URL→Base64 は API.image2base64 に統一
  *  - localStorage/chrome.storage.local のキーは texel-* で統一
+ *  - ★ おすすめ/ポータル生成は「間取り図分析＋部屋写真コメント＋AI参照用メモ(+PDF)」を材料に送信
  * ===================================================================== */
 
 import { detectUserId } from "./utils/user.js";
@@ -162,6 +163,30 @@ const spinnerCounter = Object.create(null);
 function showLoadingSpinner(target) { const el = document.getElementById(`loadingSpinner-${target}`); if (!el) return; spinnerCounter[target] = (spinnerCounter[target] || 0) + 1; el.style.display = "block"; }
 function hideLoadingSpinner(target) { const el = document.getElementById(`loadingSpinner-${target}`); if (!el) return; spinnerCounter[target] = Math.max((spinnerCounter[target] || 1) - 1, 0); if (spinnerCounter[target] === 0) el.style.display = "none"; }
 function attachAutoSave(id, evt = "input") { const el = document.getElementById(id); if (!el || el.dataset.autosave) return; el.dataset.autosave = "1"; el.addEventListener(evt, autosaveDebounced); }
+
+/* ====== 新規：ネタ元を束ねる（おすすめ／ポータル共通） ====== */
+function collectRoomCommentsText() {
+  return [...document.querySelectorAll("#history-container .drop-zone textarea")]
+    .map(t => t.value.trim())
+    .filter(Boolean)
+    .join("\n\n");
+}
+function buildCombinedSource() {
+  const memo       = document.getElementById("property-info")?.value.trim() || "";
+  const floorplan  = document.getElementById("floorplan-preview-text")?.value.trim() || "";
+  const roomText   = collectRoomCommentsText();
+  const pdfText    = document.getElementById("pdf-preview")?.textContent?.trim() || "";
+
+  const sections = [
+    `# 物件コード\n${propertyCode || "-"}`,
+    memo && `# AI参照用メモ\n${memo}`,
+    floorplan && `# 間取り図の分析結果\n${floorplan}`,
+    roomText && `# 部屋写真のコメント\n${roomText}`,
+    pdfText && `# PDF抽出テキスト＆要約\n${pdfText}`
+  ].filter(Boolean);
+
+  return sections.join("\n\n");
+}
 
 /* ==============================
  * 4) 入力バリデーション
@@ -406,6 +431,20 @@ document.addEventListener("DOMContentLoaded", async () => {
     autoGrow(fpTextarea);
   }
 
+  // 生成／再要約／元に戻す（←追加）
+  document.getElementById("generate-suggestions").addEventListener("click", onGenerateSuggestions);
+  document.getElementById("generate-summary").addEventListener("click", onRegenerateSummary);
+  const resetBtn = document.getElementById("reset-suggestion");
+  if (resetBtn) {
+    resetBtn.addEventListener("click", onClickResetSuggestion); // 何度でも有効
+  }
+
+  // 画像ポップアップ
+  bindImagePopup();
+
+  // 方位決定 → 間取り図解析（保留した部屋画像の再開も実施）
+  document.getElementById("confirmNorthButton").addEventListener("click", onConfirmNorth);
+
   // 決定（起動）
   btn.addEventListener("click", async () => {
     propertyCode = pcIn.value.trim().toUpperCase();
@@ -537,15 +576,8 @@ document.addEventListener("DOMContentLoaded", async () => {
     if (hidden) requestAnimationFrame(() => autoGrow(document.getElementById("floorplan-preview-text")));
   });
 
-  // 生成／再要約
-  document.getElementById("generate-suggestions").addEventListener("click", onGenerateSuggestions);
-  document.getElementById("generate-summary").addEventListener("click", onRegenerateSummary);
-
-  // 画像ポップアップ
-  bindImagePopup();
-
-  // 方位決定 → 間取り図解析（保留した部屋画像の再開も実施）
-  document.getElementById("confirmNorthButton").addEventListener("click", onConfirmNorth);
+  // 最初は「元に戻す」ボタンの状態を同期
+  updateResetSuggestionBtn?.();
 });
 
 /* ==============================
@@ -1031,13 +1063,15 @@ async function addToHistory(imageSrc, commentText, roomType = "", description = 
 
   const toolRow = document.createElement("div");
   toolRow.style.cssText =
-    "display:grid;grid-template-columns:auto 1fr auto;align-items:center;margin-top:4px;";
+    "display:grid;grid-template-columns:auto 1fr auto;align-items:center;margin-top:4px;gap:8px;";
 
+  // ▼ 再生成ボタン（スピン対応）
   const regenBtn = document.createElement("button");
   regenBtn.innerHTML = "↻";
   regenBtn.title = "コメントを再生成";
+  regenBtn.className = "texel-regenerate-btn"; // ← CSSで回転中心など調整
   regenBtn.style.cssText =
-    "background:transparent;border:none;font-size:20px;cursor:pointer;color:#666;transition:transform .3s;";
+    "background:transparent;border:none;font-size:20px;cursor:pointer;color:#666;transition:transform .2s;line-height:1;";
 
   const copyBtn = document.createElement("button");
   copyBtn.textContent = "📋 コピー";
@@ -1056,20 +1090,31 @@ async function addToHistory(imageSrc, commentText, roomType = "", description = 
   toolRow.append(regenBtn, copyBtn, counter);
   commentArea.append(textarea, toolRow);
 
+  // ▼ くるくる実装：押下→回転ON、完了→回転OFF
   regenBtn.onclick = async () => {
+    // aria と disabled をセット（アクセシビリティ＋連打防止）
+    regenBtn.setAttribute("aria-busy", "true");
     regenBtn.disabled = true;
+
+    // 回転開始（.spin は 19) で注入する CSS で定義）
     regenBtn.classList.add("spin");
-    await analyzeRoomPhotoWithGPT(
-      imageSrc,
-      imageSrc,
-      wrapper.dataset.roomType ?? "",
-      wrapper.dataset.description ?? "",
-      [textarea.value],
-      true,
-      wrapper
-    );
-    regenBtn.classList.remove("spin");
-    regenBtn.disabled = false;
+
+    try {
+      await analyzeRoomPhotoWithGPT(
+        imageSrc,
+        imageSrc,
+        wrapper.dataset.roomType ?? "",
+        wrapper.dataset.description ?? "",
+        [textarea.value],
+        true,
+        wrapper
+      );
+    } finally {
+      // 回転停止
+      regenBtn.classList.remove("spin");
+      regenBtn.disabled = false;
+      regenBtn.removeAttribute("aria-busy");
+    }
   };
 
   const updateCount = () => {
@@ -1086,7 +1131,7 @@ async function addToHistory(imageSrc, commentText, roomType = "", description = 
   toggle.onclick = () => {
     const hidden = textarea.style.display === "none";
     textarea.style.display = hidden ? "block" : "none";
-    toolRow.style.display = hidden ? "flex" : "none";
+    toolRow.style.display = hidden ? "grid" : "none";
     toggle.textContent = hidden ? "▼ 生成コメントを非表示" : "▶ 生成コメントを表示";
   };
 
@@ -1106,12 +1151,44 @@ async function addToHistory(imageSrc, commentText, roomType = "", description = 
 /* ==============================
  * 19) 共通ユーティリティ
  * ============================== */
-function autoGrow(el, minH = 60) { if (!el) return; el.style.height = "auto"; el.style.height = Math.max(el.scrollHeight, minH) + "px"; }
-function updateGenerateButtonLabel() { const available = !!floorplanAnalysisResult; generateButton.disabled = !available; generateButton.textContent = hasRoomAnalysis ? "間取図と画像から生成" : "間取図から生成"; }
-function updateRoomAnalysisStatus() { hasRoomAnalysis = [...historyContainer.querySelectorAll(".drop-zone")].some((w) => w.querySelector("textarea")?.value.trim()); updateGenerateButtonLabel(); }
-function showCopyNotification(message = "クリップボードへコピーしました") { const note = document.createElement("div"); note.textContent = message; note.style.cssText = `position: fixed; bottom: 10%; left: 50%; transform: translateX(-50%); background: #333; color: #fff; padding: 8px 16px; border-radius: 6px; font-size: 13px; min-width: 260px; text-align: center; opacity: 0; transition: opacity .3s ease; z-index: 9999;`; document.body.appendChild(note); requestAnimationFrame(() => (note.style.opacity = "1")); setTimeout(() => { note.style.opacity = "0"; note.addEventListener("transitionend", () => note.remove()); }, 2000); }
-function showCodeBanner(codeText) { const banner = document.getElementById("code-banner"); if (!banner) return; banner.textContent = `${codeText}`; banner.style.display = "block"; }
-function getTextareaValue(id) { const el = document.getElementById(id); return el && typeof el.value === "string" ? el.value.trim() : ""; }
+function autoGrow(el, minH = 60) {
+  if (!el) return;
+  el.style.height = "auto";
+  el.style.height = Math.max(el.scrollHeight, minH) + "px";
+}
+function updateGenerateButtonLabel() {
+  const available = !!floorplanAnalysisResult;
+  generateButton.disabled = !available;
+  generateButton.textContent = hasRoomAnalysis ? "間取図と画像から生成" : "間取図から生成";
+}
+function updateRoomAnalysisStatus() {
+  hasRoomAnalysis = [...historyContainer.querySelectorAll(".drop-zone")]
+    .some((w) => w.querySelector("textarea")?.value.trim());
+  updateGenerateButtonLabel();
+}
+function showCopyNotification(message = "クリップボードへコピーしました") {
+  const note = document.createElement("div");
+  note.textContent = message;
+  note.style.cssText = `position: fixed; bottom: 10%; left: 50%; transform: translateX(-50%);
+    background: #333; color: #fff; padding: 8px 16px; border-radius: 6px; font-size: 13px;
+    min-width: 260px; text-align: center; opacity: 0; transition: opacity .3s ease; z-index: 9999;`;
+  document.body.appendChild(note);
+  requestAnimationFrame(() => (note.style.opacity = "1"));
+  setTimeout(() => {
+    note.style.opacity = "0";
+    note.addEventListener("transitionend", () => note.remove());
+  }, 2000);
+}
+function showCodeBanner(codeText) {
+  const banner = document.getElementById("code-banner");
+  if (!banner) return;
+  banner.textContent = `${codeText}`;
+  banner.style.display = "block";
+}
+function getTextareaValue(id) {
+  const el = document.getElementById(id);
+  return el && typeof el.value === "string" ? el.value.trim() : "";
+}
 function bindImagePopup() {
   const overlay = document.getElementById("image-popup-overlay");
   const popupImg = document.getElementById("image-popup");
@@ -1133,6 +1210,41 @@ function bindImagePopup() {
   overlay.addEventListener("click", () => { overlay.style.display = "none"; popupImg.src = ""; });
   document.addEventListener("keydown", (e) => { if (e.key === "Escape") { overlay.style.display = "none"; popupImg.src = ""; } });
 }
+
+/* --- ▼ 追加：スピナー用CSSを一度だけ注入（↻ がクルクル回ります） --- */
+(function injectSpinnerStyleOnce() {
+  if (document.getElementById("texel-spinner-style")) return;
+  const style = document.createElement("style");
+  style.id = "texel-spinner-style";
+  style.textContent = `
+    /* 回転アニメーション */
+    @keyframes texel-rotate {
+      from { transform: rotate(0deg); }
+      to   { transform: rotate(360deg); }
+    }
+    /* 再生成ボタンの基準スタイル（回転中心など調整） */
+    .texel-regenerate-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 28px;
+      height: 28px;
+      border-radius: 6px;
+      transform-origin: 50% 50%;
+      user-select: none;
+    }
+    /* クリック中に回転させるクラス */
+    .texel-regenerate-btn.spin {
+      animation: texel-rotate 0.9s linear infinite;
+    }
+    /* aria-busy=true のとき少し薄くする（進行中の雰囲気） */
+    .texel-regenerate-btn[aria-busy="true"] {
+      opacity: 0.7;
+      cursor: progress;
+    }
+  `;
+  document.head.appendChild(style);
+})();
 
 /* ==============================
  * 20) 間取り図：方位決定
@@ -1175,7 +1287,47 @@ function showNorthVectorDropdown() {
 /* ==============================
  * 21) おすすめ生成
  * ============================== */
-async function onGenerateSuggestions() {
+
+// 使い回しヘルパ（元に戻すが何度でも効くようにする）
+function applySuggestion(text) {
+  let ta = document.getElementById("editable-suggestion");
+  if (!ta) {
+    ta = document.createElement("textarea");
+    ta.id = "editable-suggestion";
+    ta.style.cssText = "width:100%;height:300px;font-size:13px;";
+    suggestionArea.prepend(ta);
+  }
+  ta.value = text ?? "";
+  ta.style.height = "auto";
+  ta.style.height = ta.scrollHeight + "px";
+  initSuggestionCount();
+  attachAutoSave("editable-suggestion");
+}
+
+function setOriginalSuggestionIfEmpty(text) {
+  if (!originalSuggestionText && text) {
+    originalSuggestionText = text;
+  }
+}
+
+function updateResetSuggestionBtn() {
+  const btn = document.getElementById("reset-suggestion");
+  if (!btn) return;
+  const enabled = !!originalSuggestionText;
+  btn.disabled = !enabled;
+  btn.title = enabled ? "" : "おすすめ未生成のため無効";
+}
+
+// 「元に戻す」クリック（何度でも原文へ戻せる）
+async function onClickResetSuggestion(e) {
+  e?.preventDefault?.();
+  if (!originalSuggestionText) return;
+  applySuggestion(originalSuggestionText);
+  updateResetSuggestionBtn();
+  try { await saveExportJson(); } catch {}
+}
+
+async function onGenerateSuggestions() { // 既存名を上書き
   if (!floorplanAnalysisResult) return;
   showLoadingSpinner("suggestion");
   try {
@@ -1183,11 +1335,22 @@ async function onGenerateSuggestions() {
     const suggestionPrompt = promptObj.prompt || "";
     const params = promptObj.params || {};
 
-    const propertyInfo = document.getElementById("property-info")?.value.trim() || "";
+    // ここがネタ：AI参照用メモ + 間取り図分析 +（履歴内）部屋コメント + 既存テキストエリア群
+    const memoText = document.getElementById("property-info")?.value.trim() || "";
+    const floorplanText = document.getElementById("floorplan-preview-text")?.value.trim() || "";
+    const roomComments = Array.from(document.querySelectorAll("#history-container .drop-zone textarea"))
+      .map(t => t.value.trim()).filter(Boolean);
+
     const textareasContent = [...document.querySelectorAll("textarea")]
       .map((t) => t.value.trim())
       .filter(Boolean);
-    const combined = [propertyInfo, ...textareasContent].filter(Boolean).join("\n\n");
+
+    const combined = [
+      "【AI参照用メモ】", memoText,
+      "【間取り図分析】", floorplanText,
+      ...(roomComments.length ? ["【部屋コメント】", ...roomComments] : []),
+      "【その他テキスト】", ...textareasContent
+    ].filter(Boolean).join("\n\n");
 
     const body = {
       messages: [
@@ -1206,19 +1369,10 @@ async function onGenerateSuggestions() {
     const suggestion = result.choices?.[0]?.message?.content;
     if (!suggestion) throw new Error("応答が空でした");
 
-    let ta = document.getElementById("editable-suggestion");
-    if (!ta) {
-      ta = document.createElement("textarea");
-      ta.id = "editable-suggestion";
-      ta.style.cssText = "width:100%;height:300px;font-size:13px;";
-      suggestionArea.prepend(ta);
-    }
-    ta.value = suggestion;
-    ta.style.height = "auto";
-    ta.style.height = ta.scrollHeight + "px";
-
-    initSuggestionCount();
-    if (!originalSuggestionText) originalSuggestionText = suggestion;
+    // 初回のみ原文を確定、それ以降は保持（何度でも戻せる）
+    setOriginalSuggestionIfEmpty(suggestion);
+    applySuggestion(suggestion);
+    updateResetSuggestionBtn();
 
     await generatePortalComments(suggestion);
     await saveExportJson();
