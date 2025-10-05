@@ -169,11 +169,11 @@
 
     <div id="property-code-modal" style="position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.6); display:flex; align-items:center; justify-content:center; z-index:9999;">
       <div style="background:#fff; padding:20px; border-radius:10px; width:320px; text-align:center; box-shadow: 0 10px 30px rgba(0,0,0,.15);">
-        <h3 id="modal-title" style="margin:0 0 8px;">物件コードを入力してください</h3>
+        <h3 id="modal-title" style="margin:0 0 8px;">BK IDとGS IDを入力してください</h3>
         <input type="text" id="property-code-input" placeholder="FXXXXXXX" class="modal-input" />
-        <input type="text" id="spreadsheet-id-input" placeholder="Google SpreadSheets ID" style="display:none;" class="modal-input" />
+        <input type="text" id="spreadsheet-id-input" placeholder="Google Spreadsheet ID" class="modal-input" />
         <div id="no-code-wrapper" style="display:none; margin-top:6px;">
-          <label id="no-code-wrapper" style="font-size:13px;display:block;margin:6px auto;width:260px;text-align:left;">
+          <label style="font-size:13px;display:block;margin:6px auto;width:260px;text-align:left;">
             <input type="checkbox" id="no-code-checkbox" />物件コードなしで作業する
           </label>
         </div>
@@ -185,7 +185,8 @@
     <section id="pdf-section" class="disabled">
       <h2>
         📝 PDFから物件情報を抽出
-        <a href="#" class="prompt-config-link" data-type="snapvoice-pdf-image" title="プロンプト編集">⚙</a>
+        <!-- Texel専用キー -->
+        <a href="#" class="prompt-config-link" data-type="texel-pdf-image" title="プロンプト編集">⚙</a>
       </h2>
       <div id="pdf-drop" class="drop-zone">ここにPDFをドラッグ＆ドロップ</div>
       <input type="file" id="pdf-file" accept=".pdf" />
@@ -206,7 +207,8 @@
     <section id="floorplan-section" class="disabled">
       <h2>
         📐 間取図を分析
-        <a href="#" class="prompt-config-link" data-type="snapvoice-floorplan" title="プロンプト編集">⚙</a>
+        <!-- Texel専用キー -->
+        <a href="#" class="prompt-config-link" data-type="texel-floorplan" title="プロンプト編集">⚙</a>
       </h2>
       <div id="floorplan-drop" class="drop-zone">ここに間取図をドラッグ＆ドロップ</div>
       <input type="file" id="floorplan-file" accept="image/*" />
@@ -240,7 +242,8 @@
     <section id="suggestion-section" class="disabled">
       <h2>
         ✨ おすすめポイント生成
-        <a href="#" class="prompt-config-link" data-type="snapvoice-suggestion" title="プロンプト編集">⚙</a>
+        <!-- Texel専用キー -->
+        <a href="#" class="prompt-config-link" data-type="texel-suggestion" title="プロンプト編集">⚙</a>
       </h2>
       <button id="generate-suggestions" class="pressable" disabled>おすすめポイントを生成</button>
       <div id="suggestion-area" class="analysis-area" style="margin-top: 8px;">
@@ -266,7 +269,7 @@
       <!-- ポータル用キャッチ・コメント -->
       <div style="margin-top: 16px;">
         <div class="analysis-area" style="position: relative; margin-top: 16px;">
-          <a href="#" class="prompt-config-link" data-type="snapvoice-suumo-catch" title="SUUMOキャッチコピープロンプト編集" style="top: 8px; right: 8px;">⚙</a>
+          <a href="#" class="prompt-config-link" data-type="texel-suumo-catch" title="SUUMOキャッチコピープロンプト編集" style="top: 8px; right: 8px;">⚙</a>
           <label style="font-size: 13px;">🏷️ SUUMOキャッチコピー（37文字）</label>
           <textarea id="suumo-catch" maxlength="37" placeholder="例：南向き・角部屋！駅徒歩3分で生活便利" style="width:100%; height:40px; font-size:13px;"></textarea>
           <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 4px;">
@@ -275,7 +278,7 @@
           </div>
         </div>
         <div class="analysis-area" style="position: relative; margin-top: 16px;">
-          <a href="#" class="prompt-config-link" data-type="snapvoice-suumo-comment" title="SUUMOネット用コメントプロンプト編集" style="top: 8px; right: 8px;">⚙</a>
+          <a href="#" class="prompt-config-link" data-type="texel-suumo-comment" title="SUUMOネット用コメントプロンプト編集" style="top: 8px; right: 8px;">⚙</a>
           <label style="font-size: 13px;">💬 SUUMOネット用コメント（300文字）</label>
           <textarea id="suumo-comment" maxlength="300" placeholder="例：通勤・通学に便利な駅近物件..." style="width:100%; height:40px; font-size:13px;"></textarea>
           <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 4px;">
@@ -284,7 +287,7 @@
           </div>
         </div>
         <div class="analysis-area" style="position: relative; margin-top: 16px;">
-          <a href="#" class="prompt-config-link" data-type="snapvoice-athome-comment" title="スタッフコメントプロンプト編集" style="top: 8px; right: 8px;">⚙</a>
+          <a href="#" class="prompt-config-link" data-type="texel-athome-comment" title="スタッフコメントプロンプト編集" style="top: 8px; right: 8px;">⚙</a>
           <label style="font-size: 13px;">🏠 スタッフコメント（100文字）</label>
           <textarea id="athome-comment" maxlength="100" placeholder="例：日当たり良好な2LDK、収納も豊富。" style="width:100%; height:40px; font-size:13px;"></textarea>
           <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 4px;">
@@ -293,7 +296,7 @@
           </div>
         </div>
         <div class="analysis-area" style="position: relative; margin-top: 16px;">
-          <a href="#" class="prompt-config-link" data-type="snapvoice-athome-appeal" title="athomeエンド向けアピールプロンプト編集" style="top: 8px; right: 8px;">⚙</a>
+          <a href="#" class="prompt-config-link" data-type="texel-athome-appeal" title="athomeエンド向けアピールプロンプト編集" style="top: 8px; right: 8px;">⚙</a>
           <label style="font-size: 13px;">👪 athomeエンド向けアピール（500文字）</label>
           <textarea id="athome-appeal" maxlength="500" placeholder="例：家族みんなが快適に暮らせる間取り..." style="width:100%; height:40px; font-size:13px;"></textarea>
           <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 4px;">
@@ -304,26 +307,12 @@
       </div>
     </section>
 
-    <section id="hashtag-section" class="disabled">
-      <h2>
-        🏷️ ハッシュタグ生成
-        <a href="#" class="prompt-config-link" data-type="snapvoice-hashtags" title="プロンプト編集">⚙</a>
-      </h2>
-      <button id="extract-hashtags" class="pressable" disabled>ハッシュタグを生成</button>
-      <div id="hashtag-area" class="analysis-area" style="margin-top: 8px;">
-        <textarea id="editable-hashtags" style="width:100%; height:20px; font-size:13px;"></textarea>
-      </div>
-      <div style="text-align: right; margin-top: 4px;">
-        <button id="copy-hashtags" class="copy-button">📋 ハッシュタグをコピー</button>
-      </div>
-      <div id="loadingSpinner-hashtags" class="spinner" style="display: none; margin-top: 8px;"></div>
-    </section>
-
     <!-- 部屋写真 情報セクション -->
     <section id="room-section" class="disabled">
       <h2>
         🖼️ 画像を分析
-        <a href="#" class="prompt-config-link" data-type="snapvoice-roomphoto" title="プロンプト編集">⚙</a>
+        <!-- Texel専用キー -->
+        <a href="#" class="prompt-config-link" data-type="texel-roomphoto" title="プロンプト編集">⚙</a>
       </h2>
       <div id="room-drop" class="drop-zone">ここに部屋写真をドラッグ＆ドロップ</div>
       <input type="file" id="room-file" accept="image/*" />
@@ -339,7 +328,7 @@
 
     <div id="loadingSpinner" class="spinner" style="display: none;"></div>
 
-    <script type="module" src="panel.js"></script>
+    <script type="module" src="texel.js"></script>
 
     <!-- 画像ポップアップ用 -->
     <div id="image-popup-overlay" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.7);z-index:10000;justify-content:center;align-items:center;">

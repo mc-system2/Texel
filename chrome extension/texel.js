@@ -1,36 +1,32 @@
 /* =====================================================================
- *  Texel.js  ― Texel (external-only)      (initial: 2025-10-04)
- *  SnapVoice/panel.js をベースに「社内IP挙動」を完全削除した版
- *  - IP判定 / INTERNAL_IPS / BLOB保存 / previewAPI 復元を排除
- *  - 常に Spreadsheet 保存（SHEET_API）で動作
+ *  Texel.js  ― Texel (external-only, clean, no hashtags)
+ *  - BLOBの commitment-master を dev/prod 自動切替で読込
+ *  - export-format / hashtags は完全撤去（保存は都度構築）
  * ===================================================================== */
-import { detectUserId } from "./utils/user.js";
 
-/* ---------- 必須 import（内製 API ラッパ等） ---------- */
+import { detectUserId } from "./utils/user.js";
 import {
   API,
   chatGPT as analyzeWithGPT,
-  fetchWithRetry,
+  fetchWithRetry, // 予備（未使用なら残してOK）
   delay,
-  FUNCTION_BASE,
   SHEET_API,
   GAS_LOG_ENDPOINT
 } from "./src/api.js";
 
-/* ---------- 変更されない “定数” ---------- */
-const DEFAULT_SHEET_ID = "1xOk7i27CLfW0euWJ2cT1pt4vPvdavqtpdS1TPOWnqhE";
+/* ==============================
+ * 1) 固定定数・実行時状態
+ * ============================== */
+const DEFAULT_SHEET_ID = "1Q8Vbluc5duil1KKWYOGiVoF9UyMxVUxAh6eYb0h2jkQ";
 const LOG_SHEET_ID = DEFAULT_SHEET_ID;
 
-/* ---------- 実行時状態（外部専用） ---------- */
 let userId = "";
-let propertyCode = "";          // 例：FXXXXXXX
-let sheetIdForGPT = DEFAULT_SHEET_ID;
+let propertyCode = "";                 // 例：FXXXXXXX
+let sheetIdForGPT = DEFAULT_SHEET_ID;  // ユーザー入力から差し替え
 let sessionSheetId = sheetIdForGPT;
 
-let noCodeMode = false;         // ← Texelでは利用しないが互換のため残置（常にfalse）
 let basePropertyData = null;
-let promptMap = {};
-let exportFormat = null;
+let promptMap = {};                    // commitment-master（読み分け）
 let originalSuggestionText = "";
 let latestPdfThumbnailBase64 = "";
 let latestPdfExtractedText = "";
@@ -39,12 +35,54 @@ let currentFloorplanBase64 = null;
 let floorplanAnalysisResult = "";
 let hasRoomAnalysis = false;
 
-/* ================= ヘルパ ================= */
+/* ==============================
+ * 2) 環境判定（SWAホスト名）
+ * ============================== */
+const ENV = (() => {
+  const h = location.host;
+  if (h.includes("lively-tree-019937900.2.azurestaticapps.net")) return "dev";
+  if (h.includes("lemon-beach-0ae87bc00.2.azurestaticapps.net")) return "prod";
+  return "dev"; // ローカル等はdev扱い
+})();
+
+const PROMPTS_CONTAINER = "prompts";
+const BLOB_ACCOUNT = {
+  dev: "https://sttexeldevjpe001.blob.core.windows.net",
+  prod: "https://sttexelprodjpe001.blob.core.windows.net",
+};
+// BLOBがプライベートならSASを設定（先頭 ? から）
+const PROMPTS_SAS = ""; // 例: "?sv=2025-...&ss=bfqt&..."
+
+const COMMITMENT_MASTER_FILE = "snapvoice-commitment-master.json";
+
+function buildCommitmentMasterUrls() {
+  const base = BLOB_ACCOUNT[ENV];
+  const blobUrl = `${base}/${PROMPTS_CONTAINER}/${COMMITMENT_MASTER_FILE}${PROMPTS_SAS}`;
+  const swaUrl = `${location.origin}/prompts/${COMMITMENT_MASTER_FILE}`; // SWA直配信（置いてあれば）
+  const extUrl =
+    chrome?.runtime?.getURL?.(`prompts/${COMMITMENT_MASTER_FILE}`) || null; // 拡張内同梱（任意）
+  return [blobUrl, swaUrl, extUrl].filter(Boolean);
+}
+
+async function loadCommitmentMasterJson() {
+  for (const url of buildCommitmentMasterUrls()) {
+    try {
+      const res = await fetch(url, { cache: "no-store" });
+      if (res.ok) return res.json();
+    } catch {/* 次の候補へ */}
+  }
+  throw new Error("commitment-master not found in any source");
+}
+
+/* ==============================
+ * 3) ユーティリティ
+ * ============================== */
+const autosaveDebounced = debounce(() => saveExportJson().catch(()=>{}), 600);
+
 function extractSpreadsheetId(text) {
   const m = text.trim().match(/\/d\/([a-zA-Z0-9-_]+)/);
   return m ? m[1] : text.trim();
 }
-
 function debounce(fn, ms = 500) {
   let t;
   return (...args) => {
@@ -67,29 +105,30 @@ function hideLoadingSpinner(target) {
   spinnerCounter[target] = Math.max((spinnerCounter[target] || 1) - 1, 0);
   if (spinnerCounter[target] === 0) el.style.display = "none";
 }
-
 function attachAutoSave(id, evt = "input") {
   const el = document.getElementById(id);
   if (!el || el.dataset.autosave) return;
   el.dataset.autosave = "1";
-  el.addEventListener(evt, debounce(saveExportJson, 600));
+  el.addEventListener(evt, autosaveDebounced);
 }
 
-/* ================= 入力バリデーション（外部モード固定） ================= */
+/* ==============================
+ * 4) 入力バリデーション
+ * ============================== */
 function validateInput() {
   const pcIn = document.getElementById("property-code-input");
   const ssIn = document.getElementById("spreadsheet-id-input");
-  const btn = document.getElementById("property-code-submit");
+  const btn  = document.getElementById("property-code-submit");
 
   const pcVal = pcIn.value.trim().toUpperCase();
   const ssVal = ssIn.value.trim();
   pcIn.value = pcVal;
-
-  // Texel: 常に BK（propertyCode）＋ GS（spreadsheetId）を要求
   btn.disabled = !(pcVal && ssVal);
 }
 
-/* ================= プロンプト取得 ================= */
+/* ==============================
+ * 5) プロンプト取得（ローカル→storage→BLOB/SWA）
+ * ============================== */
 async function fetchPromptText(filename) {
   const res = await fetch(API.getPromptText(filename));
   if (!res.ok) throw new Error(`${filename} 読み込み失敗: ${res.status}`);
@@ -101,12 +140,10 @@ async function fetchPromptText(filename) {
     if (typeof json === "string") return json;
     return JSON.stringify(json);
   }
-  return await res.text();
+  return res.text();
 }
-
 async function getPromptFromLocalOrBlob(key, fetcher) {
   const cacheKey = `prompt_${key}`;
-
   let cached = localStorage.getItem(cacheKey);
   if (cached !== null) return cached;
 
@@ -116,29 +153,29 @@ async function getPromptFromLocalOrBlob(key, fetcher) {
   if (cached !== null) return cached;
 
   const text = await fetcher();
-  try { localStorage.setItem(cacheKey, text); } catch (_) {}
-  try { chrome.storage?.local?.set({ [cacheKey]: text }); } catch (_) {}
+  try { localStorage.setItem(cacheKey, text); } catch {}
+  try { chrome.storage?.local?.set({ [cacheKey]: text }); } catch {}
   return text;
 }
 
-/* ================= マスター読み込み ================= */
-fetch(API.getPromptText("snapvoice-commitment-master.json"))
-  .then((r) => r.json())
+/* ==============================
+ * 6) commitment-master 読み込み
+ * ============================== */
+loadCommitmentMasterJson()
   .then((data) => {
-    promptMap = data.prompt || data;
+    promptMap = data?.prompt || data || {};
     const textarea = document.getElementById("promptTextArea");
     if (textarea) textarea.value = JSON.stringify(data, null, 2);
   })
-  .catch((e) => console.error("❌ マスター取得失敗", e));
+  .catch((e) => {
+    console.error("❌ マスター取得失敗", e);
+    promptMap = {};
+  });
 
-fetch(API.getPromptText("snapvoice-export-format.json"))
-  .then((r) => r.json())
-  .then((data) => (exportFormat = data))
-  .catch((e) => console.error("❌ export format 読み込み失敗", e));
-
-/* ================= 保存（Spreadsheetのみ） ================= */
+/* ==============================
+ * 7) 保存（Spreadsheetのみ）
+ * ============================== */
 async function saveExportJson() {
-  if (!exportFormat) return console.warn("❌ exportFormat not yet");
   if (!sessionSheetId) {
     console.error("❌ sessionSheetId is empty – abort saveExportJson");
     hideLoadingSpinner("suggestion");
@@ -146,54 +183,49 @@ async function saveExportJson() {
     return;
   }
 
-  const exportJson = JSON.parse(JSON.stringify(exportFormat));
-  exportJson.propertyCode = propertyCode;
-  exportJson.sheetIdForGPT = sheetIdForGPT;
-  exportJson.timestamp = new Date().toISOString();
+  const exportJson = {
+    propertyCode,
+    sheetIdForGPT,
+    timestamp: new Date().toISOString(),
 
-  exportJson.pdfExtractedText =
-    latestPdfExtractedText ||
-    document.getElementById("pdf-preview")?.textContent?.trim() ||
-    "";
+    // PDF
+    pdfExtractedText:
+      latestPdfExtractedText ||
+      document.getElementById("pdf-preview")?.textContent?.trim() || "",
+    pdfImage:
+      latestPdfThumbnailBase64 ||
+      document.getElementById("pdf-image-preview")?.src || "",
 
-  exportJson.pdfImage =
-    latestPdfThumbnailBase64 ||
-    document.getElementById("pdf-image-preview")?.src ||
-    "";
+    // メモ・生成物
+    memo: document.getElementById("property-info")?.value.trim() || "",
+    floorplanAnalysis:
+      document.getElementById("floorplan-preview-text")?.value.trim() || "",
+    suggestions:
+      document.querySelector("#suggestion-area textarea")?.value.trim() || "",
+    "suumo-catch":   getTextareaValue("suumo-catch"),
+    "suumo-comment": getTextareaValue("suumo-comment"),
+    "athome-comment":getTextareaValue("athome-comment"),
+    "athome-appeal": getTextareaValue("athome-appeal"),
 
-  exportJson.memo =
-    document.getElementById("property-info")?.value.trim() || "";
-  exportJson.floorplanAnalysis =
-    document.getElementById("floorplan-preview-text")?.value.trim() || "";
-  exportJson.suggestions =
-    document.querySelector("#suggestion-area textarea")?.value.trim() || "";
+    originalSuggestion: originalSuggestionText,
+    floorplanImageBase64: document.getElementById("floorplan-preview")?.src || "",
+    rawPropertyData: basePropertyData,
 
-  exportJson["suumo-catch"] = getTextareaValue("suumo-catch");
-  exportJson["suumo-comment"] = getTextareaValue("suumo-comment");
-  exportJson["athome-comment"] = getTextareaValue("athome-comment");
-  exportJson["athome-appeal"] = getTextareaValue("athome-appeal");
-  exportJson.hashtags =
-    document.querySelector("#hashtag-area textarea")?.value.trim() || "";
-
-  exportJson.originalSuggestion = originalSuggestionText;
-  exportJson.floorplanImageBase64 =
-    document.getElementById("floorplan-preview")?.src || "";
-  exportJson.rawPropertyData = basePropertyData;
-
-  // 履歴（画像＋コメント）
-  const unique = new Set();
-  exportJson.roomComments = Array.from(
-    document.querySelectorAll("#history-container .drop-zone")
-  )
-    .map((z) => {
-      const img = z.querySelector("img")?.src || "";
-      const cmt = z.querySelector("textarea")?.value || "";
-      const key = img + "___" + cmt;
-      if (!img || img.startsWith("chrome-extension://") || !cmt.trim() || unique.has(key)) return null;
-      unique.add(key);
-      return { image: img, comment: cmt };
-    })
-    .filter(Boolean);
+    // 履歴（画像＋コメント）
+    roomComments: (() => {
+      const unique = new Set();
+      return Array.from(document.querySelectorAll("#history-container .drop-zone"))
+        .map((z) => {
+          const img = z.querySelector("img")?.src || "";
+          const cmt = z.querySelector("textarea")?.value || "";
+          const key = img + "___" + cmt;
+          if (!img || img.startsWith("chrome-extension://") || !cmt.trim() || unique.has(key)) return null;
+          unique.add(key);
+          return { image: img, comment: cmt };
+        })
+        .filter(Boolean);
+    })(),
+  };
 
   try {
     await saveToSpreadsheet(exportJson);
@@ -202,7 +234,9 @@ async function saveExportJson() {
   }
 }
 
-/* ================= DOM参照 ================= */
+/* ==============================
+ * 8) DOM参照
+ * ============================== */
 const pdfDrop = document.getElementById("pdf-drop");
 const pdfInput = document.getElementById("pdf-file");
 const pdfPreview = document.getElementById("pdf-preview");
@@ -221,53 +255,52 @@ const roomSelect = document.getElementById("room-file");
 const historyContainer = document.getElementById("history-container");
 const generateButton = document.getElementById("generate-suggestions");
 const suggestionArea = document.getElementById("suggestion-area");
-const extractButton = document.getElementById("extract-hashtags");
-const hashtagArea = document.getElementById("hashtag-area");
 
-/* ================= 初期状態 ================= */
+/* ==============================
+ * 9) 初期状態
+ * ============================== */
 floorplanAnalysis.style.display = "none";
 floorplanToggle.textContent = "▶ 分析結果を表示";
 generateButton.disabled = true;
-extractButton.disabled = true;
 
-/* ================= PDF.js 読み込み ================= */
+/* ==============================
+ * 10) PDF.js 読み込み
+ * ============================== */
 (function importScriptsIfAvailable() {
   const script = document.createElement("script");
   script.src = chrome.runtime.getURL("libs/pdfjs/pdf.js");
   script.onload = () => {
     if (window["pdfjsLib"]) {
-      pdfjsLib.GlobalWorkerOptions.workerSrc = chrome.runtime.getURL(
-        "libs/pdfjs/pdf.worker.js"
-      );
+      pdfjsLib.GlobalWorkerOptions.workerSrc = chrome.runtime.getURL("libs/pdfjs/pdf.worker.js");
     }
   };
   script.onerror = () => console.error("❌ pdf.js 読み込み失敗");
   document.head.appendChild(script);
 })();
 
-/* ================= 起動時モーダル／イベント登録 ================= */
+/* ==============================
+ * 11) 起動時モーダル／イベント登録
+ * ============================== */
 document.addEventListener("DOMContentLoaded", async () => {
   userId = await detectUserId();
 
-  // モーダル要素
+  // モーダル
   const modal = document.getElementById("property-code-modal");
-  const pcIn = document.getElementById("property-code-input");
-  const ssIn = document.getElementById("spreadsheet-id-input");
-  const btn = document.getElementById("property-code-submit");
+  const pcIn  = document.getElementById("property-code-input");
+  const ssIn  = document.getElementById("spreadsheet-id-input");
+  const btn   = document.getElementById("property-code-submit");
 
-  // Texel: 常に BK + GS 入力、チェックボックスは非表示のまま
   document.getElementById("modal-title").textContent = "BK IDとGS IDを入力してください";
   pcIn.style.display = "block";
   ssIn.style.display = "block";
   const noWrap = document.getElementById("no-code-wrapper");
   if (noWrap) noWrap.style.display = "none";
 
-  // 入力監視
   pcIn.addEventListener("input", validateInput);
   ssIn.addEventListener("input", validateInput);
   window.addEventListener("load", validateInput);
 
-  // 間取図テキストエリアは自動伸縮
+  // 間取図テキスト自動伸縮
   const fpTextarea = document.getElementById("floorplan-preview-text");
   if (fpTextarea) {
     fpTextarea.classList.add("auto-grow");
@@ -277,8 +310,8 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   // 決定（起動）
   btn.addEventListener("click", async () => {
-    propertyCode = pcIn.value.trim().toUpperCase();
-    sheetIdForGPT = extractSpreadsheetId(ssIn.value);
+    propertyCode   = pcIn.value.trim().toUpperCase();
+    sheetIdForGPT  = extractSpreadsheetId(ssIn.value);
     sessionSheetId = sheetIdForGPT;
 
     showCodeBanner(propertyCode);
@@ -291,7 +324,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       autoGrow(memo);
     }
 
-    // ここで外部公開APIから物件データ取得（存在しなければ新規扱い）
+    // 物件データ取得（存在しなければ新規扱い）
     try {
       const data = await fetchPropertyData(propertyCode);
       if (data) {
@@ -305,17 +338,16 @@ document.addEventListener("DOMContentLoaded", async () => {
       console.warn("物件データ取得スキップ/失敗:", e);
     }
 
-    // カウンタ初期化
-    setupCharCount("suumo-catch", "suumo-catch-count", 37);
+    // 文字数カウンタ
+    setupCharCount("suumo-catch",   "suumo-catch-count",   37);
     setupCharCount("suumo-comment", "suumo-comment-count", 300);
-    setupCharCount("athome-comment", "athome-comment-count", 100);
+    setupCharCount("athome-comment","athome-comment-count",100);
     setupCharCount("athome-appeal", "athome-appeal-count", 500);
 
-    // オートセーブ付与
+    // オートセーブ
     [
       "property-info",
       "editable-suggestion",
-      "editable-hashtags",
       "suumo-catch",
       "suumo-comment",
       "athome-comment",
@@ -323,13 +355,11 @@ document.addEventListener("DOMContentLoaded", async () => {
     ].forEach((id) => attachAutoSave(id));
   });
 
-  // ドラッグ＆ドロップ（間取図）
+  // DnD バインド
   bindFloorplanDnD();
-
-  // ドラッグ＆ドロップ（部屋写真）
   bindRoomDnD();
 
-  // PDF ドラッグ＆選択
+  // PDF DnD/選択
   ["dragenter", "dragover"].forEach((evt) =>
     pdfDrop.addEventListener(evt, (e) => {
       e.preventDefault();
@@ -351,7 +381,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     if (file?.type === "application/pdf") await handlePdfFile(file);
   });
 
-  // 折りたたみトグル（PDF）
+  // PDF 折りたたみ
   const pdfToggleBtn = document.getElementById("pdf-toggle");
   if (pdfToggleBtn) {
     pdfToggleBtn.addEventListener("click", () => {
@@ -370,11 +400,8 @@ document.addEventListener("DOMContentLoaded", async () => {
     if (hidden) requestAnimationFrame(() => autoGrow(document.getElementById("floorplan-preview-text")));
   });
 
-  // 生成ボタン（おすすめ）
+  // 生成／再要約
   document.getElementById("generate-suggestions").addEventListener("click", onGenerateSuggestions);
-  // ハッシュタグ
-  document.getElementById("extract-hashtags").addEventListener("click", onExtractHashtags);
-  // 再要約
   document.getElementById("generate-summary").addEventListener("click", onRegenerateSummary);
 
   // 画像ポップアップ
@@ -384,7 +411,9 @@ document.addEventListener("DOMContentLoaded", async () => {
   document.getElementById("confirmNorthButton").addEventListener("click", onConfirmNorth);
 });
 
-/* ================= 画像→Base64 ================= */
+/* ==============================
+ * 12) 画像→Base64 / URL→Base64
+ * ============================== */
 function readImageAsBase64(file) {
   return new Promise((res, rej) => {
     const r = new FileReader();
@@ -404,7 +433,9 @@ async function convertUrlToBase64ViaAPI(imageUrl) {
   return json.base64;
 }
 
-/* ================= 間取図 DnD ================= */
+/* ==============================
+ * 13) 間取図 DnD
+ * ============================== */
 function bindFloorplanDnD() {
   if (floorplanDrop.dataset.bound) return;
   floorplanDrop.dataset.bound = "1";
@@ -436,9 +467,7 @@ function bindFloorplanDnD() {
           showLoadingSpinner("floorplan");
           const base64 = await convertUrlToBase64ViaAPI(src);
           showFloorplan(base64);
-        } finally {
-          hideLoadingSpinner("floorplan");
-        }
+        } finally { hideLoadingSpinner("floorplan"); }
         return;
       }
     }
@@ -448,9 +477,7 @@ function bindFloorplanDnD() {
         showLoadingSpinner("floorplan");
         const base64 = await convertUrlToBase64ViaAPI(uri);
         showFloorplan(base64);
-      } finally {
-        hideLoadingSpinner("floorplan");
-      }
+      } finally { hideLoadingSpinner("floorplan"); }
       return;
     }
     console.warn("❌ ドロップされた間取図画像が処理できませんでした");
@@ -460,16 +487,13 @@ function bindFloorplanDnD() {
     handleFloorplanFile(e.target.files[0]);
   });
 }
-
 async function handleFloorplanFile(file) {
   if (!file || !file.type.startsWith("image/")) return;
   showLoadingSpinner("floorplan");
   try {
     const b64 = await readImageAsBase64(file);
     showFloorplan(b64);
-  } finally {
-    hideLoadingSpinner("floorplan");
-  }
+  } finally { hideLoadingSpinner("floorplan"); }
 }
 function showFloorplan(base64) {
   floorplanPreview.src = base64;
@@ -479,7 +503,9 @@ function showFloorplan(base64) {
   showNorthVectorDropdown();
 }
 
-/* ================= 部屋写真 DnD ================= */
+/* ==============================
+ * 14) 部屋写真 DnD
+ * ============================== */
 function bindRoomDnD() {
   ["dragenter", "dragover"].forEach((evt) => {
     roomDrop.addEventListener(evt, (e) => {
@@ -511,22 +537,16 @@ function bindRoomDnD() {
       if (m) {
         const src = m[1];
         if (src.startsWith("data:image/")) {
-          roomPreview.src = src;
-          roomPreview.style.display = "block";
-          roomPreview.style.cursor = "pointer";
+          roomPreview.src = src; roomPreview.style.display = "block"; roomPreview.style.cursor = "pointer";
           await analyzeRoomPhotoWithGPT(src, src, "手動分析", "HTMLドラッグ");
           return;
         }
         if (src.startsWith("http")) {
           try {
             const b64 = await convertUrlToBase64ViaAPI(src);
-            roomPreview.src = b64;
-            roomPreview.style.display = "block";
-            roomPreview.style.cursor = "pointer";
+            roomPreview.src = b64; roomPreview.style.display = "block"; roomPreview.style.cursor = "pointer";
             await analyzeRoomPhotoWithGPT(b64, src, "手動分析", "Web画像");
-          } catch (err) {
-            console.error("画像URLからBase64変換に失敗:", err);
-          }
+          } catch (err) { console.error("画像URLからBase64変換に失敗:", err); }
           return;
         }
       }
@@ -535,13 +555,9 @@ function bindRoomDnD() {
       if (uri && uri.startsWith("http")) {
         try {
           const b64 = await convertUrlToBase64ViaAPI(uri);
-          roomPreview.src = b64;
-          roomPreview.style.display = "block";
-          roomPreview.style.cursor = "pointer";
+          roomPreview.src = b64; roomPreview.style.display = "block"; roomPreview.style.cursor = "pointer";
           await analyzeRoomPhotoWithGPT(b64, uri, "手動分析", "URIリスト");
-        } catch (err) {
-          console.error("URI→Base64失敗:", err);
-        }
+        } catch (err) { console.error("URI→Base64失敗:", err); }
         return;
       }
 
@@ -556,7 +572,6 @@ function bindRoomDnD() {
     roomSelect.value = "";
   });
 }
-
 async function processRoomFile(file) {
   roomPreview.src = "";
   roomPreview.style.display = "none";
@@ -568,7 +583,9 @@ async function processRoomFile(file) {
   await analyzeRoomPhotoWithGPT(b64, null, guessedTitle, null);
 }
 
-/* ================= PDF処理 ================= */
+/* ==============================
+ * 15) PDF処理
+ * ============================== */
 async function handlePdfFile(file) {
   showLoadingSpinner("pdf");
   const reader = new FileReader();
@@ -578,7 +595,7 @@ async function handlePdfFile(file) {
       const pdf = await pdfjsLib.getDocument({ data: typedarray }).promise;
       const page = await pdf.getPage(1);
 
-      // サムネイル生成
+      // サムネイル
       const viewport = page.getViewport({ scale: 3 });
       const canvas = document.createElement("canvas");
       const context = canvas.getContext("2d");
@@ -608,23 +625,18 @@ async function handlePdfFile(file) {
         extractedText = textContent.items.map((i) => i.str).join("\n").trim();
       }
 
-      // プロンプト取得
+      // プロンプト
       const promptObj = await getPromptFromLocalOrBlob(
         "snapvoice-pdf-image",
         () => fetchPromptText("snapvoice-pdf-image.json")
-      ).then((text) => {
-        try { return JSON.parse(text); } catch { return { prompt: text }; }
-      });
+      ).then((text) => { try { return JSON.parse(text); } catch { return { prompt: text }; }});
       const summaryPrompt = promptObj.prompt || promptObj;
       const params = promptObj.params || {};
 
       const messages = [{ role: "system", content: summaryPrompt }];
       if (extractedText) messages.push({ role: "user", content: extractedText });
       if (hasImageLayer && base64Image) {
-        messages.push({
-          role: "user",
-          content: [{ type: "image_url", image_url: { url: base64Image } }]
-        });
+        messages.push({ role: "user", content: [{ type: "image_url", image_url: { url: base64Image } }] });
       }
 
       const body = {
@@ -660,14 +672,14 @@ async function handlePdfFile(file) {
     } catch (err) {
       console.error("PDF読み込みエラー:", err);
       if (pdfPreview) pdfPreview.textContent = "PDF読み取り中にエラーが発生しました。";
-    } finally {
-      hideLoadingSpinner("pdf");
-    }
+    } finally { hideLoadingSpinner("pdf"); }
   };
   reader.readAsArrayBuffer(file);
 }
 
-/* ================= 間取図解析（GPT） ================= */
+/* ==============================
+ * 16) 間取図解析（GPT）
+ * ============================== */
 async function analyzeFloorplanWithGPT(base64Image, northVector) {
   const previewText = document.getElementById("floorplan-preview-text");
   try {
@@ -675,31 +687,27 @@ async function analyzeFloorplanWithGPT(base64Image, northVector) {
     let promptObj = await getPromptFromLocalOrBlob(
       "snapvoice-floorplan",
       () => fetchPromptText("snapvoice-floorplan.json")
-    ).then((text) => {
-      try { return JSON.parse(text); } catch { return { prompt: text }; }
-    });
+    ).then((text) => { try { return JSON.parse(text); } catch { return { prompt: text }; }});
 
     let systemPromptBase = promptObj.prompt || promptObj;
     const params = promptObj.params || {};
-    if (!systemPromptBase) {
-      systemPromptBase = "これは不動産の間取図です。内容を読み取り、わかりやすく要約してください。";
-    }
+    if (!systemPromptBase) systemPromptBase = "これは不動産の間取図です。内容を読み取り、わかりやすく要約してください。";
 
-    const codeText = `\n物件コードは「${propertyCode}」です。`;
+    const codeText  = `\n物件コードは「${propertyCode}」です。`;
     const northText = `\n間取り図の北方向（northVector）は「${northVector}」です。`;
-    const memoText = document.getElementById("property-info")?.value.trim() || "";
+    const memoText  = document.getElementById("property-info")?.value.trim() || "";
     const fullSystemPrompt = `${systemPromptBase}${codeText}${northText}\n\n--- AI参照用物件メモ ---\n${memoText}`;
 
     const body = {
       messages: [
         { role: "system", content: fullSystemPrompt },
-        { role: "user", content: [{ type: "image_url", image_url: { url: base64Image } }] }
+        { role: "user",   content: [{ type: "image_url", image_url: { url: base64Image } }] }
       ],
       temperature: params.temperature ?? 0.3,
-      max_tokens: params.max_tokens ?? 4000,
+      max_tokens:  params.max_tokens ?? 4000,
       top_p: params.top_p,
       frequency_penalty: params.frequency_penalty,
-      presence_penalty: params.presence_penalty,
+      presence_penalty:  params.presence_penalty,
       purpose: "floorplan"
     };
 
@@ -720,7 +728,9 @@ async function analyzeFloorplanWithGPT(base64Image, northVector) {
   }
 }
 
-/* ================= 部屋写真解析（GPT） ================= */
+/* ==============================
+ * 17) 部屋写真解析（GPT）
+ * ============================== */
 async function analyzeRoomPhotoWithGPT(
   base64Image,
   imageSrc = null,
@@ -736,27 +746,25 @@ async function analyzeRoomPhotoWithGPT(
     const promptObj = await getPromptFromLocalOrBlob(
       "snapvoice-roomphoto",
       () => fetchPromptText("snapvoice-roomphoto.json")
-    ).then((t) => {
-      try { return JSON.parse(t); } catch { return { prompt: t }; }
-    });
+    ).then((t) => { try { return JSON.parse(t); } catch { return { prompt: t }; }});
 
     const basePrompt = promptObj.prompt || promptObj;
     const params = promptObj.params || {};
     const temperature = isRetry ? 0.7 : (params.temperature ?? 0.3);
-    const top_p = isRetry ? 0.95 : params.top_p;
+    const top_p      = isRetry ? 0.95 : params.top_p;
 
     const combinedPrompt = buildRoomPhotoPrompt(basePrompt, roomType, description, pastComments, isRetry);
 
     const body = {
       messages: [
         { role: "system", content: combinedPrompt },
-        { role: "user", content: [{ type: "image_url", image_url: { url: base64Image } }] }
+        { role: "user",   content: [{ type: "image_url", image_url: { url: base64Image } }] }
       ],
       temperature,
       top_p,
       max_tokens: params.max_tokens ?? 4000,
       frequency_penalty: params.frequency_penalty,
-      presence_penalty: params.presence_penalty,
+      presence_penalty:  params.presence_penalty,
       purpose: isRetry ? "photo-regenerate" : "photo"
     };
 
@@ -775,7 +783,7 @@ async function analyzeRoomPhotoWithGPT(
     }
   } finally {
     hideLoadingSpinner("room");
-    saveExportJson().catch(console.error);
+    saveExportJson().catch(()=>{});
   }
 
   if (!isRetry && ta) {
@@ -784,7 +792,9 @@ async function analyzeRoomPhotoWithGPT(
   }
 }
 
-/* ================= 履歴追加 ================= */
+/* ==============================
+ * 18) 履歴追加
+ * ============================== */
 async function addToHistory(imageSrc, commentText, roomType = "", description = "", insertAfter = null) {
   if (!commentText.trim() || !imageSrc || imageSrc.startsWith("chrome-extension://")) return;
 
@@ -869,7 +879,7 @@ async function addToHistory(imageSrc, commentText, roomType = "", description = 
   textarea.addEventListener("input", () => {
     autoGrow(textarea);
     updateCount();
-    debounce(saveExportJson, 600)();
+    autosaveDebounced();
   });
   updateCount();
 
@@ -893,7 +903,9 @@ async function addToHistory(imageSrc, commentText, roomType = "", description = 
   await saveExportJson();
 }
 
-/* ================= ユーティリティ ================= */
+/* ==============================
+ * 19) 共通ユーティリティ
+ * ============================== */
 function autoGrow(el, minH = 60) {
   if (!el) return;
   el.style.height = "auto";
@@ -902,7 +914,6 @@ function autoGrow(el, minH = 60) {
 function updateGenerateButtonLabel() {
   const available = !!floorplanAnalysisResult;
   generateButton.disabled = !available;
-  extractButton.disabled = !available;
   generateButton.textContent = hasRoomAnalysis ? "間取図と画像から生成" : "間取図から生成";
 }
 function updateRoomAnalysisStatus() {
@@ -967,7 +978,9 @@ function bindImagePopup() {
   });
 }
 
-/* ================= 間取図：方位決定ボタン ================= */
+/* ==============================
+ * 20) 間取図：方位決定
+ * ============================== */
 async function onConfirmNorth() {
   const dropdown = document.getElementById("north-vector-dropdown");
   const northSel = document.getElementById("northVectorSelect");
@@ -993,7 +1006,9 @@ function showNorthVectorDropdown() {
   dropdown.classList.add("glow");
 }
 
-/* ================= おすすめ生成 ================= */
+/* ==============================
+ * 21) おすすめ生成
+ * ============================== */
 async function onGenerateSuggestions() {
   if (!floorplanAnalysisResult) return;
   showLoadingSpinner("suggestion");
@@ -1001,9 +1016,7 @@ async function onGenerateSuggestions() {
     const promptObj = await getPromptFromLocalOrBlob(
       "snapvoice-suggestion",
       () => fetchPromptText("snapvoice-suggestion.json")
-    ).then((text) => {
-      try { return JSON.parse(text); } catch { return { prompt: text }; }
-    });
+    ).then((text) => { try { return JSON.parse(text); } catch { return { prompt: text }; }});
     const suggestionPrompt = promptObj.prompt || promptObj;
     const params = promptObj.params || {};
 
@@ -1016,13 +1029,13 @@ async function onGenerateSuggestions() {
     const body = {
       messages: [
         { role: "system", content: suggestionPrompt },
-        { role: "user", content: combined }
+        { role: "user",   content: combined }
       ],
       temperature: params.temperature ?? 0.3,
-      max_tokens: params.max_tokens ?? 4000,
+      max_tokens:  params.max_tokens ?? 4000,
       top_p: params.top_p,
       frequency_penalty: params.frequency_penalty,
-      presence_penalty: params.presence_penalty,
+      presence_penalty:  params.presence_penalty,
       purpose: "suggestion"
     };
 
@@ -1051,59 +1064,14 @@ async function onGenerateSuggestions() {
     alert("おすすめポイントの生成に失敗しました。再度お試しください。");
   } finally {
     hideLoadingSpinner("suggestion");
-    ["summary-length", "summary-format", "generate-summary", "reset-suggestion"].forEach(
-      (id) => (document.getElementById(id).disabled = false)
-    );
+    ["summary-length", "summary-format", "generate-summary", "reset-suggestion"]
+      .forEach((id) => { const el = document.getElementById(id); if (el) el.disabled = false; });
   }
 }
 
-/* ================= ハッシュタグ生成 ================= */
-async function onExtractHashtags() {
-  if (!floorplanAnalysisResult) return;
-  showLoadingSpinner("hashtags");
-  try {
-    const promptObj = await getPromptFromLocalOrBlob(
-      "snapvoice-hashtags",
-      () => fetchPromptText("snapvoice-hashtags.json")
-    ).then((text) => {
-      try { return JSON.parse(text); } catch { return { prompt: text }; }
-    });
-    const hashtagPrompt = promptObj.prompt || promptObj;
-    const params = promptObj.params || {};
-
-    const combined = [...document.querySelectorAll("textarea")]
-      .map((t) => t.value.trim())
-      .filter(Boolean)
-      .join("\n\n");
-
-    const body = {
-      messages: [
-        { role: "system", content: hashtagPrompt },
-        { role: "user", content: combined }
-      ],
-      temperature: params.temperature ?? 0.3,
-      max_tokens: params.max_tokens ?? 4000,
-      top_p: params.top_p,
-      frequency_penalty: params.frequency_penalty,
-      presence_penalty: params.presence_penalty,
-      purpose: "hashtags"
-    };
-
-    const result = await callGPT(body);
-    hashtagArea.innerHTML =
-      `<textarea id="editable-hashtags" style="width:100%;height:300px;font-size:13px;"></textarea>`;
-    document.getElementById("editable-hashtags").value =
-      result.choices[0].message.content;
-    await saveExportJson();
-  } catch (err) {
-    console.error("ハッシュタグ抽出エラー:", err);
-    hashtagArea.innerHTML = "<div style='color:red;'>抽出に失敗しました。</div>";
-  } finally {
-    hideLoadingSpinner("hashtags");
-  }
-}
-
-/* ================= 再要約 ================= */
+/* ==============================
+ * 22) 再要約
+ * ============================== */
 async function onRegenerateSummary() {
   const length = +document.getElementById("summary-length").value;
   const format = document.getElementById("summary-format").value;
@@ -1118,19 +1086,17 @@ async function onRegenerateSummary() {
   const promptObj = await getPromptFromLocalOrBlob(
     "snapvoice-summary",
     () => Promise.resolve(JSON.stringify({ prompt: "あなたは不動産広告のライターです。" }))
-  ).then((text) => {
-    try { return JSON.parse(text); } catch { return { prompt: text }; }
-  });
+  ).then((text) => { try { return JSON.parse(text); } catch { return { prompt: text }; }});
   const sysPrompt = promptObj.prompt || "あなたは不動産広告のライターです。";
   const params = promptObj.params || {};
 
   const body = {
     messages: [{ role: "system", content: sysPrompt }, { role: "user", content: prompt }],
     temperature: params.temperature ?? 0.3,
-    max_tokens: params.max_tokens ?? 4000,
+    max_tokens:  params.max_tokens ?? 4000,
     top_p: params.top_p,
     frequency_penalty: params.frequency_penalty,
-    presence_penalty: params.presence_penalty,
+    presence_penalty:  params.presence_penalty,
     purpose: "text"
   };
 
@@ -1153,7 +1119,9 @@ async function onRegenerateSummary() {
   }
 }
 
-/* ================= GAS送信（Spreadsheetのみ） ================= */
+/* ==============================
+ * 23) GAS送信（Spreadsheet）
+ * ============================== */
 async function saveToSpreadsheet(data) {
   try {
     const payload = {
@@ -1175,18 +1143,21 @@ async function saveToSpreadsheet(data) {
   }
 }
 
-/* ================= ポータル用コメント自動生成 ================= */
+/* ==============================
+ * 24) ポータル用コメント自動生成（ハッシュタグなし）
+ * ============================== */
 async function generatePortalComments(combinedText) {
   const entries = [
-    { id: "suumo-catch",   label: "SUUMOキャッチコピー",      promptKey: "snapvoice-suumo-catch",   max: 37  },
-    { id: "suumo-comment", label: "SUUMOネット用コメント",      promptKey: "snapvoice-suumo-comment", max: 300 },
-    { id: "athome-comment",label: "スタッフコメント",           promptKey: "snapvoice-athome-comment",max: 100 },
-    { id: "athome-appeal", label: "athomeエンド向けアピール",   promptKey: "snapvoice-athome-appeal", max: 500 }
+    { id: "suumo-catch",    label: "SUUMOキャッチコピー",      promptKey: "snapvoice-suumo-catch",    max: 37  },
+    { id: "suumo-comment",  label: "SUUMOネット用コメント",      promptKey: "snapvoice-suumo-comment",  max: 300 },
+    { id: "athome-comment", label: "スタッフコメント",           promptKey: "snapvoice-athome-comment", max: 100 },
+    { id: "athome-appeal",  label: "athomeエンド向けアピール",   promptKey: "snapvoice-athome-appeal",  max: 500 }
   ];
 
   await Promise.all(entries.map(async (entry) => {
     try {
-      const promptObj = await getPromptFromLocalOrBlob(entry.promptKey,
+      const promptObj = await getPromptFromLocalOrBlob(
+        entry.promptKey,
         () => fetchPromptText(`${entry.promptKey}.json`)
       ).then((text) => { try { return JSON.parse(text); } catch { return { prompt: text }; }});
 
@@ -1196,10 +1167,10 @@ async function generatePortalComments(combinedText) {
       const body = {
         messages: [{ role: "system", content: prompt }, { role: "user", content: combinedText }],
         temperature: params.temperature ?? 0.3,
-        max_tokens: params.max_tokens ?? 4000,
+        max_tokens:  params.max_tokens ?? 4000,
         top_p: params.top_p,
         frequency_penalty: params.frequency_penalty,
-        presence_penalty: params.presence_penalty,
+        presence_penalty:  params.presence_penalty,
         purpose: entry.id
       };
 
@@ -1225,16 +1196,17 @@ async function generatePortalComments(combinedText) {
   }));
 }
 
-/* ================= 共通：文字数カウンタ ================= */
+/* ==============================
+ * 25) 文字数カウンタ
+ * ============================== */
 function initSuggestionCount() {
   const ta = document.getElementById("editable-suggestion");
-  const spanId = "suggestion-count";
   if (!ta) return;
-  setupCharCount("editable-suggestion", spanId, 1000);
+  setupCharCount("editable-suggestion", "suggestion-count", 1000);
 }
 function setupCharCount(textareaId, counterId, max) {
   const textarea = document.getElementById(textareaId);
-  const counter = document.getElementById(counterId);
+  const counter  = document.getElementById(counterId);
   const update = () => {
     const len = textarea.value.replace(/\r\n/g, "\n").length;
     counter.textContent = `${len}`;
@@ -1243,7 +1215,9 @@ function setupCharCount(textareaId, counterId, max) {
   update();
 }
 
-/* ================= 外部API（物件）取得：外部のみ ================= */
+/* ==============================
+ * 26) 外部API（物件）
+ * ============================== */
 async function fetchPropertyData(code) {
   try {
     const live = await fetch(`https://www.rehouse.co.jp/rehouse-api/api/v1/salesProperties/${code}`);
@@ -1256,21 +1230,15 @@ async function fetchPropertyData(code) {
   }
 }
 
-/* ================= GPT ラッパ（リトライ付） ================= */
+/* ==============================
+ * 27) GPT ラッパ（リトライ付）
+ * ============================== */
 async function callGPT(localBody) {
   const code = propertyCode || Date.now().toString(36);
   const sheet = LOG_SHEET_ID;
+  const payload = { ...localBody, propertyCode: code, spreadsheetId: sheet, userId };
 
-  const payload = {
-    ...localBody,
-    propertyCode: code,
-    spreadsheetId: sheet,
-    userId
-  };
-
-  const maxRetries = 3;
-  const delayMs = 1000;
-
+  const maxRetries = 3, delayMs = 1000;
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
       const result = await analyzeWithGPT(payload);
@@ -1284,7 +1252,9 @@ async function callGPT(localBody) {
   }
 }
 
-/* ================= buildRoomPhotoPrompt ================= */
+/* ==============================
+ * 28) RoomPhoto プロンプト合成
+ * ============================== */
 function buildRoomPhotoPrompt(basePrompt, roomType, description, pastComments = [], isRetry = false) {
   const memo = document.getElementById("property-info")?.value.trim() ?? "";
   const floorplan = document.getElementById("floorplan-preview-text")?.value.trim() ?? "";
@@ -1292,7 +1262,7 @@ function buildRoomPhotoPrompt(basePrompt, roomType, description, pastComments = 
   let prefix = "";
   if (roomType || description) {
     const t = roomType ? `「${roomType}」` : "";
-    const d = description ? `: ${description}` : "";
+    the d = description ? `: ${description}` : "";
     prefix = `# 画像メタ情報 ${t}${d}\n\n`;
   }
 
@@ -1318,7 +1288,9 @@ function buildRoomPhotoPrompt(basePrompt, roomType, description, pastComments = 
   );
 }
 
-/* ================= 物件メモ生成（簡略版：元実装維持） ================= */
+/* ==============================
+ * 29) 物件メモ生成（簡略）
+ * ============================== */
 function generatePropertyMemo(data, commitmentMaster = {}) {
   if (!data) return "";
   const uniq = (arr) => [...new Set(arr)];
@@ -1347,11 +1319,11 @@ function generatePropertyMemo(data, commitmentMaster = {}) {
     .join("、") || "交通情報なし";
 
   const exclusiveArea = data.exclusiveArea ? sqm2Tsubo(data.exclusiveArea) : null;
-  const landArea = data.landArea ? sqm2Tsubo(data.landArea) : null;
-  const buildingArea = data.grossFloorArea ? sqm2Tsubo(data.grossFloorArea) : null;
-  const floorPlan = data.floorPlanText || `${data.roomCount ?? ""}LDK`;
-  const built = data.builtYearMonth ? data.builtYearMonth.replace("-", "年") + "月築" : null;
-  const floorInfo = data.floorNumber
+  const landArea      = data.landArea      ? sqm2Tsubo(data.landArea)      : null;
+  const buildingArea  = data.grossFloorArea? sqm2Tsubo(data.grossFloorArea): null;
+  const floorPlan     = data.floorPlanText || `${data.roomCount ?? ""}LDK`;
+  const built         = data.builtYearMonth ? data.builtYearMonth.replace("-", "年") + "月築" : null;
+  const floorInfo     = data.floorNumber
     ? `${data.floorNumber}階 / 地上${data.story || "?"}階` + (data.undergroundStory ? ` 地下${data.undergroundStory}階建` : "")
     : null;
   const balconyDir = dirJP[data.balconyDirection] || data.balconyDirection || null;
@@ -1376,7 +1348,7 @@ function generatePropertyMemo(data, commitmentMaster = {}) {
   if (lr) {
     const conv = (v) => (v < 1 ? v * 100 : v < 10 && Number.isInteger(v) ? v * 100 : v);
     const bcr = lr.buildingCoverageRatio != null ? conv(lr.buildingCoverageRatio) : null;
-    const far = lr.floorAreaRatio != null ? conv(lr.floorAreaRatio) : null;
+    const far = lr.floorAreaRatio      != null ? conv(lr.floorAreaRatio)      : null;
     if (bcr != null && far != null) bcrFarLine = `${Math.round(bcr)}%／${Math.round(far)}%`;
   }
 
@@ -1391,27 +1363,27 @@ function generatePropertyMemo(data, commitmentMaster = {}) {
   switch (category) {
     case "mansion":
       if (exclusiveArea) L.push(line("専有面積", exclusiveArea));
-      if (floorPlan) L.push(line("間取り", floorPlan));
-      if (built) L.push(line("築年月", built));
-      if (floorInfo) L.push(line("階数", floorInfo));
-      if (balconyDir) L.push(line("向き", balconyDir));
+      if (floorPlan)     L.push(line("間取り", floorPlan));
+      if (built)         L.push(line("築年月", built));
+      if (floorInfo)     L.push(line("階数", floorInfo));
+      if (balconyDir)    L.push(line("向き", balconyDir));
       break;
     case "house":
-      if (landArea) L.push(line("土地面積", landArea));
+      if (landArea)     L.push(line("土地面積", landArea));
       if (buildingArea) L.push(line("建物面積", buildingArea));
-      if (floorPlan) L.push(line("間取り", floorPlan));
-      if (built) L.push(line("築年月", built));
+      if (floorPlan)    L.push(line("間取り", floorPlan));
+      if (built)        L.push(line("築年月", built));
       break;
     case "land":
       if (landArea) L.push(line("土地面積", landArea));
       break;
     default:
-      if (landArea) L.push(line("土地面積", landArea));
-      if (buildingArea) L.push(line("建物面積", buildingArea));
+      if (landArea)      L.push(line("土地面積", landArea));
+      if (buildingArea)  L.push(line("建物面積", buildingArea));
       if (exclusiveArea) L.push(line("専有面積", exclusiveArea));
   }
 
-  if (roadLine) L.push(line("接道状況", roadLine));
+  if (roadLine)   L.push(line("接道状況", roadLine));
   if (bcrFarLine) L.push(line("建ぺい率／容積率", bcrFarLine));
 
   const commitments = (data.commitmentInformations || [])
@@ -1430,7 +1402,7 @@ function generatePropertyMemo(data, commitmentMaster = {}) {
     .map((s) => `・${s.replace(/^○|^〇/, "")}`);
 
   if (commitments.length) L.push("", "■ 特徴・設備・条件など", ...uniq(commitments));
-  if (remarks.length) L.push("", "■ 担当者記載", ...uniq(remarks));
+  if (remarks.length)     L.push("", "■ 担当者記載", ...uniq(remarks));
 
   if ((data.renovationInfos || []).length) {
     const reno = data.renovationInfos.map((r) => {
@@ -1447,8 +1419,8 @@ function classifyPropertyType(item) {
   const house   = ["14","15","20","21","23","24"];
   const land    = ["33","34","35"];
   if (mansion.includes(item)) return "mansion";
-  if (house.includes(item)) return "house";
-  if (land.includes(item)) return "land";
+  if (house.includes(item))   return "house";
+  if (land.includes(item))    return "land";
   return "other";
 }
 function resolvePropertyTypeFromItem(item) {

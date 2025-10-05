@@ -1,61 +1,52 @@
-﻿/* Texel Prompt Editor
- * - GetPromptText → LoadPromptText に対応
- * - dev / prod の Function App 切替対応（クエリ or localStorage）
- *   ?env=dev で dev、?env=prod で prod。未指定は localStorage('texel_env')、なければ prod。
+﻿/* Texel Prompt Editor (Texel only, no hashtags)
+ * - LoadPromptText / SavePromptText
+ * - dev / prod の Function App 自動切替（?env=dev|prod / SWAホスト名 / localStorage）
+ * - SnapVoice互換キー＆ハッシュタグ系を完全削除
  */
 
 /* ============ 1) Function App Base ============ */
 const ENV_BASES = {
-  dev : "https://func-texel-api-dev-jpe-001-26h6h6zfb6e4cfd4cf.japaneast-01.azurewebsites.net/api",
-  prod: "https://func-texel-api-prod-jpe-001-td9y6thafubfzuvrd.japaneast-01.azurewebsites.net/api"
+  dev : "https://func-texel-api-dev-jpe-001-b2f6fec8fzcbdrc3.japaneast-01.azurewebsites.net/api",
+  prod: "https://func-texel-api-prod-jpe-001-dsgfhtafbfbxawdz.japaneast-01.azurewebsites.net/api"
 };
 
 function resolveEnv(){
+  // 1) 明示クエリ
   const urlEnv = new URLSearchParams(location.search).get("env");
   if (urlEnv === "dev" || urlEnv === "prod") return urlEnv;
+
+  // 2) SWAホスト名で自動判定
+  const h = location.host;
+  if (h.includes("lively-tree-019937900.2.azurestaticapps.net")) return "dev";   // 開発
+  if (h.includes("lemon-beach-0ae87bc00.2.azurestaticapps.net"))  return "prod"; // 本番
+
+  // 3) localStorage
   try{
     const st = localStorage.getItem("texel_env");
     if (st === "dev" || st === "prod") return st;
   }catch{}
+
+  // 4) 既定は prod
   return "prod";
 }
 
 function API_BASE(){ return ENV_BASES[resolveEnv()] || ENV_BASES.prod; }
 
-/* ============ 2) 種別 → ファイル名マップ ============ */
-/* どちらの接頭辞でも受け付ける（texel-* / snapvoice-*） */
+/* ============ 2) 種別 → ファイル名マップ（Texel専用、ハッシュタグ無し） ============ */
 const typeParamRaw = new URLSearchParams(location.search).get("type") || "";
-const typeParam =
-  typeParamRaw.startsWith("texel-") || typeParamRaw.startsWith("snapvoice-")
-    ? typeParamRaw
-    : `texel-${typeParamRaw}`;
+const typeParam = typeParamRaw.startsWith("texel-") ? typeParamRaw : `texel-${typeParamRaw}`;
 
 const promptMeta = {
-  // Texel推奨のキー
-  "texel-pdf-image" : { file:"texel-pdf-image.json" , label:"PDF画像メモ生成" },
-  "texel-floorplan" : { file:"texel-floorplan.json" , label:"間取図分析"       },
-  "texel-roomphoto" : { file:"texel-roomphoto.json" , label:"部屋写真分析"    },
-  "texel-suggestion": { file:"texel-suggestion.json", label:"おすすめポイント"},
-  "texel-hashtags"  : { file:"texel-hashtags.json"  , label:"ハッシュタグ抽出" },
-  "texel-commitment-master":{file:"texel-commitment-master.json",label:"こだわりマスター"},
-  "texel-export-format"    :{file:"texel-export-format.json"    ,label:"物件出力フォーマット"},
-  "texel-suumo-catch"      :{file:"texel-suumo-catch.json"      ,label:"SUUMOメインキャッチ"},
-  "texel-suumo-comment"    :{file:"texel-suumo-comment.json"    ,label:"SUUMOネット用コメント"},
-  "texel-athome-comment"   :{file:"texel-athome-comment.json"   ,label:"athomeスタッフコメント"},
-  "texel-athome-appeal"    :{file:"texel-athome-appeal.json"    ,label:"athomeエンド向けアピール"},
-
-  // 互換（既存BLOBを流用する場合）
-  "snapvoice-pdf-image" : { file:"snapvoice-pdf-image.json" , label:"PDF画像メモ生成" },
-  "snapvoice-floorplan" : { file:"snapvoice-floorplan.json" , label:"間取図分析"       },
-  "snapvoice-roomphoto" : { file:"snapvoice-roomphoto.json" , label:"部屋写真分析"    },
-  "snapvoice-suggestion": { file:"snapvoice-suggestion.json", label:"おすすめポイント"},
-  "snapvoice-hashtags"  : { file:"snapvoice-hashtags.json"  , label:"ハッシュタグ抽出" },
-  "snapvoice-commitment-master":{file:"snapvoice-commitment-master.json",label:"こだわりマスター"},
-  "snapvoice-export-format"    :{file:"snapvoice-export-format.json"    ,label:"物件出力フォーマット"},
-  "snapvoice-suumo-catch"      :{file:"snapvoice-suumo-catch.json"      ,label:"SUUMOメインキャッチ"},
-  "snapvoice-suumo-comment"    :{file:"snapvoice-suumo-comment.json"    ,label:"SUUMOネット用コメント"},
-  "snapvoice-athome-comment"   :{file:"snapvoice-athome-comment.json"   ,label:"athomeスタッフコメント"},
-  "snapvoice-athome-appeal"    :{file:"snapvoice-athome-appeal.json"    ,label:"athomeエンド向けアピール"}
+  "texel-pdf-image"        : { file:"texel-pdf-image.json"        , label:"PDF画像メモ生成" },
+  "texel-floorplan"        : { file:"texel-floorplan.json"        , label:"間取図分析"       },
+  "texel-roomphoto"        : { file:"texel-roomphoto.json"        , label:"部屋写真分析"    },
+  "texel-suggestion"       : { file:"texel-suggestion.json"       , label:"おすすめポイント"},
+  "texel-commitment-master": { file:"texel-commitment-master.json", label:"こだわりマスター"},
+  "texel-suumo-catch"      : { file:"texel-suumo-catch.json"      , label:"SUUMOメインキャッチ"},
+  "texel-suumo-comment"    : { file:"texel-suumo-comment.json"    , label:"SUUMOネット用コメント"},
+  "texel-athome-comment"   : { file:"texel-athome-comment.json"   , label:"athomeスタッフコメント"},
+  "texel-athome-appeal"    : { file:"texel-athome-appeal.json"    , label:"athomeエンド向けアピール"}
+  // ※ texel-hashtags は削除済み
 };
 
 const META     = promptMeta[typeParam] || {};
@@ -81,12 +72,12 @@ function setStatus(msg, color = "#0AA0A6"){
 
 /* ============ 4) パラメータ UI ============ */
 const paramKeys = [
-  ["max_tokens",        800],
-  ["temperature",      1.0 ],
-  ["top_p",            1.0 ],
-  ["frequency_penalty",0.0 ],
-  ["presence_penalty", 0.0 ],
-  ["n",                1   ]
+  ["max_tokens",         800],
+  ["temperature",       1.00],
+  ["top_p",             1.00],
+  ["frequency_penalty", 0.00],
+  ["presence_penalty",  0.00],
+  ["n",                 1   ]
 ];
 
 function updateParamUI(params){
@@ -140,7 +131,7 @@ async function loadPrompt(){
   setStatus("⏳ サーバーから取得中...","orange");
   try{
     const url = `${API_BASE()}/LoadPromptText?filename=${encodeURIComponent(FILENAME)}`;
-    const r   = await fetch(url);
+    const r   = await fetch(url, { method: "GET", credentials: "omit" });
     if (!r.ok) throw new Error("HTTP " + r.status);
     const data = await r.json();
 
@@ -173,7 +164,8 @@ async function savePrompt(){
     const r = await fetch(`${API_BASE()}/SavePromptText`, {
       method :"POST",
       headers:{"Content-Type":"application/json"},
-      body   : JSON.stringify(body)
+      body   : JSON.stringify(body),
+      credentials: "omit"
     });
     if (!r.ok) throw new Error(await r.text());
     setStatus(`✅ ${LABEL} を保存しました`,"green");
