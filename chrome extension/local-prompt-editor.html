@@ -5,72 +5,166 @@
   <title>Texel ローカルプロンプト管理</title>
   <style>
     :root{
-      --tx-primary:#0ea5a4;      /* Texel Teal */
-      --tx-primary-weak:#e9fbfb; /* 薄い背景 */
-      --tx-text-weak:#6b7280;
-      --tx-bg:#f3fbfb;
-      --tx-border:#b7e4e3;
-      --tx-border-strong:#8ed3d2;
+      /* Texel テイストの配色（ティール系） */
+      --tx-primary: #26b1a1;
+      --tx-primary-600:#1fa091;
+      --tx-primary-200:#dff6f3;
+      --tx-bg: #f5fbf9;
+      --tx-muted:#6b7280;
+      --tx-border:#cdebe6;
     }
-    *{box-sizing:border-box}
-    body{
-      font-family: Arial, sans-serif;
+    * { box-sizing: border-box; }
+    body {
+      font-family: Arial, "Hiragino Kaku Gothic ProN", Meiryo, sans-serif;
       max-width: 900px;
       margin: 20px auto;
-      padding: 10px;
+      padding: 10px 14px;
       background-color: var(--tx-bg);
-      color:#0b3b3a;
+      color:#222;
     }
-    h2{ margin: 0 0 12px }
-    .tab-header{
-      display:flex; width:100%; margin-bottom:12px; border-bottom:1px solid var(--tx-border);
+
+    h2{
+      margin: 0 0 14px;
+      font-weight: 700;
+      font-size: 20px;
+      color: var(--tx-primary-600);
+      letter-spacing: .02em;
     }
-    .tab-button{
-      flex:1 1 0; width:50%; text-align:center; padding:1em 0; font-size:16px;
-      background: var(--tx-primary-weak);
-      border:none; border-bottom:3px solid transparent;
-      cursor:pointer; font-weight:bold; color:#466d6c;
+
+    .tab-header {
+      display: flex;
+      width: 100%;
+      margin-bottom: 12px;
+      border-bottom: 1px solid var(--tx-border);
+      gap: 2px;
+    }
+    .tab-button {
+      flex: 1 1 0;
+      text-align: center;
+      padding: 12px 0;
+      font-size: 15px;
+      background: var(--tx-primary-200);
+      border: none;
+      border-bottom: 3px solid transparent;
+      cursor: pointer;
+      font-weight: 700;
+      color: var(--tx-muted);
       transition: border-color .2s, color .2s, background .2s;
+      border-top-left-radius: 8px;
+      border-top-right-radius: 8px;
     }
-    .tab-button.active{
-      border-bottom:3px solid var(--tx-primary);
-      color: var(--tx-primary);
+    .tab-button:hover{
+      background:#e9fbf8;
+      color:#333;
+    }
+    .tab-button.active {
+      border-bottom: 3px solid var(--tx-primary);
+      color: var(--tx-primary-600);
+      background: #fff;
+    }
+
+    #promptTab, #paramsTab { display: none; }
+    #promptTab.active, #paramsTab.active { display: block; }
+
+    textarea {
+      width: 100%;
+      height: 520px;               /* ↓ ここを少し小さくしました */
+      font-size: 14px;
+      padding: 12px;
+      line-height: 1.5;
+      font-family: Consolas, Menlo, Monaco, monospace;
+      box-sizing: border-box;
+      resize: vertical;
+      border: 1px solid var(--tx-border);
+      border-radius: 8px;
       background:#fff;
+      outline: none;
+      transition: box-shadow .15s, border-color .15s;
     }
-    #promptTab, #paramsTab{ display:none }
-    #promptTab.active, #paramsTab.active{ display:block }
-
-    textarea{
-      width:100%; height:700px; font-size:14px; padding:10px;
-      font-family: Consolas, monospace; box-sizing:border-box; resize:vertical;
-      border:1px solid var(--tx-border); border-radius:8px; background:#fcfffe; outline:none;
+    textarea:focus{
+      border-color: var(--tx-primary);
+      box-shadow: 0 0 0 3px rgba(38,177,161,.12);
     }
-    textarea:focus{ border-color:var(--tx-border-strong); box-shadow:0 0 0 3px #0ea5a413; }
 
-    .slider-group{ margin-bottom:2em }
-    .slider-label{ display:flex; align-items:center; font-size:14px; gap:.4em }
-    .slider-value{ font-weight:bold; color:var(--tx-primary); margin-left:.6em; min-width:3.5em; text-align:right; display:inline-block }
-    input[type=range]{ width:100% }
-
-    .info-icon{ display:inline-block; width:1.2em; height:1.2em; vertical-align:middle; margin-left:2px; cursor:pointer; color:#6c8f8e; position:relative }
-    .info-icon svg{ display:block; width:100%; height:100% }
-    .tooltip{
-      visibility:hidden; opacity:0; background:#123; color:#fff; font-size:13px;
-      border-radius:6px; padding:8px 12px; position:absolute; z-index:100;
-      left:100%; top:50%; transform:translate(8px, -50%);
-      min-width:200px; max-width:350px; pointer-events:none; transition:opacity .15s; white-space:pre-line;
-      box-shadow:0 8px 20px #0003;
+    .slider-group { margin-bottom: 1.6em; }
+    .slider-label {
+      display: flex;
+      align-items: center;
+      font-size: 14px;
+      gap: 0.4em;
+      color:#374151;
+      margin-bottom: 6px;
     }
-    .info-icon:hover .tooltip, .info-icon:focus .tooltip{ visibility:visible; opacity:1; pointer-events:auto }
-
-    button{
-      margin:5px; padding:10px 20px; font-size:14px; cursor:pointer;
-      background:var(--tx-primary); color:#fff; border:1px solid var(--tx-primary); border-radius:8px;
+    .slider-value {
+      font-weight: bold;
+      color: var(--tx-primary-600);
+      margin-left: 0.6em;
+      min-width: 3.5em;
+      text-align: right;
+      display: inline-block;
     }
-    button:hover{ filter:brightness(0.98) }
-    button:active{ transform: translateY(1px) }
+    input[type=range] {
+      width: 100%;
+      accent-color: var(--tx-primary);
+    }
 
-    #statusMessage{ margin-top:10px; font-size:13px; min-height:1.4em; transition:opacity .3s ease; color:var(--tx-primary) }
+    .info-icon {
+      display: inline-block;
+      width: 1.1em; height: 1.1em;
+      vertical-align: middle;
+      margin-left: 2px;
+      cursor: pointer;
+      color: var(--tx-muted);
+      position: relative;
+    }
+    .info-icon svg { display:block; width:100%; height:100%;}
+    .tooltip {
+      visibility: hidden;
+      opacity: 0;
+      background: #111827;
+      color: #fff;
+      font-size: 13px;
+      border-radius: 8px;
+      padding: 8px 12px;
+      position: absolute;
+      z-index: 100;
+      left: 100%; top: 50%;
+      transform: translate(10px, -50%);
+      min-width: 220px;
+      max-width: 360px;
+      pointer-events: none;
+      transition: opacity 0.15s;
+      white-space: pre-line;
+      box-shadow: 0 6px 18px rgba(0,0,0,.12);
+    }
+    .info-icon:hover .tooltip, .info-icon:focus .tooltip {
+      visibility: visible;
+      opacity: 1;
+      pointer-events: auto;
+    }
+
+    button {
+      margin: 6px 6px 0 0;
+      padding: 10px 18px;
+      font-size: 14px;
+      cursor: pointer;
+      border-radius: 8px;
+      border: 1px solid var(--tx-border);
+      background: #ffffff;
+      color:#0f172a;
+      transition: background .15s, box-shadow .15s, border-color .15s;
+    }
+    button:hover{
+      background: #f8fffd;
+      border-color: var(--tx-primary);
+      box-shadow: 0 4px 14px rgba(38,177,161,.12);
+    }
+
+    #statusMessage {
+      margin-top: 10px;
+      font-size: 13px;
+      color:#374151;
+    }
   </style>
 </head>
 <body>
@@ -88,74 +182,97 @@
 
   <!-- パラメータ編集タブ -->
   <div id="paramsTab">
-    <div style="padding:12px;">
+    <div style="padding: 12px;">
       <!-- max_tokens -->
       <div class="slider-group">
         <div class="slider-label">
           最大トークン数 [max_tokens]（100～32768）
           <span class="info-icon" tabindex="0">
-            <svg viewBox="0 0 20 20" fill="currentColor"><circle cx="10" cy="10" r="9" stroke="#666" stroke-width="1" fill="#e9fbfb"/><text x="10" y="15" text-anchor="middle" font-size="12" fill="#0ea5a4" font-weight="bold">i</text></svg>
-            <span class="tooltip">モデル応答の最大出力トークン数を制限します。大きくすると長い応答になります。</span>
+            <svg viewBox="0 0 20 20" fill="currentColor">
+              <circle cx="10" cy="10" r="9" stroke="#93cfc8" stroke-width="1" fill="#eefaf8"/>
+              <text x="10" y="15" text-anchor="middle" font-size="12" fill="var(--tx-primary-600)" font-weight="bold">i</text>
+            </svg>
+            <span class="tooltip">モデル応答の最大出力トークン数を制限します。<br>大きくすると長い応答になります。<br>GPT-4.1系は最大4096/8192/32768（デプロイ依存）。</span>
           </span>
           <span class="slider-value" id="val_max_tokens">800</span>
         </div>
         <input type="range" id="param_max_tokens" min="100" max="32768" step="1" value="800">
       </div>
+
       <!-- temperature -->
       <div class="slider-group">
         <div class="slider-label">
           創造性・多様性 [temperature]（0.00～1.00）
           <span class="info-icon" tabindex="0">
-            <svg viewBox="0 0 20 20" fill="currentColor"><circle cx="10" cy="10" r="9" stroke="#666" stroke-width="1" fill="#e9fbfb"/><text x="10" y="15" text-anchor="middle" font-size="12" fill="#0ea5a4" font-weight="bold">i</text></svg>
-            <span class="tooltip">応答のランダム性（多様性）を制御します。</span>
+            <svg viewBox="0 0 20 20" fill="currentColor">
+              <circle cx="10" cy="10" r="9" stroke="#93cfc8" stroke-width="1" fill="#eefaf8"/>
+              <text x="10" y="15" text-anchor="middle" font-size="12" fill="var(--tx-primary-600)" font-weight="bold">i</text>
+            </svg>
+            <span class="tooltip">応答のランダム性（多様性）を制御します。<br>0.00（決定論的）～1.00（多様）。</span>
           </span>
           <span class="slider-value" id="val_temperature">1.00</span>
         </div>
         <input type="range" id="param_temperature" min="0" max="1" step="0.01" value="1.00">
       </div>
+
       <!-- top_p -->
       <div class="slider-group">
         <div class="slider-label">
           確率カットオフ [Top P]（0.01～1.00）
           <span class="info-icon" tabindex="0">
-            <svg viewBox="0 0 20 20" fill="currentColor"><circle cx="10" cy="10" r="9" stroke="#666" stroke-width="1" fill="#e9fbfb"/><text x="10" y="15" text-anchor="middle" font-size="12" fill="#0ea5a4" font-weight="bold">i</text></svg>
-            <span class="tooltip">累積確率で上位トークン群のみを採用して多様性を制御します。</span>
+            <svg viewBox="0 0 20 20" fill="currentColor">
+              <circle cx="10" cy="10" r="9" stroke="#93cfc8" stroke-width="1" fill="#eefaf8"/>
+              <text x="10" y="15" text-anchor="middle" font-size="12" fill="var(--tx-primary-600)" font-weight="bold">i</text>
+            </svg>
+            <span class="tooltip">累積確率で高い語から切り取って多様性を制御します。<br>通常0.8～1.0が推奨。</span>
           </span>
           <span class="slider-value" id="val_top_p">1.00</span>
         </div>
         <input type="range" id="param_top_p" min="0.01" max="1" step="0.01" value="1.00">
       </div>
+
       <!-- frequency_penalty -->
       <div class="slider-group">
         <div class="slider-label">
           繰り返し抑制 [frequency_penalty]（-2.00～2.00）
           <span class="info-icon" tabindex="0">
-            <svg viewBox="0 0 20 20" fill="currentColor"><circle cx="10" cy="10" r="9" stroke="#666" stroke-width="1" fill="#e9fbfb"/><text x="10" y="15" text-anchor="middle" font-size="12" fill="#0ea5a4" font-weight="bold">i</text></svg>
-            <span class="tooltip">既出単語の再出現を抑えます。高いほど繰り返しが減ります。</span>
+            <svg viewBox="0 0 20 20" fill="currentColor">
+              <circle cx="10" cy="10" r="9" stroke="#93cfc8" stroke-width="1" fill="#eefaf8"/>
+              <text x="10" y="15" text-anchor="middle" font-size="12" fill="var(--tx-primary-600)" font-weight="bold">i</text>
+            </svg>
+            <span class="tooltip">頻出語の再登場確率を下げます。高いほど繰り返しが減少。</span>
           </span>
           <span class="slider-value" id="val_frequency_penalty">0.00</span>
         </div>
         <input type="range" id="param_frequency_penalty" min="-2" max="2" step="0.01" value="0.00">
       </div>
+
       <!-- presence_penalty -->
       <div class="slider-group">
         <div class="slider-label">
           話題の多様性 [presence_penalty]（-2.00～2.00）
           <span class="info-icon" tabindex="0">
-            <svg viewBox="0 0 20 20" fill="currentColor"><circle cx="10" cy="10" r="9" stroke="#666" stroke-width="1" fill="#e9fbfb"/><text x="10" y="15" text-anchor="middle" font-size="12" fill="#0ea5a4" font-weight="bold">i</text></svg>
-            <span class="tooltip">一度出た語の再登場を抑え、新しい話題を促します。</span>
+            <svg viewBox="0 0 20 20" fill="currentColor">
+              <circle cx="10" cy="10" r="9" stroke="#93cfc8" stroke-width="1" fill="#eefaf8"/>
+              <text x="10" y="15" text-anchor="middle" font-size="12" fill="var(--tx-primary-600)" font-weight="bold">i</text>
+            </svg>
+            <span class="tooltip">一度出現した語の再登場を抑制。高いほど新規話題に寄ります。</span>
           </span>
           <span class="slider-value" id="val_presence_penalty">0.00</span>
         </div>
         <input type="range" id="param_presence_penalty" min="-2" max="2" step="0.01" value="0.00">
       </div>
+
       <!-- n -->
       <div class="slider-group">
         <div class="slider-label">
-          応答数 n（1～4）
+          応答数 n [response_count]（1～4）
           <span class="info-icon" tabindex="0">
-            <svg viewBox="0 0 20 20" fill="currentColor"><circle cx="10" cy="10" r="9" stroke="#666" stroke-width="1" fill="#e9fbfb"/><text x="10" y="15" text-anchor="middle" font-size="12" fill="#0ea5a4" font-weight="bold">i</text></svg>
-            <span class="tooltip">同時に複数案を返します。</span>
+            <svg viewBox="0 0 20 20" fill="currentColor">
+              <circle cx="10" cy="10" r="9" stroke="#93cfc8" stroke-width="1" fill="#eefaf8"/>
+              <text x="10" y="15" text-anchor="middle" font-size="12" fill="var(--tx-primary-600)" font-weight="bold">i</text>
+            </svg>
+            <span class="tooltip">1～4の範囲で同時に複数応答を返せます。</span>
           </span>
           <span class="slider-value" id="val_n">1</span>
         </div>

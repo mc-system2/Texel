@@ -1,36 +1,76 @@
-// local-prompt-editor.js (Texel) ─────────────────────────────
+// local-prompt-editor.js ─────────────────────────────────────
+// Texel 仕様版：SnapVoice依存を全撤去 / LoadPromptText に対応
+// - type=xxx を texel-xxx に正規化
+// - プロンプトファイルは texel-* に統一
+// - FUNCTION_BASE を簡易リゾルブ（localStorage: texel_api_base / texel_env）
+// - /LoadPromptText?filename=... で取得（旧 GetPromptText は未使用）
 
 // ------------------------------------------------------------
-// 0. 定数・要素参照（Texel専用）
+// 0. ENV / 関数ベースURL解決（簡易版）
+// ------------------------------------------------------------
+const ENV_KEY = "texel_env";               // 'dev' | 'prod'
+const API_BASE_OVERRIDE_KEY = "texel_api_base"; // https://.../api を直接指定可能
+
+const ENV_BASES = {
+  dev : "https://func-texel-api-dev-jpe-001-b2f6fec8fzcbdrc3.japaneast-01.azurewebsites.net/api",
+  prod: "https://func-texel-api-prod-jpe-001-dsgfhtafbfbxawdz.japaneast-01.azurewebsites.net/api",
+};
+const fromLS = (k, fb) => { try { return localStorage.getItem(k) ?? fb; } catch { return fb; } };
+const trimSlash = (s) => (s || "").replace(/\/+$/,"");
+const hasProto  = (s) => /^https?:\/\//i.test(s || "");
+const addProto  = (s) => (hasProto(s) ? s : `https://${s}`);
+const normalizeApiBase = (b) => {
+  if (!b) return "";
+  const base = trimSlash(addProto(b));
+  return /\/api$/i.test(base) ? base : `${base}/api`;
+};
+
+const CURRENT_ENV = (() => {
+  const v = (fromLS(ENV_KEY, "prod") || "").toLowerCase();
+  return (v === "dev" || v === "prod") ? v : "prod";
+})();
+const OVERRIDE_BASE = normalizeApiBase(fromLS(API_BASE_OVERRIDE_KEY, ""));
+const FUNCTION_BASE = OVERRIDE_BASE || (ENV_BASES[CURRENT_ENV] || ENV_BASES.prod);
+
+// ------------------------------------------------------------
+// 1. 定数・要素参照
 // ------------------------------------------------------------
 const typeParamRaw = new URLSearchParams(location.search).get("type") || "";
-const typeParam    = typeParamRaw.startsWith("texel-") ? typeParamRaw : `texel-${typeParamRaw}`;
+const typeParam    = typeParamRaw.startsWith("texel-")
+                   ? typeParamRaw
+                   : `texel-${typeParamRaw}`;
 
+// Texel のファイル命名
 const promptFileMap = {
-  "texel-pdf-image"         : "texel-pdf-image.json",
-  "texel-floorplan"         : "texel-floorplan.json",
-  "texel-roomphoto"         : "texel-roomphoto.json",
-  "texel-suggestion"        : "texel-suggestion.json",
-  "texel-hashtags"          : "texel-hashtags.json",
-  "texel-commitment-master" : "texel-commitment-master.json",
-  "texel-export-format"     : "texel-export-format.json",
-  "texel-suumo-catch"       : "texel-suumo-catch.json",
-  "texel-suumo-comment"     : "texel-suumo-comment.json",
-  "texel-athome-comment"    : "texel-athome-comment.json",
-  "texel-athome-appeal"     : "texel-athome-appeal.json"
+  "texel-pdf-image"        : "texel-pdf-image.json",
+  "texel-floorplan"        : "texel-floorplan.json",
+  "texel-roomphoto"        : "texel-roomphoto.json",
+  "texel-suggestion"       : "texel-suggestion.json",
+  "texel-summary"          : "texel-summary.json",
+  "texel-commitment-master": "texel-commitment-master.json",
+  "texel-suumo-catch"      : "texel-suumo-catch.json",
+  "texel-suumo-comment"    : "texel-suumo-comment.json",
+  "texel-athome-comment"   : "texel-athome-comment.json",
+  "texel-athome-appeal"    : "texel-athome-appeal.json",
 };
 
 const PROMPT_FILENAME = promptFileMap[typeParam];
 const STORAGE_KEY     = `prompt_${typeParam}`;
 
-// 既定テンプレート取得用（Texel Functions 同オリジン想定）
-// 必要なら "https://<texel-functions>.azurewebsites.net/api" に変更
-const BASE_URL        = "/api";
-
 const editor   = document.getElementById("promptEditor");
 const btnLoad  = document.getElementById("loadLocal");
 const btnSave  = document.getElementById("saveLocal");
 const btnReset = document.getElementById("resetOriginal");
+
+// ==== 新: パラメータ6種 ====
+const paramFields = [
+  { key: "temperature",        min: 0,    max: 2,    step: 0.01, default: 1.0 },
+  { key: "top_p",              min: 0,    max: 1,    step: 0.01, default: 1.0 },
+  { key: "presence_penalty",   min: -2,   max: 2,    step: 0.01, default: 0 },
+  { key: "frequency_penalty",  min: -2,   max: 2,    step: 0.01, default: 0 },
+  { key: "max_tokens",         min: 256,  max: 4096, step: 1,    default: 2048 },
+  { key: "n",                  min: 1,    max: 4,    step: 1,    default: 1 }
+];
 
 // タブ
 const tabPrompt = document.getElementById("tabPrompt");
@@ -39,21 +79,22 @@ const promptTab = document.getElementById("promptTab");
 const paramsTab = document.getElementById("paramsTab");
 
 // ------------------------------------------------------------
-// 1. 共通ユーティリティ
-// ------------------------------------------------------------
-function setStatus(msg, color = "var(--tx-primary)") {
+function setStatus(msg, color = "black") {
   let box = document.getElementById("statusMessage");
   if (!box) {
     box = document.createElement("div");
     box.id = "statusMessage";
-    box.style.cssText = "margin-top:6px;font-size:13px;transition:opacity .3s ease;";
+    box.style.cssText = `
+      margin-top: 6px;
+      font-size: 13px;
+      transition: opacity .3s ease;
+    `;
     (btnSave?.parentNode || document.body).appendChild(box);
   }
   clearTimeout(window.__statusTimer);
   box.style.opacity = "1";
   box.textContent   = msg;
   box.style.color   = color;
-
   if (color !== "red" && color !== "orange") {
     window.__statusTimer = setTimeout(() => {
       box.style.opacity = "0";
@@ -62,7 +103,8 @@ function setStatus(msg, color = "var(--tx-primary)") {
   }
 }
 
-const decodeNewLines = s => (typeof s === "string" ? s.replace(/\\r?\\n/g, "\n") : s);
+const decodeNewLines = s =>
+  typeof s === "string" ? s.replace(/\\r?\\n/g, "\n") : s;
 
 function normalizePrompt(src) {
   if (typeof src === "string") {
@@ -79,23 +121,18 @@ function normalizePrompt(src) {
   }
 }
 
-async function fetchBlobTextFull() {
-  const res = await fetch(`${BASE_URL}/GetPromptText?filename=${encodeURIComponent(PROMPT_FILENAME)}`);
+// Texel: LoadPromptText
+async function fetchBlobText() {
+  const res = await fetch(`${FUNCTION_BASE}/LoadPromptText?filename=${encodeURIComponent(PROMPT_FILENAME)}`);
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const ctype = res.headers.get("content-type") || "";
   if (ctype.includes("application/json")) {
-    const data = await res.json();
-    // "prompt"はテキスト or {text: ...}
-    const promptText =
-      typeof data.prompt === "string" ? data.prompt
-      : (data.prompt && typeof data.prompt.text === "string") ? data.prompt.text
-      : JSON.stringify(data.prompt ?? data, null, 2);
-    return { prompt: promptText, params: data.params || {} };
+    return normalizePrompt(await res.json());
   }
-  const text = await res.text();
-  return { prompt: text, params: {} };
+  return normalizePrompt(await res.text());
 }
 
+// 値セット
 function updateParamUI(params) {
   [
     ["max_tokens", 800],
@@ -105,32 +142,28 @@ function updateParamUI(params) {
     ["presence_penalty", 0.0],
     ["n", 1],
   ].forEach(([k, def]) => {
-    const input = document.getElementById("param_" + k);
-    const span  = document.getElementById("val_" + k);
+    let input = document.getElementById("param_" + k);
+    let span = document.getElementById("val_" + k);
     if (input && span) {
       input.value = params?.[k] ?? def;
-      span.textContent = input.value.indexOf(".") > -1
-        ? parseFloat(input.value).toFixed(2)
-        : input.value;
+      span.textContent = input.value.indexOf(".") > -1 ? parseFloat(input.value).toFixed(2) : input.value;
     }
   });
 }
 function readParamUI() {
-  const params = {};
-  ["max_tokens","temperature","top_p","frequency_penalty","presence_penalty","n"].forEach(k=>{
-    const v = document.getElementById("param_" + k).value;
+  let params = {};
+  ["max_tokens", "temperature", "top_p", "frequency_penalty", "presence_penalty", "n"].forEach(k => {
+    let v = document.getElementById("param_" + k).value;
     params[k] = v.indexOf(".") > -1 ? parseFloat(v) : parseInt(v, 10);
   });
   return params;
 }
-["max_tokens","temperature","top_p","frequency_penalty","presence_penalty","n"].forEach(k=>{
-  const input = document.getElementById("param_" + k);
-  const span  = document.getElementById("val_" + k);
+["max_tokens", "temperature", "top_p", "frequency_penalty", "presence_penalty", "n"].forEach(k => {
+  let input = document.getElementById("param_" + k);
+  let span = document.getElementById("val_" + k);
   if (input && span) {
     input.addEventListener("input", () => {
-      span.textContent = input.value.indexOf(".") > -1
-        ? parseFloat(input.value).toFixed(2)
-        : input.value;
+      span.textContent = input.value.indexOf(".") > -1 ? parseFloat(input.value).toFixed(2) : input.value;
     });
   }
 });
@@ -150,7 +183,7 @@ function showTab(which) {
   }
 }
 
-// ==== 旧保存データの互換（テキスト or {prompt,params}）====
+// 旧仕様互換
 function parseStored(value) {
   if (!value) return { prompt: "", params: {} };
   try {
@@ -163,10 +196,9 @@ function parseStored(value) {
 }
 
 // ------------------------------------------------------------
-// 2. 読み込み（localStorage → chrome.storage.local → サーバー）
+// 2. 読み込み（ローカル優先・無ければサーバー取得→ローカルへ保存）
 // ------------------------------------------------------------
 async function loadPrompt () {
-  // ① localStorage
   const local = localStorage.getItem(STORAGE_KEY);
   if (local !== null) {
     const {prompt, params} = parseStored(local);
@@ -176,7 +208,6 @@ async function loadPrompt () {
     return;
   }
 
-  // ② chrome.storage.local
   const chromeLocal = await new Promise(resolve =>
     chrome.storage?.local?.get([STORAGE_KEY], r => resolve(r?.[STORAGE_KEY] ?? null))
   );
@@ -189,12 +220,12 @@ async function loadPrompt () {
     return;
   }
 
-  // ③ サーバーから取得 → 両方へ反映
   setStatus("⏳ サーバーから取得中...", "orange");
   try {
     const {prompt, params} = await fetchBlobTextFull();
     editor.value = prompt;
     updateParamUI(params);
+
     const saveObj = JSON.stringify({prompt, params});
     try { localStorage.setItem(STORAGE_KEY, saveObj); } catch (_) {}
     if (chrome.storage?.local) chrome.storage.local.set({ [STORAGE_KEY]: saveObj });
@@ -205,27 +236,42 @@ async function loadPrompt () {
 }
 
 // ------------------------------------------------------------
-// 3. 手動保存（両ストレージへ）
+// 3. 手動保存（両ストレージへ書き込み）
 // ------------------------------------------------------------
 function saveToLocal () {
   const normalized = { prompt: editor.value, params: readParamUI() };
   const saveString = JSON.stringify(normalized);
 
-  let lsError = null;
+  let lsError = false;
   try { localStorage.setItem(STORAGE_KEY, saveString); } catch (e) { lsError = e; }
 
-  chrome.storage?.local?.set({ [STORAGE_KEY]: saveString }, () => {
-    const chromeErr = chrome.runtime?.lastError;
-    if (lsError || chromeErr) {
-      setStatus(`❌ 保存エラー: ${(lsError?.message ?? "")} ${(chromeErr?.message ?? "")}`, "red");
-    } else {
-      setStatus("✅ ローカルストレージに保存しました", "green");
-    }
-  });
+  if (chrome.storage?.local) {
+    chrome.storage.local.set({ [STORAGE_KEY]: saveString }, () => {
+      const chromeErr = chrome.runtime.lastError;
+      if (lsError || chromeErr) {
+        setStatus(`❌ 保存エラー: ${(lsError?.message ?? "")} ${(chromeErr?.message ?? "")}`, "red");
+      } else {
+        setStatus("✅ ローカルストレージに保存しました", "green");
+      }
+    });
+  } else {
+    setStatus(lsError ? `❌ 保存エラー: ${lsError.message}` : "✅ ローカルストレージに保存しました", lsError ? "red" : "green");
+  }
 }
 
+// ==== パラメータスライダーのリアルタイム表示 ====
+paramFields.forEach(f => {
+  const input = document.getElementById("param_" + f.key);
+  const span  = document.getElementById("val_" + f.key);
+  if (input && span) {
+    input.addEventListener("input", () => {
+      span.textContent = input.value;
+    });
+  }
+});
+
 // ------------------------------------------------------------
-// 4. 初期化 & イベント
+// 4. 初期チェック & イベントバインド
 // ------------------------------------------------------------
 if (!typeParamRaw) {
   setStatus("❌ URL に type パラメータがありません", "red");
@@ -251,3 +297,25 @@ btnReset?.addEventListener("click", async () => {
     setStatus(`❌ サーバー再読み込みに失敗しました：${err.message}`, "red");
   }
 });
+
+// Texel: LoadPromptText の完全版（{prompt, params} を返す）
+async function fetchBlobTextFull() {
+  const url = `${FUNCTION_BASE}/LoadPromptText?filename=${encodeURIComponent(PROMPT_FILENAME)}`;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const ctype = res.headers.get("content-type") || "";
+  if (ctype.includes("application/json")) {
+    const data = await res.json();
+    let promptText;
+    if (typeof data.prompt === "string") {
+      promptText = data.prompt;
+    } else if (data.prompt && typeof data.prompt.text === "string") {
+      promptText = data.prompt.text;
+    } else {
+      promptText = JSON.stringify(data.prompt ?? data, null, 2);
+    }
+    return { prompt: promptText, params: data.params || {} };
+  }
+  const text = await res.text();
+  return { prompt: text, params: {} };
+}

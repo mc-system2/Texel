@@ -1,35 +1,49 @@
 {
   "manifest_version": 3,
   "name": "Texel",
-  "version": "0.2.0",
+  "version": "0.5.0",
   "description": "Texel side panel",
   "action": {
     "default_title": "Texel"
   },
+
   "permissions": [
     "sidePanel",
     "activeTab",
-    "scripting",
     "storage"
   ],
+
+  "host_permissions": [
+    "https://sttexeldevjpe001.blob.core.windows.net/*",
+    "https://sttexelprodjpe001.blob.core.windows.net/*",
+    "https://*.azurewebsites.net/*",
+    "https://lively-tree-019937900.2.azurestaticapps.net/*",
+    "https://lemon-beach-0ae87bc00.2.azurestaticapps.net/*"
+  ],
+
   "background": {
     "service_worker": "background/background.js",
     "type": "module"
   },
+
   "side_panel": {
     "default_path": "texel.html"
   },
+
   "web_accessible_resources": [
     {
       "resources": [
         "texel.html",
         "texel.js",
         "texel.css",
-        "icons/*"
+        "icons/*",
+        "prompts/*",
+        "libs/pdfjs/*"
       ],
       "matches": ["<all_urls>"]
     }
   ],
+
   "icons": {
     "16": "icons/texel-icon16-v3.png",
     "48": "icons/texel-icon48-v3.png",
