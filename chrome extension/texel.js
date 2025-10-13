@@ -1,6 +1,7 @@
 /* =====================================================================
  *  Texel.js  ― Texel (external-only, clean, no hashtags)
  *  - BLOB の commitment-master を dev/prod 自動切替で読込（SWA → 拡張 → BLOB）
+ *  - CLIENT_CATALOG は BLOB のみからロード（ローカルコピーなし／管理者のみ編集）
  *  - 物件APIから間取り図URLを推測 → Base64化 → プレビュー表示
  *  - PDF 要約 / 間取り図解析 / 部屋写真解析 / SUUMO / athome 文言生成
  *  - 画像URL→Base64 は API.image2base64 に統一
@@ -25,8 +26,8 @@ const DEFAULT_SHEET_ID = "1Q8Vbluc5duil1KKWYOGiVoF9UyMxVUxAh6eYb0h2jkQ";
 const LOG_SHEET_ID = DEFAULT_SHEET_ID;
 
 let userId = "";
-let propertyCode = "";                 // 例：FXXXXXXX
-let sheetIdForGPT = DEFAULT_SHEET_ID;  // ユーザー入力から差し替え
+let propertyCode = "";                 // 例：FXXXXXXX（BK）
+let sheetIdForGPT = DEFAULT_SHEET_ID;  // CLに紐づくsheetId（カタログから）
 let sessionSheetId = sheetIdForGPT;
 
 let basePropertyData = null;
@@ -54,7 +55,7 @@ const BLOB_ACCOUNT = {
   dev: "https://sttexeldevjpe001.blob.core.windows.net",
   prod: "https://sttexelprodjpe001.blob.core.windows.net",
 };
-const PROMPTS_SAS = ""; // 必要なら付与
+const PROMPTS_SAS = ""; // ★ 管理者がSASを設定（r権限必須）
 const COMMITMENT_MASTER_FILE = "texel-commitment-master.json";
 
 /* ------ プロンプトの論理キーとファイル名（texel-* に統一） ------ */
@@ -152,6 +153,48 @@ async function loadCommitmentMaster() {
 loadCommitmentMaster().catch(() => {});
 
 /* ==============================
+ * CLIENT_CATALOG（BLOBからのみ取得）
+ * ============================== */
+const CLIENT_CATALOG_FILE = "texel-client-catalog.json"; // ★ BLOB上のファイル名
+let CLIENT_CATALOG = null; // ロード完了まで null（失敗時は {} にする）
+
+function buildClientCatalogBlobUrl() {
+  const account = ENV === "prod" ? BLOB_ACCOUNT.prod : BLOB_ACCOUNT.dev;
+  if (!PROMPTS_SAS || !PROMPTS_SAS.trim()) {
+    console.error("❌ PROMPTS_SAS が未設定のため、CLカタログを取得できません。");
+    return null;
+  }
+  return `${account}/${PROMPTS_CONTAINER}/${CLIENT_CATALOG_FILE}${PROMPTS_SAS}`;
+}
+
+async function loadClientCatalog() {
+  const url = buildClientCatalogBlobUrl();
+  if (!url) { CLIENT_CATALOG = {}; return; }
+  try {
+    const r = await fetch(url, { cache: "no-cache", method: "GET" });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const ctype = r.headers.get("content-type") || "";
+    CLIENT_CATALOG = ctype.includes("application/json")
+      ? await r.json()
+      : JSON.parse(await r.text());
+    if (!CLIENT_CATALOG || typeof CLIENT_CATALOG !== "object") {
+      throw new Error("invalid JSON");
+    }
+    console.info("✅ client-catalog loaded from BLOB");
+  } catch (e) {
+    console.error("❌ client-catalog load failed:", e);
+    CLIENT_CATALOG = {};
+  }
+}
+
+/** CL ID → プロファイル（未ロード/未登録なら null） */
+function resolveClientProfile(clId) {
+  if (!CLIENT_CATALOG || typeof CLIENT_CATALOG !== "object") return null;
+  const key = (clId || "").toUpperCase();
+  return CLIENT_CATALOG[key] || null;
+}
+
+/* ==============================
  * 3) ユーティリティ
  * ============================== */
 const autosaveDebounced = debounce(() => saveExportJson().catch(() => {}), 600);
@@ -189,16 +232,52 @@ function buildCombinedSource() {
 }
 
 /* ==============================
- * 4) 入力バリデーション
+ * 4) 入力バリデーション（CL/BK + カタログ必須）
  * ============================== */
+const RX_CL = /^[BRSM][0-9]{3}$/i;
+const RX_BK = /^F[0-9A-Z]{7}$/i;
+
 function validateInput() {
-  const pcIn = document.getElementById("property-code-input");
-  const ssIn = document.getElementById("spreadsheet-id-input");
-  const btn = document.getElementById("property-code-submit");
-  const pcVal = pcIn.value.trim().toUpperCase();
-  const ssVal = ssIn.value.trim();
-  pcIn.value = pcVal;
-  btn.disabled = !(pcVal && ssVal);
+  const clIn = document.getElementById("cl-id-input");
+  const bkIn = document.getElementById("bk-id-input");
+  const submit = document.getElementById("property-code-submit");
+  const legacyProp = document.getElementById("property-code-input");      // 互換ミラー（任意）
+  const legacySheet = document.getElementById("spreadsheet-id-input");    // 互換ミラー（任意）
+  const err = document.getElementById("modal-error");
+
+  // カタログ未ロード or 空 ⇒ 起動不可
+  if (!CLIENT_CATALOG || Object.keys(CLIENT_CATALOG).length === 0) {
+    if (submit) submit.disabled = true;
+    if (err) {
+      err.textContent = "クライアント設定を取得できません。管理者にお問い合わせください。";
+      err.style.display = "block";
+    }
+    return;
+  }
+
+  const cl = (clIn?.value || "").trim().toUpperCase();
+  const bk = (bkIn?.value || "").trim().toUpperCase();
+  if (clIn) clIn.value = cl;
+  if (bkIn) bkIn.value = bk;
+
+  // 互換：旧フィールドへミラー
+  if (legacyProp) legacyProp.value = cl;
+  if (legacySheet) legacySheet.value = bk;
+
+  const profile = resolveClientProfile(cl);
+  const clOk = RX_CL.test(cl) && !!profile;
+  const bkOk = RX_BK.test(bk);
+
+  if (submit) submit.disabled = !(clOk && bkOk);
+  if (err) {
+    if (!profile && RX_CL.test(cl)) {
+      err.textContent = "未登録の CL ID です。管理者に登録依頼をしてください。";
+      err.style.display = "block";
+    } else {
+      err.textContent = "";
+      err.style.display = "none";
+    }
+  }
 }
 
 /* ==============================
@@ -388,40 +467,33 @@ function guessFloorplanFromPropertyImages(data) {
  * 11) 起動時モーダル／イベント登録
  * ============================== */
 document.addEventListener("DOMContentLoaded", async () => {
+  await loadClientCatalog();        // ★ カタログはBLOBのみからロード
   userId = await detectUserId();
 
-  // 歯車：ローカルプロンプトエディタを別ウィンドウで開く
+  // 歯車：ローカルプロンプトエディタを別ウィンドウで開く（※カタログのリンクは作らない）
   document.body.addEventListener("click", async (e) => {
     const a = e.target.closest('a.prompt-config-link');
     if (!a) return;
     e.preventDefault();
     const t = a.getAttribute('data-type') || '';
     const url = chrome.runtime.getURL(`local-prompt-editor.html?type=${encodeURIComponent(t)}`);
-
-    // メインウィンドウの新規タブで開く
-    if (chrome?.tabs?.create) {
-      await chrome.tabs.create({ url });
-    } else {
-      // 古い環境などのフォールバック
-      window.open(url, "_blank");
-    }
+    if (chrome?.tabs?.create) { await chrome.tabs.create({ url }); } else { window.open(url, "_blank"); }
   });
 
-  // モーダル
+  // ── モーダル（CL/BK） ───────────────────────────────────────────────
   const modal = document.getElementById("property-code-modal");
-  const pcIn = document.getElementById("property-code-input");
-  const ssIn = document.getElementById("spreadsheet-id-input");
-  const btn = document.getElementById("property-code-submit");
+  const clIn  = document.getElementById("cl-id-input");
+  const bkIn  = document.getElementById("bk-id-input");
+  const submitBtn = document.getElementById("property-code-submit");
+  const title = document.getElementById("modal-title");
+  const err = document.getElementById("modal-error");
 
-  document.getElementById("modal-title").textContent = "BK IDとGS IDを入力してください";
-  pcIn.style.display = "block";
-  ssIn.style.display = "block";
-  const noWrap = document.getElementById("no-code-wrapper");
-  if (noWrap) noWrap.style.display = "none";
+  if (title) title.textContent = "CL IDとBK IDを入力してください";
 
-  pcIn.addEventListener("input", validateInput);
-  ssIn.addEventListener("input", validateInput);
+  clIn?.addEventListener("input", validateInput);
+  bkIn?.addEventListener("input", validateInput);
   window.addEventListener("load", validateInput);
+  validateInput();
 
   // 間取り図テキスト自動伸縮
   const fpTextarea = document.getElementById("floorplan-preview-text");
@@ -431,13 +503,11 @@ document.addEventListener("DOMContentLoaded", async () => {
     autoGrow(fpTextarea);
   }
 
-  // 生成／再要約／元に戻す（←追加）
+  // 生成／再要約／元に戻す
   document.getElementById("generate-suggestions").addEventListener("click", onGenerateSuggestions);
   document.getElementById("generate-summary").addEventListener("click", onRegenerateSummary);
   const resetBtn = document.getElementById("reset-suggestion");
-  if (resetBtn) {
-    resetBtn.addEventListener("click", onClickResetSuggestion); // 何度でも有効
-  }
+  if (resetBtn) resetBtn.addEventListener("click", onClickResetSuggestion);
 
   // 画像ポップアップ
   bindImagePopup();
@@ -446,20 +516,40 @@ document.addEventListener("DOMContentLoaded", async () => {
   document.getElementById("confirmNorthButton").addEventListener("click", onConfirmNorth);
 
   // 決定（起動）
-  btn.addEventListener("click", async () => {
-    propertyCode = pcIn.value.trim().toUpperCase();
-    sheetIdForGPT = extractSpreadsheetId(ssIn.value);
+  submitBtn?.addEventListener("click", async (e) => {
+    e.preventDefault();
+
+    const clId = (clIn?.value || "").trim().toUpperCase();
+    const bkId = (bkIn?.value || "").trim().toUpperCase();
+    const profile = resolveClientProfile(clId);
+
+    // バリデーション（念のため二重チェック）
+    if (!profile || !RX_CL.test(clId) || !RX_BK.test(bkId)) {
+      if (err) {
+        err.textContent = !profile ? "未登録の CL ID です。管理者に登録依頼をしてください。" : "入力形式が正しくありません。";
+        err.style.display = "block";
+      }
+      return;
+    }
+
+    // BKを propertyCode、CLから sheetIdForGPT を採用
+    propertyCode = bkId;
+    sheetIdForGPT = profile?.sheetId || DEFAULT_SHEET_ID;
     sessionSheetId = sheetIdForGPT;
 
+    // 保存（任意）
+    try {
+      localStorage.setItem("texel:clId", clId);
+      localStorage.setItem("texel:bkId", bkId);
+      localStorage.setItem("texel:clientProfile", JSON.stringify(profile || {}));
+    } catch {}
+
     showCodeBanner(propertyCode);
-    modal.style.display = "none";
+    if (modal) modal.style.display = "none";
     document.querySelectorAll("section.disabled").forEach((sec) => sec.classList.remove("disabled"));
 
     const memo = document.getElementById("property-info");
-    if (memo) {
-      memo.addEventListener("input", () => autoGrow(memo));
-      autoGrow(memo);
-    }
+    if (memo) { memo.addEventListener("input", () => autoGrow(memo)); autoGrow(memo); }
 
     // 物件データ取得（存在しなければ新規扱い）
     try {
@@ -1092,13 +1182,9 @@ async function addToHistory(imageSrc, commentText, roomType = "", description = 
 
   // ▼ くるくる実装：押下→回転ON、完了→回転OFF
   regenBtn.onclick = async () => {
-    // aria と disabled をセット（アクセシビリティ＋連打防止）
     regenBtn.setAttribute("aria-busy", "true");
     regenBtn.disabled = true;
-
-    // 回転開始（.spin は 19) で注入する CSS で定義）
     regenBtn.classList.add("spin");
-
     try {
       await analyzeRoomPhotoWithGPT(
         imageSrc,
@@ -1110,7 +1196,6 @@ async function addToHistory(imageSrc, commentText, roomType = "", description = 
         wrapper
       );
     } finally {
-      // 回転停止
       regenBtn.classList.remove("spin");
       regenBtn.disabled = false;
       regenBtn.removeAttribute("aria-busy");

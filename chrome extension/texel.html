@@ -167,17 +167,21 @@
   <body>
     <div id="code-banner">Texel</div>
 
+    <!-- CL/BK 入力モーダル（MV3：インラインJSなし） -->
     <div id="property-code-modal" style="position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.6); display:flex; align-items:center; justify-content:center; z-index:9999;">
       <div style="background:#fff; padding:20px; border-radius:10px; width:320px; text-align:center; box-shadow: 0 10px 30px rgba(0,0,0,.15);">
-        <h3 id="modal-title" style="margin:0 0 8px;">BK IDとGS IDを入力してください</h3>
-        <input type="text" id="property-code-input" placeholder="FXXXXXXX" class="modal-input" />
-        <input type="text" id="spreadsheet-id-input" placeholder="Google Spreadsheet ID" class="modal-input" />
-        <div id="no-code-wrapper" style="display:none; margin-top:6px;">
-          <label style="font-size:13px;display:block;margin:6px auto;width:260px;text-align:left;">
-            <input type="checkbox" id="no-code-checkbox" />物件コードなしで作業する
-          </label>
-        </div>
+        <h3 id="modal-title" style="margin:0 0 8px;">CL IDとBK IDを入力してください</h3>
+
+        <!-- 新: CL / BK 入力 -->
+        <input type="text" id="cl-id-input" placeholder="B001 / R999 / S001 / M001" class="modal-input" />
+        <input type="text" id="bk-id-input" placeholder="FXXXXXXX（例：F1234567）" class="modal-input" />
+
+        <!-- 互換: 既存JSが参照する旧IDへ値ミラー（hidden） -->
+        <input type="hidden" id="property-code-input" />
+        <input type="hidden" id="spreadsheet-id-input" />
+
         <button id="property-code-submit" disabled style="padding:8px 16px; background:var(--tx-primary); color:#fff; border:none; border-radius:8px;">決定</button>
+        <p id="modal-error" style="color:#ef4444; font-size:12px; margin:6px 0 0; display:none;"></p>
       </div>
     </div>
 
@@ -185,7 +189,7 @@
     <section id="pdf-section" class="disabled">
       <h2>
         📝 PDFから物件情報を抽出
-        <!-- Texel専用キー -->
+        <!-- Texel専用キー（※クライアントカタログ用リンクは作りません） -->
         <a href="#" class="prompt-config-link" data-type="texel-pdf-image" title="プロンプト編集">⚙</a>
       </h2>
       <div id="pdf-drop" class="drop-zone">ここにPDFをドラッグ＆ドロップ</div>
