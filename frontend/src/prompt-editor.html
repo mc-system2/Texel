@@ -13,6 +13,7 @@
       BLOBストレージのプロンプト・パラメータを編集します。<br />
       <span class="api-path">HTTP <b>/LoadPromptText</b> / <b>/SavePromptText</b></span>
       <br />種別: <code id="filename"></code>
+      <br />※ <b>texel-client-catalog.json</b> は <u>純JSON（paramsなし）</u> で保存・読込されます。パラメータタブは自動的に非表示になります。
     </div>
 
     <!-- タブ -->
@@ -23,7 +24,7 @@
 
     <!-- プロンプト編集タブ -->
     <div class="tab-panel active" id="promptTab">
-      <textarea id="promptEditor" placeholder="ここにプロンプトが読み込まれます..."></textarea>
+      <textarea id="promptEditor" placeholder="ここにプロンプト（またはJSONカタログ）が読み込まれます..."></textarea>
     </div>
 
     <!-- パラメータ編集タブ -->

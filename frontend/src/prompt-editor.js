@@ -1,8 +1,7 @@
 ﻿/* Texel Prompt Editor (Texel only, no hashtags)
  * - LoadPromptText / SavePromptText
  * - dev / prod の Function App 自動切替（?env=dev|prod / SWAホスト名 / localStorage）
- * - SnapVoice互換キー＆ハッシュタグ系を完全削除
- * - ★ texel-client-catalog.json（CLカタログ）対応：純JSONとして編集／保存。Paramsタブは非表示
+ * - ★ texel-client-catalog.json は「純JSON（params無し）」として編集・保存
  */
 
 /* ============ 1) Function App Base ============ */
@@ -11,7 +10,7 @@ const ENV_BASES = {
   prod: "https://func-texel-api-prod-jpe-001-dsgfhtafbfbxawdz.japaneast-01.azurewebsites.net/api"
 };
 
-function resolveEnv() {
+function resolveEnv(){
   // 1) 明示クエリ
   const urlEnv = new URLSearchParams(location.search).get("env");
   if (urlEnv === "dev" || urlEnv === "prod") return urlEnv;
@@ -22,17 +21,17 @@ function resolveEnv() {
   if (h.includes("lemon-beach-0ae87bc00.2.azurestaticapps.net"))  return "prod"; // 本番
 
   // 3) localStorage
-  try {
+  try{
     const st = localStorage.getItem("texel_env");
     if (st === "dev" || st === "prod") return st;
-  } catch {}
+  }catch{}
 
   // 4) 既定は prod
   return "prod";
 }
 function API_BASE(){ return ENV_BASES[resolveEnv()] || ENV_BASES.prod; }
 
-/* ============ 2) 種別 → ファイル名マップ（Texel専用、ハッシュタグ無し） ============ */
+/* ============ 2) 種別 → ファイル名マップ（Texel専用） ============ */
 const typeParamRaw = new URLSearchParams(location.search).get("type") || "";
 const typeParam    = typeParamRaw.startsWith("texel-") ? typeParamRaw : `texel-${typeParamRaw}`;
 
@@ -46,14 +45,14 @@ const promptMeta = {
   "texel-suumo-comment"    : { file:"texel-suumo-comment.json"    , label:"SUUMOネット用コメント"},
   "texel-athome-comment"   : { file:"texel-athome-comment.json"   , label:"athomeスタッフコメント"},
   "texel-athome-appeal"    : { file:"texel-athome-appeal.json"    , label:"athomeエンド向けアピール"},
-  // ▼ 追加：CLカタログ（管理者のみ編集）
+  // ▼ 追加：クライアントカタログ（純JSON：paramsは使わない）
   "texel-client-catalog"   : { file:"texel-client-catalog.json"   , label:"クライアントカタログ（JSON）", pureJson:true }
 };
 
 const META      = promptMeta[typeParam] || {};
 const FILENAME  = META.file;
 const LABEL     = META.label || FILENAME || "(unknown prompt)";
-const IS_PURE   = !!META.pureJson; // ← カタログなど params を使わない純JSON
+const IS_PURE   = !!META.pureJson;
 
 document.getElementById("label").textContent = LABEL;
 document.getElementById("filename").textContent = FILENAME || "-";
@@ -73,7 +72,7 @@ function setStatus(msg, color = "#0AA0A6"){
   }
 }
 
-/* ============ 4) パラメータ UI ============ */
+/* ============ 4) パラメータ UI（通常プロンプトのみ） ============ */
 const paramKeys = [
   ["max_tokens",         800],
   ["temperature",       1.00],
@@ -127,7 +126,7 @@ function showTab(which){
   }else{
     document.getElementById("tabPromptBtn").classList.remove("active");
     document.getElementById("tabParamsBtn").classList.add("active");
-    document.getElementById("promptTab").classList.remove("active");
+    document.getElementById("promptTab").classList.removeClass("active");
     document.getElementById("paramsTab").classList.add("active");
   }
 }
@@ -146,25 +145,33 @@ async function loadPrompt(){
     if (!r.ok) throw new Error("HTTP " + r.status);
     const data = await r.json();
 
-    let prompt = "";
+    let editorText = "";
     if (IS_PURE) {
-      // 純JSONとして表示（整形）
-      prompt = typeof data === "string" ? data : JSON.stringify(data, null, 2);
+      // 受理形：
+      //   A) 純JSONそのもの（{ "B001": {...}, ... }）
+      //   B) ラッパ（{ prompt:{...}, params?:{} }）
+      const catalogObj =
+        (data && typeof data.prompt === "object")
+          ? data.prompt
+          : (data && typeof data === "object")
+            ? data
+            : {};
+      editorText = JSON.stringify(catalogObj, null, 2);
     } else {
-      // 通常の「prompt/params」形式
+      // 通常プロンプト
       if (typeof data.prompt === "string") {
-        prompt = data.prompt;
+        editorText = data.prompt;
       } else if (data.prompt && typeof data.prompt.text === "string") {
-        prompt = data.prompt.text;
+        editorText = data.prompt.text;
       } else if (typeof data === "string") {
-        prompt = data;
+        editorText = data;
       } else {
-        prompt = JSON.stringify(data, null, 2);
+        editorText = JSON.stringify(data, null, 2);
       }
       updateParamUI(data.params);
     }
 
-    document.getElementById("promptEditor").value = prompt;
+    document.getElementById("promptEditor").value = editorText;
     setStatus(`✅ ${LABEL} を読み込みました`,"green");
   }catch(e){
     setStatus("❌ 読み込み失敗: " + e.message,"red");
@@ -175,20 +182,16 @@ async function savePrompt(){
   if (!FILENAME){ setStatus("❌ 無効な type パラメータ","red"); return; }
   const raw = document.getElementById("promptEditor").value;
 
-  // 純JSONファイルは JSON バリデーション
+  let body;
   if (IS_PURE) {
-    try {
-      // 整形保存（APIは文字列をそのまま保存）
-      JSON.parse(raw);
-    } catch (e) {
-      setStatus("❌ JSONの形式が不正です: " + e.message, "red");
-      return;
-    }
+    // JSON 検証（params は送らない）
+    let parsed;
+    try { parsed = JSON.parse(raw); }
+    catch(e){ setStatus("❌ JSONの形式が不正です: " + e.message, "red"); return; }
+    body = { filename: FILENAME, prompt: parsed };
+  } else {
+    body = { filename: FILENAME, prompt: raw, params: readParamUI() };
   }
-
-  const body = IS_PURE
-    ? { filename: FILENAME, prompt: raw }                     // params なし
-    : { filename: FILENAME, prompt: raw, params: readParamUI() };
 
   try{
     const r = await fetch(`${API_BASE()}/SavePromptText`, {
