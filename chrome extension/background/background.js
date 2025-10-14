@@ -1,37 +1,158 @@
-// SnapVoiceと同等：Side Panel APIで開く
-// （chrome:// 等のシステムURLでは開きません）
+/* ===================================================================
+ * Texel BG (MV3 / module) — MOCK AUTH EDITION
+ * - Side Panel（SnapVoice同等）
+ * - 会社アカウント認証はモックで常に許可
+ * - Logs（userEmail はモックユーザー）
+ * - TYPE-S（Suumo）スクレイプ中継
+ * =================================================================== */
 
-// ① インストール時：アクションボタンクリックでサイドパネルを開く挙動に
-chrome.runtime.onInstalled.addListener(() => {
-  chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
-});
+/* ===== 設定 ===== */
+const ALLOWED_HDS = ["your-company.co.jp"]; // 例: "mf-realty.jp"（モック中は未使用）
+const LOG_ENDPOINT = "https://your-func-app.azurewebsites.net/api/log";
 
-// ② クリック時：このタブ用に texel.html を指定して有効化
-chrome.action.onClicked.addListener(async (tab) => {
-  if (!tab?.id || !tab.url) return;
+/* ★★★ モック設定：本実装に切り替える際は false に変更 ★★★ */
+const AUTH_MOCK_ENABLED = true;
+const AUTH_MOCK_USER = {
+  email: "texel.dev@your-company.co.jp",
+  name: "Texel Dev",
+  hd: "your-company.co.jp"
+};
 
-  // 注入不可URL（chrome:// 等）は無視
-  const u = tab.url.toLowerCase();
-  if (
+/* ===== ユーティリティ ===== */
+const isSystemUrl = (u = "") => {
+  u = (u || "").toLowerCase();
+  return (
     u.startsWith("chrome://") ||
     u.startsWith("edge://") ||
     u.startsWith("devtools://") ||
     u.startsWith("chrome-extension://") ||
     u.startsWith("about:")
-  ) return;
+  );
+};
+async function setPanelPath(path, tabId) {
+  await chrome.sidePanel.setOptions({ tabId, path, enabled: true });
+}
+async function setUser(u) { await chrome.storage.local.set({ texelUser: u }); }
+async function getUser() { return (await chrome.storage.local.get("texelUser")).texelUser || null; }
+async function sendLog(event, detail = {}) {
+  const u = await getUser();
+  try {
+    await fetch(LOG_ENDPOINT, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        timestamp: new Date().toISOString(),
+        userEmail: u?.email || "",
+        event,
+        detail
+      })
+    });
+  } catch (e) {
+    console.warn("[Texel] log failed:", e);
+  }
+}
 
-  await chrome.sidePanel.setOptions({
-    tabId: tab.id,
-    path: "texel.html",
-    enabled: true
-  });
-  // openPanelOnActionClick を使うので明示 open は不要だが、明示してもOK
-  // await chrome.sidePanel.open({ tabId: tab.id });
+/* ===================================================================
+ * ゲート本体（モック版）
+ * - 常に許可し、texel.html を表示
+ * - ユーザーは AUTH_MOCK_USER を採用
+ * =================================================================== */
+async function gateAndRoute({ interactive = false, tabId } = {}) {
+  if (AUTH_MOCK_ENABLED) {
+    await setUser(AUTH_MOCK_USER);
+    await setPanelPath("texel.html", tabId);
+    await sendLog("allowed-mock", { email: AUTH_MOCK_USER.email, hd: AUTH_MOCK_USER.hd });
+    return { allowed: true, user: AUTH_MOCK_USER };
+  }
+
+  // ---- 本実装（将来用）：必要になったら enable して使う ----
+  // const user = await realGate(interactive); // 未実装プレースホルダ
+  // if (!user || !ALLOWED_HDS.includes(user.hd)) {
+  //   await setPanelPath("blocked.html", tabId);
+  //   await sendLog("blocked", { reason: "domain", email: user?.email, hd: user?.hd });
+  //   return { allowed: false, user: user || null };
+  // }
+  // await setPanelPath("texel.html", tabId);
+  // await setUser(user);
+  // await sendLog("allowed", { email: user.email, hd: user.hd });
+  // return { allowed: true, user };
+}
+
+/* ===================================================================
+ * Side Panel 動線（SnapVoice同等）
+ * =================================================================== */
+// ① インストール時：アクションボタンクリックでサイドパネル起動
+chrome.runtime.onInstalled.addListener(() => {
+  chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
+  // 既定（タブ未指定）も一度ルーティング
+  gateAndRoute({ interactive: false }).catch(() => {});
 });
 
-// ===== Texel: TYPE-S スクレイプ一式（BG側で実行） =====
+// ② アクションボタン：このタブ向けに出し分け（モックで常に texel.html）
+chrome.action.onClicked.addListener(async (tab) => {
+  if (!tab?.id || !tab.url || isSystemUrl(tab.url)) return;
+  await gateAndRoute({ interactive: false, tabId: tab.id });
+  // openPanelOnActionClick により、明示 open は不要
+});
 
-// bc / bkc の両対応で Suumo タブを探す
+// タブ切替 / 読込完了でも都度ルーティング
+chrome.tabs.onActivated.addListener(async ({ tabId }) => {
+  try {
+    const t = await chrome.tabs.get(tabId);
+    if (t?.url && !isSystemUrl(t.url)) await gateAndRoute({ interactive: false, tabId });
+  } catch {}
+});
+chrome.tabs.onUpdated.addListener(async (tabId, info, tab) => {
+  if (info.status === "complete" && tab?.url && !isSystemUrl(tab.url)) {
+    await gateAndRoute({ interactive: false, tabId });
+  }
+});
+
+/* ===================================================================
+ * Runtime メッセージ API
+ * - TEXEL_GATE_CHECK / TEXEL_GATE_SIGNIN / TEXEL_GET_USER / TEXEL_LOG
+ * - TEXEL_SCRAPE_SUUMO / TEXEL_FETCH_IMAGES_BASE64
+ * =================================================================== */
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  (async () => {
+    try {
+      if (msg?.type === "TEXEL_GATE_CHECK") {
+        const r = await gateAndRoute({ interactive: false, tabId: sender?.tab?.id });
+        return sendResponse(r);
+      }
+      if (msg?.type === "TEXEL_GATE_SIGNIN") {
+        const r = await gateAndRoute({ interactive: true, tabId: sender?.tab?.id });
+        return sendResponse(r);
+      }
+      if (msg?.type === "TEXEL_GET_USER") {
+        return sendResponse({ user: await getUser() });
+      }
+      if (msg?.type === "TEXEL_LOG") {
+        await sendLog(msg.event || "custom", msg.detail || {});
+        return sendResponse({ ok: true });
+      }
+
+      // ===== TYPE-S: Suumo スクレイプ中継 =====
+      if (msg?.type === "TEXEL_SCRAPE_SUUMO") {
+        const res = await scrapeSuumoPreview(msg.bkId);
+        return sendResponse(res);
+      }
+      if (msg?.type === "TEXEL_FETCH_IMAGES_BASE64") {
+        const res = await fetchSuumoImagesBase64(msg.bkId, msg.urls || []);
+        return sendResponse(res);
+      }
+
+      return sendResponse({ ok: false, error: "unknown_message" });
+    } catch (e) {
+      return sendResponse({ ok: false, error: e?.message || String(e) });
+    }
+  })();
+  return true; // async
+});
+
+/* ===================================================================
+ * TYPE-S（Suumo）スクレイプ：元コード同等
+ * =================================================================== */
 async function findSuumoTabInBG(bkId) {
   const tabs = await chrome.tabs.query({});
   for (const t of tabs) {
@@ -46,21 +167,19 @@ async function findSuumoTabInBG(bkId) {
   return null;
 }
 
-// content script を（静的登録に加えて）念のため動的注入も試す
 async function ensureSuumoCS(tabId) {
   try {
-    if (!chrome.scripting?.executeScript) return; // Edgeケース用
+    if (!chrome.scripting?.executeScript) return; // Edge 対策
     await chrome.scripting.executeScript({
       target: { tabId },
       files: ["content/suumo-preview.js"]
     });
   } catch (e) {
-    // 既にロード済み等は無視
-    console.warn("[BG] ensureSuumoCS:", e?.message || e);
+    // 既に登録済みなどは無視
+    // console.warn("[BG] ensureSuumoCS:", e?.message || e);
   }
 }
 
-// タブへ sendMessage（タイムアウト付き）
 function sendMessageToTab(tabId, message, timeoutMs = 8000) {
   return new Promise((resolve, reject) => {
     let done = false;
@@ -78,72 +197,28 @@ function sendMessageToTab(tabId, message, timeoutMs = 8000) {
   });
 }
 
-// パネル→BG リクエストの入口
-chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
-  if (msg?.type === "TEXEL_SCRAPE_SUUMO") {
-    (async () => {
-      try {
-        const bkId = msg.bkId;
-
-        // 1) タブ探索（bc / bkc 両対応）
-        const tab = await findSuumoTabInBG(bkId);
-        if (!tab?.id) throw new Error("Suumoタブが見つかりません（bc/bkc不一致の可能性）");
-
-        // 2) 念のため content script を保証
-        await ensureSuumoCS(tab.id);
-
-        // 3) DOM抽出を依頼
-        const res = await sendMessageToTab(tab.id, { type: "SCRAPE_SUUMO_PREVIEW" });
-        if (!res?.ok) throw new Error(res?.error || "SCRAPE_SUUMO_PREVIEW 失敗");
-
-        sendResponse({ ok: true, payload: res });
-      } catch (e) {
-        sendResponse({ ok: false, error: e?.message || String(e) });
-      }
-    })();
-    return true; // async 返信
+async function scrapeSuumoPreview(bkId) {
+  try {
+    const tab = await findSuumoTabInBG(bkId);
+    if (!tab?.id) throw new Error("Suumoタブが見つかりません（bc/bkc不一致の可能性）");
+    await ensureSuumoCS(tab.id);
+    const res = await sendMessageToTab(tab.id, { type: "SCRAPE_SUUMO_PREVIEW" });
+    if (!res?.ok) throw new Error(res?.error || "SCRAPE_SUUMO_PREVIEW 失敗");
+    return { ok: true, payload: res };
+  } catch (e) {
+    return { ok: false, error: e?.message || String(e) };
   }
-});
+}
 
-// 既存: findSuumoTabInBG, ensureSuumoCS はそのまま利用
-
-chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
-  if (msg?.type === "TEXEL_SCRAPE_SUUMO") {
-    (async () => {
-      try {
-        const tab = await findSuumoTabInBG(msg.bkId);
-        if (!tab?.id) throw new Error("Suumoタブが見つかりません");
-        await ensureSuumoCS(tab.id);
-        const res = await new Promise((resolve, reject) => {
-          chrome.tabs.sendMessage(tab.id, { type: "SCRAPE_SUUMO_PREVIEW" }, (r) => {
-            const le = chrome.runtime.lastError; if (le) return reject(new Error(le.message));
-            resolve(r);
-          });
-        });
-        if (!res?.ok) throw new Error(res?.error || "scrape failed");
-        sendResponse({ ok: true, payload: res });
-      } catch (e) { sendResponse({ ok: false, error: e?.message || String(e) }); }
-    })();
-    return true;
+async function fetchSuumoImagesBase64(bkId, urls = []) {
+  try {
+    const tab = await findSuumoTabInBG(bkId);
+    if (!tab?.id) throw new Error("Suumoタブが見つかりません");
+    await ensureSuumoCS(tab.id);
+    const r = await sendMessageToTab(tab.id, { type: "FETCH_IMAGES_BASE64", urls });
+    if (!r?.ok) throw new Error(r?.error || "fetchImagesBase64 failed");
+    return { ok: true, result: r.result };
+  } catch (e) {
+    return { ok: false, error: e?.message || String(e) };
   }
-
-  // ★追加: 画像Base64バッチ中継
-  if (msg?.type === "TEXEL_FETCH_IMAGES_BASE64") {
-    (async () => {
-      try {
-        const tab = await findSuumoTabInBG(msg.bkId);
-        if (!tab?.id) throw new Error("Suumoタブが見つかりません");
-        await ensureSuumoCS(tab.id);
-        const r = await new Promise((resolve, reject) => {
-          chrome.tabs.sendMessage(tab.id, { type: "FETCH_IMAGES_BASE64", urls: msg.urls || [] }, (resp) => {
-            const le = chrome.runtime.lastError; if (le) return reject(new Error(le.message));
-            resolve(resp);
-          });
-        });
-        if (!r?.ok) throw new Error(r?.error || "fetchImagesBase64 failed");
-        sendResponse({ ok: true, result: r.result });
-      } catch (e) { sendResponse({ ok: false, error: e?.message || String(e) }); }
-    })();
-    return true;
-  }
-});
+}

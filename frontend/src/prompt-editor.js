@@ -2,6 +2,7 @@
  * - LoadPromptText / SavePromptText
  * - dev / prod の Function App 自動切替（?env=dev|prod / SWAホスト名 / localStorage）
  * - ★ texel-client-catalog.json は「純JSON（params無し）」として編集・保存
+ * - 2025-10-14 fix: removeClass → remove / + QoL (Cmd/Ctrl+S, dirty guard, URL reflect)
  */
 
 /* ============ 1) Function App Base ============ */
@@ -45,7 +46,7 @@ const promptMeta = {
   "texel-suumo-comment"    : { file:"texel-suumo-comment.json"    , label:"SUUMOネット用コメント"},
   "texel-athome-comment"   : { file:"texel-athome-comment.json"   , label:"athomeスタッフコメント"},
   "texel-athome-appeal"    : { file:"texel-athome-appeal.json"    , label:"athomeエンド向けアピール"},
-  // ▼ 追加：クライアントカタログ（純JSON：paramsは使わない）
+  // ▼ 純JSON（params を使わない）
   "texel-client-catalog"   : { file:"texel-client-catalog.json"   , label:"クライアントカタログ（JSON）", pureJson:true }
 };
 
@@ -106,6 +107,7 @@ paramKeys.forEach(([k])=>{
   if (input && span){
     input.addEventListener("input", ()=>{
       span.textContent = input.value.indexOf(".")>-1 ? parseFloat(input.value).toFixed(2) : input.value;
+      markDirty();
     });
   }
 });
@@ -116,7 +118,7 @@ if (IS_PURE) {
   document.getElementById("paramsTab").style.display = "none";
 }
 
-/* ============ 5) タブ切替 ============ */
+/* ============ 5) タブ切替（bugfix） ============ */
 function showTab(which){
   if (which === "prompt"){
     document.getElementById("tabPromptBtn").classList.add("active");
@@ -126,7 +128,7 @@ function showTab(which){
   }else{
     document.getElementById("tabPromptBtn").classList.remove("active");
     document.getElementById("tabParamsBtn").classList.add("active");
-    document.getElementById("promptTab").classList.removeClass("active");
+    document.getElementById("promptTab").classList.remove("active"); // ← fix
     document.getElementById("paramsTab").classList.add("active");
   }
 }
@@ -135,7 +137,23 @@ if (!IS_PURE) {
   document.getElementById("tabParamsBtn").addEventListener("click", ()=>showTab("params"));
 }
 
-/* ============ 6) 読み込み / 保存 ============ */
+/* ============ 6) 変更検知（未保存ガード & ショートカット） ============ */
+let __dirty = false;
+function markDirty(){ __dirty = true; }
+function clearDirty(){ __dirty = false; }
+window.addEventListener("beforeunload", (e)=>{
+  if (!__dirty) return;
+  e.preventDefault(); e.returnValue = "";
+});
+document.getElementById("promptEditor").addEventListener("input", markDirty);
+window.addEventListener("keydown", (e)=>{
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s"){
+    e.preventDefault();
+    savePrompt();
+  }
+});
+
+/* ============ 7) 読み込み / 保存 ============ */
 async function loadPrompt(){
   if (!FILENAME){ setStatus("❌ 無効な type パラメータ","red"); return; }
   setStatus("⏳ サーバーから取得中...","orange");
@@ -147,9 +165,7 @@ async function loadPrompt(){
 
     let editorText = "";
     if (IS_PURE) {
-      // 受理形：
-      //   A) 純JSONそのもの（{ "B001": {...}, ... }）
-      //   B) ラッパ（{ prompt:{...}, params?:{} }）
+      // A) 純JSONそのもの or B) ラッパ（{ prompt:{...} }）
       const catalogObj =
         (data && typeof data.prompt === "object")
           ? data.prompt
@@ -172,6 +188,13 @@ async function loadPrompt(){
     }
 
     document.getElementById("promptEditor").value = editorText;
+    clearDirty();
+    // URLに現在のtype/envを反映（ブクマ用）
+    const usp = new URLSearchParams(location.search);
+    usp.set("type", typeParam);
+    usp.set("env", resolveEnv());
+    history.replaceState(null, "", `${location.pathname}?${usp.toString()}`);
+
     setStatus(`✅ ${LABEL} を読み込みました`,"green");
   }catch(e){
     setStatus("❌ 読み込み失敗: " + e.message,"red");
@@ -186,8 +209,14 @@ async function savePrompt(){
   if (IS_PURE) {
     // JSON 検証（params は送らない）
     let parsed;
-    try { parsed = JSON.parse(raw); }
-    catch(e){ setStatus("❌ JSONの形式が不正です: " + e.message, "red"); return; }
+    try {
+      parsed = JSON.parse(raw);
+    } catch(e){
+      setStatus("❌ JSONの形式が不正です: " + e.message, "red");
+      return;
+    }
+    // 保存時に整形しておく
+    document.getElementById("promptEditor").value = JSON.stringify(parsed, null, 2);
     body = { filename: FILENAME, prompt: parsed };
   } else {
     body = { filename: FILENAME, prompt: raw, params: readParamUI() };
@@ -201,6 +230,7 @@ async function savePrompt(){
       credentials: "omit"
     });
     if (!r.ok) throw new Error(await r.text());
+    clearDirty();
     setStatus(`✅ ${LABEL} を保存しました`,"green");
   }catch(e){
     setStatus("❌ 保存失敗: " + e.message,"red");

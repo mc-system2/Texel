@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Texel",
-  "version": "0.8.0",
+  "version": "0.8.1",
   "description": "Texel side panel",
 
   "action": {
@@ -13,8 +13,14 @@
     "activeTab",
     "storage",
     "tabs",
-    "scripting"
+    "scripting",
+    "identity"
   ],
+
+  "oauth2": {
+    "client_id": "YOUR_OAUTH_CLIENT_ID.apps.googleusercontent.com",
+    "scopes": ["openid", "email", "profile"]
+  },
 
   "host_permissions": [
     "https://sttexeldevjpe001.blob.core.windows.net/*",
@@ -22,7 +28,9 @@
     "https://*.azurewebsites.net/*",
     "https://lively-tree-019937900.2.azurestaticapps.net/*",
     "https://lemon-beach-0ae87bc00.2.azurestaticapps.net/*",
-    "https://manager.suumo.jp/*"
+    "https://manager.suumo.jp/*",
+    "https://www.googleapis.com/*",
+    "https://www.rehouse.co.jp/*"
   ],
 
   "background": {
@@ -45,6 +53,8 @@
   "web_accessible_resources": [
     {
       "resources": [
+        "blocked.html",
+        "blocked.js",
         "texel.html",
         "texel.js",
         "texel.css",

@@ -25,9 +25,10 @@ import {
  * 1) 固定定数・実行時状態
  * ============================== */
 const DEFAULT_SHEET_ID = "1Q8Vbluc5duil1KKWYOGiVoF9UyMxVUxAh6eYb0h2jkQ";
-const LOG_SHEET_ID = DEFAULT_SHEET_ID;
+const LOG_SPREADSHEET_ID = DEFAULT_SHEET_ID;
 
 let userId = "";
+let CURRENT_BEHAVIOR = "BASE";
 let clientId = "";                     // CL ID（4桁英数字）
 let propertyCode = "";                 // 例：FXXXXXXX or ランダム発番
 let sheetIdForGPT = DEFAULT_SHEET_ID;  // Client Catalog から差し替え
@@ -304,6 +305,47 @@ function buildCombinedSource() {
   return sections.join("\n\n");
 }
 
+// ===== 画像重複整理ヘルパ（新規） =====
+function normalizeUrl(u=''){
+  try { const url = new URL(u, location.origin); url.hash = ""; return url.toString(); }
+  catch { return (u || "").split("#")[0]; }
+}
+
+function uniqByLast(arr, keyFn){
+  const seen = new Set();
+  const out = [];
+  for (let i = arr.length - 1; i >= 0; i--) {
+    const k = keyFn(arr[i]);
+    if (seen.has(k)) continue;      // 後ろを優先
+    seen.add(k);
+    out.unshift(arr[i]);
+  }
+  return out;
+}
+
+function isFloorplan(item){
+  const name = (item.name || item.title || item.filename || "").toLowerCase();
+  const url  = (item.url  || item.src || "").toLowerCase();
+  const tag  = String(item.tag || item.kind || "").toLowerCase();
+  return /間取|間取り|間取図/.test(name) || /floor.?plan|madori/.test(name+url+tag);
+}
+
+// Type-R用：先頭が間取り図で同一画像が後方にある場合は先頭を落とす＋重複は後勝ち
+function buildImageQueue_TypeR(raw){
+  let images = Array.isArray(raw) ? [...raw] : [];
+
+  if (images.length && isFloorplan(images[0])) {
+    const firstKey = normalizeUrl(images[0].url || images[0].src || images[0].id || images[0]);
+    const dupBehind = images.slice(1).some(it =>
+      normalizeUrl(it.url || it.src || it.id || it) === firstKey
+    );
+    if (dupBehind) images.shift();   // ← 先頭を捨てる（後方を残す）
+  }
+
+  images = uniqByLast(images, it => normalizeUrl(it.url || it.src || it.id || it));
+  return images;
+}
+
 /* ==============================
  * 4) 入力ダイアログ（CL/BK）
  * ============================== */
@@ -558,6 +600,10 @@ async function startTypeSFlow(bkId) {
 
     // 1) DOMスクレイプ
     const scrapedWrap = await scrapeSuumoPreviewViaBG(bkId);
+    postLog("type-s.scrape", scrapedWrap?.ok ? "ok" : "fail", {
+      floorplan: !!scrapedWrap?.floorplanUrl,
+      rooms: (scrapedWrap?.roomImageUrls || scrapedWrap?.roomImages || []).length || 0
+    });
     if (!scrapedWrap?.ok) throw new Error(scrapedWrap?.error || "scrape failed");
     const scraped = scrapedWrap;
 
@@ -573,12 +619,15 @@ async function startTypeSFlow(bkId) {
 
     if (scraped.floorplanUrl) {
       imgsMeta.push({ url: scraped.floorplanUrl, title: "間取り図", desc: "", kind: "floorplan" });
-      // ★ 写真分析の対象にも間取り図を追加（先頭）
       rooms = [{ url: suumoResizeWidth(scraped.floorplanUrl, 500), title: "間取り図", desc: "間取り図" }, ...rooms];
     }
 
     // room 側の URL も統一
     rooms = rooms.map(o => ({ ...o, url: suumoResizeWidth(o.url, 500) }));
+
+    // ★ 追加：Type-Sでも重複整理したい場合（任意）
+    rooms = buildImageQueue_TypeR(rooms);
+
     imgsMeta.push(...rooms.map(o => ({ ...o, kind: "room" })));
 
     if (!imgsMeta.length) { await saveExportJson(); return; }
@@ -864,10 +913,14 @@ document.addEventListener("DOMContentLoaded", async () => {
   // 決定（起動）
   btn.addEventListener("click", async () => {
     clientId = sanitizeCL(clIn.value);
-   const cfg = resolveClientConfig(clientId);
-   if (!cfg) { alert("このCL IDは登録がありません。CatalogのCL（例：B001）を指定してください。"); return; }
-    const behavior = (cfg.behavior || "").toString().toUpperCase();
+    const cfg = resolveClientConfig(clientId);
     const bkId = sanitizeBK(bkIn.value);
+    postLog("start", "dialog confirmed", { behavior: (cfg?.behavior || ""), bk: bkId || null });
+
+    if (!cfg) { alert("このCL IDは登録がありません。CatalogのCL（例：B001）を指定してください。"); return; }
+  
+    const behavior = (cfg.behavior || "").toString().toUpperCase();
+    CURRENT_BEHAVIOR = behavior || "BASE";
 
     // 共通：sheetId セット（catalog＞default）
     sheetIdForGPT = (cfg.sheetId || DEFAULT_SHEET_ID).trim();
@@ -920,8 +973,10 @@ if (!behavior) {
 
 // ✅ TYPE-R：Rehouse API を呼び出す
 if (behavior === "TYPE-R") {
+   postLog("type-r.begin", "fetch property begin", { bk: propertyCode });
   try {
     const data = await fetchPropertyData(propertyCode);
+    postLog("type-r.fetch", data ? "ok" : "not-found", { hasData: !!data });
     if (data) {
       basePropertyData = data;
 
@@ -937,8 +992,11 @@ if (behavior === "TYPE-R") {
         guessFloorplanFromPropertyImages(data) ||
         guessFloorplanUrlFromProperty(data);
 
-     let roomImages = Array.isArray(data.propertyImages) ? data.propertyImages : [];
+      let roomImages = Array.isArray(data.propertyImages) ? data.propertyImages : [];
       if (fpUrl) roomImages = [{ url: fpUrl, title: "間取り図", desc: "間取り図" }, ...roomImages];
+
+      // ★ 追加：Type-R 先頭ダブり対策（先頭が間取りで後方に同一があるなら先頭を捨て、重複は後勝ち）
+      roomImages = buildImageQueue_TypeR(roomImages);
 
       if (fpUrl) {
         try {
@@ -981,12 +1039,14 @@ if (behavior === "TYPE-R") {
       }
     }
   } catch (e) {
+    postLog("type-r.fetch", "error", { message: String(e?.message || e) });
     console.warn("物件データ取得スキップ/失敗:", e);
   }
 }
 
 // ✅ TYPE-S：S-NETプレビューのDOMを読む
 if (behavior === "TYPE-S") {
+  postLog("type-s.begin", "scrape begin", { bk: propertyCode });
   await startTypeSFlow(propertyCode);
 }
 
@@ -1293,6 +1353,10 @@ async function handlePdfFile(file) {
       if (memoArea) { memoArea.value += `\n${summarized}`; autoGrow(memoArea); }
       latestPdfExtractedText = combinedOutput;
       await saveExportJson();
+      postLog("pdf", "summarized", {
+        hasText: !!extractedText,
+        hasImage: !!base64Image
+      });
 
       const pdfAnalysis = document.getElementById("pdf-analysis");
       const pdfToggle = document.getElementById("pdf-toggle");
@@ -1310,6 +1374,7 @@ async function handlePdfFile(file) {
  * 16) 間取り図解析（GPT）
  * ============================== */
 async function analyzeFloorplanWithGPT(base64Image, northVector) {
+  postLog("floorplan", "begin", { northVector });
   const previewText = document.getElementById("floorplan-preview-text");
   try {
     showLoadingSpinner("floorplan");
@@ -1343,7 +1408,9 @@ async function analyzeFloorplanWithGPT(base64Image, northVector) {
     document.getElementById("floorplan-analysis").style.display = "none";
     requestAnimationFrame(() => autoGrow(previewText));
     floorplanToggle.textContent = "▶ 分析結果を表示";
+    postLog("floorplan", "ok", { length: (comment || "").length });
   } catch (err) {
+    postLog("floorplan", "error", { message: String(err?.message || err) });
     console.error("❌ GPT呼び出しエラー:", err);
     floorplanAnalysisResult = "";
   } finally {
@@ -1373,6 +1440,10 @@ async function analyzeRoomPhotoWithGPT(
   isRetry = false,
   insertAfter = null
 ) {
+  postLog(isRetry ? "photo-regenerate" : "photo", "begin", {
+    src: imageSrc ? String(imageSrc).slice(0, 180) : "base64",
+    roomType, description
+  });
   const ta = document.getElementById("analysis-result");
   showLoadingSpinner("room");
   try {
@@ -1404,7 +1475,9 @@ async function analyzeRoomPhotoWithGPT(
     await addToHistory(imageSrc || base64Image, comment, roomType, description, insertAfter);
     hasRoomAnalysis = true;
     updateGenerateButtonLabel();
+    postLog(isRetry ? "photo-regenerate" : "photo", "ok", { length: (comment || "").length });
   } catch (err) {
+    postLog(isRetry ? "photo-regenerate" : "photo", "error", { message: String(err?.message || err) });
     console.error("❌ 画像コメント生成エラー:", err);
     if (!isRetry && ta) { ta.textContent = "解析に失敗しました。"; ta.style.display = "block"; }
   } finally {
@@ -1636,10 +1709,10 @@ async function onConfirmNorth() {
     confirmBtn.dataset.deferRoomImages = "";
   }
 
-  // 3) おすすめ → ポータル（空欄のみ）を自動生成
-  if (typeof runSuggestionAndPortals === "function") {
-    await runSuggestionAndPortals();
-  }
+// 3) おすすめ → ポータル（空欄のみ）を自動生成（★ BASE では自動生成しない）
+if (CURRENT_BEHAVIOR !== "BASE" && typeof runSuggestionAndPortals === "function") {
+  await runSuggestionAndPortals();
+}
 
   hideNorthSelector(); // ★ ここでも明示的に閉じる
   await saveExportJson();
@@ -1650,8 +1723,16 @@ async function onConfirmNorth() {
  * 21) GPT / Rehouse API / Save / 文字数など
  * ============================== */
 async function callGPT(body) {
-  // GPTProxy ラッパ（将来入替に備えて分離）
-  return analyzeWithGPT(body);
+  // ログ基盤と整合させるため spreadsheetId など識別情報を付帯
+  const payload = {
+    ...body,
+    spreadsheetId: LOG_SPREADSHEET_ID,
+    sheetIdForGPT: LOG_SPREADSHEET_ID,
+    clientId,
+    propertyCode,
+    userId,
+  };
+  return analyzeWithGPT(payload);
 }
 
 /* --- Rehouse 物件取得（作業前と同じ“直叩き”一本化） --- */
@@ -1885,7 +1966,9 @@ async function saveToSpreadsheet(payload) {
       body: JSON.stringify(body)
     });
     console.info("📤 Sheet save posted (no-cors).");
+    postLog("save", "posted", { roomComments: (payload?.roomComments || []).length });
   } catch (err) {
+    postLog("save", "error", { message: String(err?.message || err) });
     console.error("❌ sheet save failed", err);
   }
 }
@@ -1912,9 +1995,50 @@ function attachAutoSave(id) {
 }
 
 /* ==============================
+ * 21b) Logs 出力ユーティリティ
+ * ============================== */
+function postLog(purpose, detail = "", extra = {}) {
+  try {
+    const url =
+      (typeof GAS_LOG_ENDPOINT === "string" && GAS_LOG_ENDPOINT) ||
+      (GAS_LOG_ENDPOINT && GAS_LOG_ENDPOINT.url) ||
+      "";
+    if (!url || !/^https?:\/\//i.test(url)) {
+      console.info("ℹ️ GAS_LOG_ENDPOINT 未設定につきログ送信スキップ:", purpose, detail);
+      return;
+    }
+
+    const payload = {
+      purpose,                       // 例: 'start', 'type-r.fetch', 'photo', 'suggestion', etc.
+      detail,                        // 例: 'TYPE-R begin', 'scrape ok', 'field=suumo-comment'
+      timestamp: new Date().toISOString(),
+     // 識別情報（ログは常に Logs 用スプレッドシートへ）
+     sheetIdForGPT: LOG_SPREADSHEET_ID,
+     spreadsheetId: LOG_SPREADSHEET_ID,
+      clientId,
+      propertyCode,
+      userId,
+      // 任意の付加情報
+      extra
+    };
+
+    // プリフライト回避（no-cors / text/plain）
+    fetch(url, {
+      method: "POST",
+      mode: "no-cors",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify(payload)
+    }).catch(()=>{});
+  } catch (e) {
+    console.warn("log post skipped:", e?.message || e);
+  }
+}
+
+/* ==============================
  * 22) おすすめ生成 / 要約 / 元に戻す
  * ============================== */
 async function onGenerateSuggestions() {
+  postLog("suggestion", "begin");
   try {
     showLoadingSpinner("suggestion");
     const promptObj = await getPromptObj("suggestion", P.suggestion);
@@ -1945,7 +2069,9 @@ async function onGenerateSuggestions() {
     }
     await saveExportJson();
     updateResetSuggestionBtn?.();
+    postLog("suggestion", "ok", { length: (text || "").length });
   } catch (e) {
+    postLog("suggestion", "error", { message: String(e?.message || e) });
     console.error("おすすめ生成失敗", e);
     alert("おすすめポイントの生成に失敗しました。");
   } finally {
@@ -1994,6 +2120,7 @@ async function generatePortals({ force = false } = {}) {
       const text = res?.choices?.[0]?.message?.content?.trim() || "";
       if (text) {
         ta.value = text;
+        postLog("portal", "ok", { field: f.id, length: (text || "").length });
         // 文字数カウンタがあれば更新
         const counterId = {
           "suumo-catch": "suumo-catch-count",
@@ -2011,6 +2138,7 @@ async function generatePortals({ force = false } = {}) {
         }
       }
     } catch (e) {
+      postLog("portal", "error", { field: f.id, message: String(e?.message || e) });
       console.warn(`ポータル生成失敗 (${f.id})`, e);
     }
   }
@@ -2065,6 +2193,7 @@ function upgradeImageUrl(u) {
 
 /** 要約を再生成してメモ欄に反映する（SnapVoice準拠の安全版） */
 async function onRegenerateSummary() {
+  postLog("summary", "begin");
   try {
     // プロンプト取得（ローカル/Blob/デフォルトの順）
     const promptObj = await getPromptObj("summary", P.summary);
@@ -2111,7 +2240,9 @@ async function onRegenerateSummary() {
     }
 
     await saveExportJson();
+    postLog("summary", "ok", { length: (text || "").length });
   } catch (e) {
+    postLog("summary", "error", { message: String(e?.message || e) });
     console.error("onRegenerateSummary 失敗:", e);
     alert("要約の生成に失敗しました。ネットワーク状況等をご確認ください。");
   }

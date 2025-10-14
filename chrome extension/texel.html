@@ -162,25 +162,50 @@
       textarea.auto-grow { overflow: hidden; resize: none; min-height: 120px; line-height: 1.4em; }
       .flash { animation: flash-bg 0.8s ease-out; }
       @keyframes flash-bg { 0% { background: rgba(20, 184, 166, .15); } 100% { background: transparent; } }
+
+      /* ===== Gate overlay ===== */
+      #gate-overlay {
+        position: fixed; inset: 0; background: rgba(247,250,249,0.95);
+        display: flex; align-items: center; justify-content: center; z-index: 10000;
+      }
+      #gate-card {
+        background: #fff; border: 1px solid var(--tx-border); border-radius: 12px;
+        padding: 18px; width: min(92vw, 420px); box-shadow: 0 10px 30px rgba(0,0,0,.08);
+        text-align: center;
+      }
+      #gate-card h3 { margin: 0 0 6px; }
+      #gate-retry { margin-top: 8px; }
+      #gate-progress { margin: 10px auto; border: 4px solid #eef4f2; border-top: 4px solid var(--tx-primary); border-radius: 50%; width: 22px; height: 22px; animation: spin 1s linear infinite; }
+      #signed-user { font-weight: 600; }
     </style>
   </head>
   <body>
-    <div id="code-banner">Texel</div>
+    <div id="code-banner">Texel <span id="banner-user" style="opacity:.9;font-weight:600;"></span></div>
+
+    <!-- ★ Gate Overlay（会社アカウント未確認時は表示） -->
+    <div id="gate-overlay" aria-hidden="true">
+      <div id="gate-card">
+        <h3>会社アカウントを確認しています…</h3>
+        <div id="gate-progress"></div>
+        <div id="gate-msg" style="color:#555;font-size:13px;">Google サインイン状態のチェック中</div>
+        <button id="gate-retry" class="copy-button" style="display:none;">会社アカウントでサインイン</button>
+      </div>
+    </div>
 
     <!-- ★ 新仕様：CL/BKモーダル（Texel.jsのIDと一致） -->
-<div id="property-code-modal" style="position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.6); display:flex; align-items:center; justify-content:center; z-index:9999;">
-  <div style="background:#fff; padding:20px; border-radius:10px; width:320px; text-align:center; box-shadow:0 10px 30px rgba(0,0,0,.15);">
-    <h3 id="modal-title" style="margin:0 0 8px;">CL ID と BK ID を入力してください</h3>
-    <div id="modal-subtitle" style="font-size:12px; color:#666; margin-bottom:6px;">CL ID は必須です。</div>
-    <!-- CL（必須） -->
-    <input type="text" id="client-code-input" placeholder="例：S001 / R001（4桁英数字）" class="modal-input" />
-    <!-- BK（挙動により出し入れ） -->
-    <div id="bk-wrapper" style="display:none;">
-      <input type="text" id="bk-id-input" placeholder="BK ID（必要なときのみ）" class="modal-input" />
+    <div id="property-code-modal" style="position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.6); display:flex; align-items:center; justify-content:center; z-index:9999;">
+      <div style="background:#fff; padding:20px; border-radius:10px; width:320px; text-align:center; box-shadow:0 10px 30px rgba(0,0,0,.15);">
+        <h3 id="modal-title" style="margin:0 0 8px;">CL ID と BK ID を入力してください</h3>
+        <div id="modal-subtitle" style="font-size:12px; color:#666; margin-bottom:6px;">CL ID は必須です。</div>
+        <!-- CL（必須） -->
+        <input type="text" id="client-code-input" placeholder="例：S001 / R001（4桁英数字）" class="modal-input" />
+        <!-- BK（挙動により出し入れ） -->
+        <div id="bk-wrapper" style="display:none;">
+          <input type="text" id="bk-id-input" placeholder="BK ID（必要なときのみ）" class="modal-input" />
+        </div>
+        <button id="start-button" disabled style="padding:8px 16px; background:var(--tx-primary); color:#fff; border:none; border-radius:8px;">決定</button>
+      </div>
     </div>
-    <button id="start-button" disabled style="padding:8px 16px; background:var(--tx-primary); color:#fff; border:none; border-radius:8px;">決定</button>
-  </div>
-</div>
 
     <!-- PDF 情報セクション -->
     <section id="pdf-section" class="disabled">
@@ -330,6 +355,10 @@
 
     <div id="loadingSpinner" class="spinner" style="display: none;"></div>
 
+    <!-- ===== Gate (会社ドメインチェック) 先行実行 ===== -->
+    <script src="texel-gate.js"></script>
+
+    <!-- Texel本体（Gate後もそのまま動作します） -->
     <script type="module" src="texel.js"></script>
 
     <!-- 画像ポップアップ用 -->
