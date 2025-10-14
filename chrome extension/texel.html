@@ -167,29 +167,26 @@
   <body>
     <div id="code-banner">Texel</div>
 
-    <!-- CL/BK 入力モーダル（MV3：インラインJSなし） -->
-    <div id="property-code-modal" style="position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.6); display:flex; align-items:center; justify-content:center; z-index:9999;">
-      <div style="background:#fff; padding:20px; border-radius:10px; width:320px; text-align:center; box-shadow: 0 10px 30px rgba(0,0,0,.15);">
-        <h3 id="modal-title" style="margin:0 0 8px;">CL IDとBK IDを入力してください</h3>
-
-        <!-- 新: CL / BK 入力 -->
-        <input type="text" id="cl-id-input" placeholder="B001 / R999 / S001 / M001" class="modal-input" />
-        <input type="text" id="bk-id-input" placeholder="FXXXXXXX（例：F1234567）" class="modal-input" />
-
-        <!-- 互換: 既存JSが参照する旧IDへ値ミラー（hidden） -->
-        <input type="hidden" id="property-code-input" />
-        <input type="hidden" id="spreadsheet-id-input" />
-
-        <button id="property-code-submit" disabled style="padding:8px 16px; background:var(--tx-primary); color:#fff; border:none; border-radius:8px;">決定</button>
-        <p id="modal-error" style="color:#ef4444; font-size:12px; margin:6px 0 0; display:none;"></p>
-      </div>
+    <!-- ★ 新仕様：CL/BKモーダル（Texel.jsのIDと一致） -->
+<div id="property-code-modal" style="position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.6); display:flex; align-items:center; justify-content:center; z-index:9999;">
+  <div style="background:#fff; padding:20px; border-radius:10px; width:320px; text-align:center; box-shadow:0 10px 30px rgba(0,0,0,.15);">
+    <h3 id="modal-title" style="margin:0 0 8px;">CL ID と BK ID を入力してください</h3>
+    <div id="modal-subtitle" style="font-size:12px; color:#666; margin-bottom:6px;">CL ID は必須です。</div>
+    <!-- CL（必須） -->
+    <input type="text" id="client-code-input" placeholder="例：S001 / R001（4桁英数字）" class="modal-input" />
+    <!-- BK（挙動により出し入れ） -->
+    <div id="bk-wrapper" style="display:none;">
+      <input type="text" id="bk-id-input" placeholder="BK ID（必要なときのみ）" class="modal-input" />
     </div>
+    <button id="start-button" disabled style="padding:8px 16px; background:var(--tx-primary); color:#fff; border:none; border-radius:8px;">決定</button>
+  </div>
+</div>
 
     <!-- PDF 情報セクション -->
     <section id="pdf-section" class="disabled">
       <h2>
         📝 PDFから物件情報を抽出
-        <!-- Texel専用キー（※クライアントカタログ用リンクは作りません） -->
+        <!-- Texel専用キー -->
         <a href="#" class="prompt-config-link" data-type="texel-pdf-image" title="プロンプト編集">⚙</a>
       </h2>
       <div id="pdf-drop" class="drop-zone">ここにPDFをドラッグ＆ドロップ</div>
@@ -218,7 +215,8 @@
       <input type="file" id="floorplan-file" accept="image/*" />
       <img id="floorplan-preview" style="display: none; width: 100%; max-height: 240px; object-fit: contain; margin-top: 8px;" />
 
-      <div id="north-vector-dropdown" style="display: none; border: 2px solid var(--tx-danger); border-radius: 10px; margin: 8px 0; padding: 8px;">
+      <!-- ★ IDを Texel.js に合わせて northSelectorWrap に -->
+      <div id="northSelectorWrap" style="display: none; border: 2px solid var(--tx-danger); border-radius: 10px; margin: 8px 0; padding: 8px;">
         <label for="northVectorSelect" style="font-size: 13px;">北の方向：</label>
         <select id="northVectorSelect" style="font-size: 13px;">
           <option value="">-- 選択 --</option>
