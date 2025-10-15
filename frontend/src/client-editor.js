@@ -1,7 +1,7 @@
-// ======================= 設定 =======================
+// ======================= 固定設定（ローカル保存なし） =======================
 const DEV_API_BASE  = "https://func-texel-api-dev-jpe-001-b2f6fec8fzcbdrc3.japaneast-01.azurewebsites.net/api/";
 const PROD_API_BASE = "https://func-texel-api-prod-jpe-001-dsgfhtafbfbxawdz.japaneast-01.azurewebsites.net/api/";
-const CATALOG_FILE  = "texel-client-catalog.json";  // BLOB のマスター名
+const CATALOG_FILE  = "texel-client-catalog.json";  // BLOB にのみ存在するマスター
 
 // ===================== DOM 参照 ======================
 const $ = (id)=>document.getElementById(id);
@@ -11,9 +11,8 @@ const versionSpan = $("version");
 const updatedAtSpan = $("updatedAt");
 const countSpan = $("count");
 
-// 状態
+// 状態（ETag はあれば表示のみ）
 let currentEtag = "";
-let currentData = { version:1, updatedAt:"", clients:[] };
 
 // ============== ユーティリティ ==============
 function getApiBase(){
@@ -22,11 +21,6 @@ function getApiBase(){
   return v;
 }
 function setStatus(text){ $("status").textContent = text || ""; }
-function behaviorValueToLabel(v){
-  if (v === "R") return "TYPE-R";
-  if (v === "S") return "TYPE-S";
-  return "BASE";
-}
 function behaviorLabelToValue(label){
   const t = (label || "").toUpperCase();
   if (t.includes("TYPE-R") || t === "R") return "R";
@@ -40,14 +34,12 @@ function extractSheetId(input){
   if (m) return m[1];
   const m2 = v.match(/[?&]id=([a-zA-Z0-9-_]{10,})/);
   if (m2) return m2[1];
-  return /^[a-zA-Z0-9-_]{10,}$/.test(v) ? v : v; // 保存時に ID 正規化
+  return /^[a-zA-Z0-9-_]{10,}$/.test(v) ? v : v;
 }
 function todayStr(){
   const d=new Date();
   return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
 }
-function saveLocal(key,val){ try{ localStorage.setItem(key,val);}catch{} }
-function loadLocal(key,def=""){ try{ return localStorage.getItem(key) ?? def; }catch{ return def; } }
 
 // ============== 行追加 / 複製 / 削除 ==============
 function addRow(item={}){
@@ -66,24 +58,19 @@ function addRow(item={}){
 
   tr.querySelector(".delBtn").addEventListener("click", ()=>{ tr.remove(); updateCounter(); highlightDuplicates(); });
   tr.querySelector(".dupBtn").addEventListener("click", ()=>{
-    const clone = {
-      ...itemFromRow(tr),
-      code: issueNewClientCode(itemFromRow(tr).code)
-    };
+    const src = itemFromRow(tr);
+    const clone = { ...src, code: issueNewClientCode(src.code), createdAt: todayStr() };
     addRow(clone);
     updateCounter();
-    highlightDuplicates(); // 念のため
+    highlightDuplicates();
   });
 
-  // 入力イベントで重複チェック
   tr.querySelectorAll("input,select").forEach(el=>{
     el.addEventListener("input", ()=>{ highlightDuplicates(); });
   });
 
   gridBody.appendChild(tr);
 }
-
-// 現行行からオブジェクト化
 function itemFromRow(tr){
   return {
     code: tr.querySelector(".code").value.trim().toUpperCase(),
@@ -93,25 +80,21 @@ function itemFromRow(tr){
     createdAt: tr.querySelector(".created").value.trim()
   };
 }
-
-// 新たなクライアントコードを発番（複製時）
 function issueNewClientCode(base="B001"){
   const used = new Set([...gridBody.querySelectorAll(".code")].map(i => i.value.trim().toUpperCase()).filter(Boolean));
   const head = /^[A-Z]/.test(base) ? base[0] : "B";
-  // 末尾の数字を拾って+1、重複する限り進める
   let n = Number((base.match(/(\d{1,3})$/)||[,"0"])[1]);
   for (let step=0; step<2000; step++){
     n++;
     const code = `${head}${String(n).padStart(3,"0")}`;
     if (!used.has(code)) return code;
   }
-  // フォールバック：乱数
   const rand = ()=> "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"[Math.floor(Math.random()*36)];
   for (let k=0;k<1000;k++){
     const c = head + rand()+rand()+rand();
     if (!used.has(c)) return c;
   }
-  return `${head}${crypto.getRandomValues(new Uint32Array(1))[0]%900+100}`;
+  return `${head}${Math.floor(Math.random()*900+100)}`;
 }
 
 // ============== 重複チェック ==============
@@ -144,7 +127,6 @@ function updateCounter(){
 
 // ============== JSON ⇄ Grid ==============
 function fillGrid(json){
-  currentData = json || { version:1, updatedAt:"", clients:[] };
   gridBody.innerHTML = "";
   const list = Array.isArray(json?.clients) ? json.clients : [];
   list.forEach(addRow);
@@ -153,7 +135,6 @@ function fillGrid(json){
   setStatus("読込完了");
   highlightDuplicates();
 }
-
 function gridToJson(){
   const today = todayStr();
   const rows = [...gridBody.querySelectorAll("tr")];
@@ -179,18 +160,16 @@ function gridToJson(){
   };
 }
 
-// ============== API 呼び出し ==============
+// ============== API 呼び出し（BLOBのみ） ==============
 async function apiPing(){
   try{
-    // Load 側に filename を付けて 200/404 を見る
     const url = `${getApiBase()}LoadClientCatalog?filename=${encodeURIComponent(CATALOG_FILE)}`;
     const res = await fetch(url, { method:"GET", cache:"no-cache" });
     $("pingState").textContent = res.ok ? "OK" : `NG ${res.status}`;
-  }catch(e){
+  }catch{
     $("pingState").textContent = "NG";
   }
 }
-
 async function apiLoad(){
   setStatus("読込中…");
   $("alert").hidden = true;
@@ -198,12 +177,7 @@ async function apiLoad(){
     const url = `${getApiBase()}LoadClientCatalog?filename=${encodeURIComponent(CATALOG_FILE)}`;
     const res = await fetch(url, { method:"GET", cache:"no-cache" });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const json = await res.json();
-    // 旧形式（{prompt:{version,clients…}}）にも耐性
-    const payload = Array.isArray(json?.clients) ? json
-                  : Array.isArray(json?.prompt?.clients) ? json.prompt
-                  : json;
-    // ETag 表示
+    const payload = await res.json();
     currentEtag = res.headers.get("ETag") || "";
     $("etagBadge").textContent = currentEtag ? `ETag ${currentEtag}` : "";
     fillGrid(payload);
@@ -213,12 +187,11 @@ async function apiLoad(){
     setStatus("読込失敗");
   }
 }
-
 async function apiSave(){
-  // 1) バリデーション
-  const empties = [...gridBody.querySelectorAll(".code")].filter(i => !i.value.trim());
-  if (empties.length){
-    empties.forEach(i => i.classList.add("error"));
+  // バリデーション
+  const emptyCodes = [...gridBody.querySelectorAll(".code")].filter(i => !i.value.trim());
+  if (emptyCodes.length){
+    emptyCodes.forEach(i => i.classList.add("error"));
     alert("コードが空の行があります。入力してください。");
     return;
   }
@@ -227,73 +200,38 @@ async function apiSave(){
     return;
   }
 
-  // 2) 本体データ
-  const payload = gridToJson();
-  const url = `${getApiBase()}SaveClientCatalog`;
-  setStatus("保存中…");
-
-  // 共通送信ヘルパ
-  const post = async (body, headers) => {
-    const res = await fetch(url, { method:"POST", headers, body });
-    const text = await res.text().catch(()=> "");
-    let json = null; try{ json = JSON.parse(text); }catch{}
-    return { ok: res.ok, status: res.status, text, json, headers: res.headers };
+  const body = {
+    filename: CATALOG_FILE,
+    json: gridToJson()
   };
 
-  // 3) フォールバック順序
-  // A) 想定実装: { filename, json }
-  const variantA = await post(
-    JSON.stringify({ filename: CATALOG_FILE, json: payload }),
-    { "Content-Type":"application/json" }
-  );
-  if (variantA.ok){
-    currentEtag = (variantA.json?.etag) || currentEtag || "";
-    $("etagBadge").textContent = currentEtag ? `ETag ${currentEtag}` : "";
-    setStatus("保存しました");
-    return;
-  }
+  setStatus("保存中…");
+  $("alert").hidden = true;
 
-  // B) SavePromptText 互換: { filename, prompt: <obj>, params:{} }
-  const variantB = await post(
-    JSON.stringify({ filename: CATALOG_FILE, prompt: payload, params: {} }),
-    { "Content-Type":"application/json" }
-  );
-  if (variantB.ok){
-    currentEtag = (variantB.json?.etag) || currentEtag || "";
-    $("etagBadge").textContent = currentEtag ? `ETag ${currentEtag}` : "";
-    setStatus("保存しました");
-    return;
-  }
-
-  // C) 本体を文字列化して送る
-  const variantC = await post(
-    JSON.stringify({ filename: CATALOG_FILE, prompt: JSON.stringify(payload), params: {} }),
-    { "Content-Type":"application/json" }
-  );
-  if (variantC.ok){
-    currentEtag = (variantC.json?.etag) || currentEtag || "";
-    $("etagBadge").textContent = currentEtag ? `ETag ${currentEtag}` : "";
-    setStatus("保存しました");
-    return;
-  }
-
-  // D) no-cors（最終手段）
   try{
-    await fetch(url, {
-      method: "POST",
-      mode: "no-cors",
-      headers: { "Content-Type":"text/plain;charset=utf-8" },
-      body: JSON.stringify({ filename: CATALOG_FILE, prompt: payload, params:{} })
+    const url = `${getApiBase()}SaveClientCatalog`;
+    const res = await fetch(url, {
+      method:"POST",
+      headers:{ "Content-Type":"application/json" },
+      body: JSON.stringify(body)
     });
-    setStatus("保存（no-cors）送信");
+    const text = await res.text().catch(()=> "");
+    let json = null; try{ json = JSON.parse(text); }catch{}
+    if (!res.ok) {
+      const msg = json?.error || text || `HTTP ${res.status}`;
+      throw new Error(msg);
+    }
+    currentEtag = (json?.etag) || currentEtag || "";
+    $("etagBadge").textContent = currentEtag ? `ETag ${currentEtag}` : "";
+    setStatus("保存しました");
   }catch(e){
-    console.error("Save failed:", { A:variantA, B:variantB, C:variantC }, e);
+    $("alert").hidden = false;
+    $("alert").textContent = `保存に失敗しました: ${e.message || e}`;
     setStatus("保存失敗");
-    alert(`保存に失敗しました。\nA:${variantA.status} B:${variantB.status} C:${variantC.status}`);
   }
 }
 
-// ============== JSON 出入 ==============
+// ============== JSON 出入（手動ユーティリティ） ==============
 function exportJson(){
   const blob = new Blob([JSON.stringify(gridToJson(), null, 2)], { type:"application/json" });
   const a = document.createElement("a");
@@ -308,7 +246,7 @@ function importJson(file){
     try{
       const json = JSON.parse(r.result);
       fillGrid(json);
-    }catch(e){
+    }catch{
       alert("JSONの読み込みに失敗しました。");
     }
   };
@@ -319,13 +257,11 @@ function importJson(file){
 function bindHeader(){
   $("devPreset").addEventListener("click", ()=>{
     $("apiBase").value = DEV_API_BASE;
-    saveLocal("cc.apiBase", DEV_API_BASE);
     updatePresetButtons();
     apiLoad();
   });
   $("prodPreset").addEventListener("click", ()=>{
     $("apiBase").value = PROD_API_BASE;
-    saveLocal("cc.apiBase", PROD_API_BASE);
     updatePresetButtons();
     apiLoad();
   });
@@ -335,9 +271,7 @@ function bindHeader(){
   $("addRowBtn").addEventListener("click", ()=>{ addRow({ createdAt: todayStr() }); updateCounter(); });
   $("exportBtn").addEventListener("click", exportJson);
   $("importFile").addEventListener("change", (e)=>{ if (e.target.files?.[0]) importJson(e.target.files[0]); });
-  $("apiBase").addEventListener("change", ()=>{ saveLocal("cc.apiBase", $("apiBase").value.trim()); updatePresetButtons(); });
 }
-
 function updatePresetButtons(){
   const v = $("apiBase").value.trim().replace(/\/?$/,"/");
   $("devPreset").classList.toggle("active", v === DEV_API_BASE);
@@ -347,12 +281,9 @@ function updatePresetButtons(){
 // ============== 初期化 ==============
 document.addEventListener("DOMContentLoaded", ()=>{
   bindHeader();
-
-  // API Base 初期値（保存済み or DEV）
-  const saved = loadLocal("cc.apiBase", DEV_API_BASE);
-  $("apiBase").value = saved;
+  // 既定は DEV
+  $("apiBase").value = DEV_API_BASE;
   updatePresetButtons();
-
-  // 起動時に自動ロード（ファイルは BLOB にしかない前提）
+  // 起動時に自動読込（BLOB マスターのみ）
   apiLoad();
 });
