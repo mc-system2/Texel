@@ -1,17 +1,19 @@
 :root{
   --bg:#0f172a; --fg:#e2e8f0; --muted:#94a3b8; --card:#111827; --line:#1f2937;
-  --accent:#22c55e; --danger:#ef4444; --ghost:#334155;
+  --accent:#22c55e; --danger:#ef4444; --ghost:#334155; --warn:#fde68a;
 }
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.6 ui-sans-serif,system-ui,Segoe UI,Roboto,Helvetica,Arial}
 .header{position:sticky;top:0;background:linear-gradient(180deg,rgba(15,23,42,.98),rgba(15,23,42,.92));backdrop-filter:blur(6px);padding:14px 16px;border-bottom:1px solid var(--line);z-index:5}
 .row{display:flex;gap:8px;align-items:center;margin:4px 0}
 .row.gap{gap:10px}
+.env{display:flex;gap:6px;margin-right:8px}
 .label{opacity:.9}
-.input{min-width:480px;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:#0b1220;color:var(--fg)}
+.input{min-width:520px;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:#0b1220;color:var(--fg)}
 .meta{display:flex;gap:16px;margin-top:6px;color:var(--muted)}
 .badge{margin-left:8px;padding:2px 8px;border-radius:10px;background:#0b1220;border:1px solid var(--line);color:var(--muted)}
 .muted{color:var(--muted)}
+.alert{margin-top:10px;padding:10px 12px;border-radius:8px;background:#452b05;color:#fff;border:1px solid #7c4a03}
 .btn{padding:8px 12px;border:1px solid var(--line);background:#0b1220;color:var(--fg);border-radius:8px;cursor:pointer}
 .btn:hover{filter:brightness(1.1)}
 .btn.primary{background:var(--accent);border-color:transparent;color:#04210f}

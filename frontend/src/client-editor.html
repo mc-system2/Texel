@@ -9,8 +9,12 @@
 <body>
   <header class="header">
     <div class="row">
+      <div class="env">
+        <button id="devPreset" class="btn ghost">DEV</button>
+        <button id="prodPreset" class="btn ghost">PROD</button>
+      </div>
       <label class="label">API Base</label>
-      <input id="apiBase" class="input" placeholder="https://<func>.azurewebsites.net/api" />
+      <input id="apiBase" class="input" placeholder="https://…/api" />
       <button id="pingBtn" class="btn ghost">疎通</button>
       <span id="pingState" class="muted"></span>
     </div>
@@ -30,6 +34,7 @@
       <span>updatedAt: <span id="updatedAt">-</span></span>
       <span>件数: <span id="count">0</span></span>
     </div>
+    <div id="alert" class="alert" hidden></div>
   </header>
 
   <main>
