@@ -200,14 +200,6 @@ els.load.addEventListener("click", loadCatalog);
 els.save.addEventListener("click", saveCatalog);
 els.addRow.addEventListener("click", addRow);
 
-els.pingBtn.addEventListener("click", async ()=>{
-  els.pingState.textContent = "…";
-  try{
-    const res = await fetch(join(els.apiBase.value, "ping"), { cache:"no-cache" }).catch(()=>null);
-    els.pingState.textContent = res && res.ok ? "OK" : "NG";
-  }catch{ els.pingState.textContent = "NG"; }
-});
-
 /* ---------- utilities ---------- */
 function join(base, path){
   return (base||"").replace(/\/+$/,"") + "/" + String(path||"").replace(/^\/+/,"");
