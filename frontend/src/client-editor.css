@@ -13,8 +13,22 @@ body{margin:0;background:var(--bg);color:var(--text);
 .header{position:sticky;top:0;background:var(--panel);padding:12px 14px;border-bottom:1px solid var(--border);box-shadow:var(--shadow);z-index:10}
 .row{display:flex;align-items:center;gap:8px;margin:6px 0}
 .row.gap{gap:10px}
-.env .btn{min-width:56px}
-
+.env .btn{
+  opacity:.75;
+  border-color:var(--border);
+  background:#fff;
+  color:#2a4039;
+}
+.env .btn.is-active{
+  opacity:1;
+  background:var(--primary);
+  color:#fff;
+  border-color:transparent;
+  box-shadow:0 0 0 2px rgba(43,182,115,.15) inset;
+}
+.env .btn:is(:hover,:focus-visible){
+  opacity:1;
+}
 /* ===== 入力／ラベル ===== */
 .input{
   height:36px;padding:0 10px;border:1px solid var(--border);border-radius:8px;background:#fff;min-width:420px
