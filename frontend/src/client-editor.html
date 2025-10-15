@@ -4,34 +4,31 @@
   <meta charset="utf-8" />
   <title>Client Catalog Editor</title>
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <meta name="theme-color" content="#bde4c8" />
   <link rel="stylesheet" href="./client-editor.css" />
 </head>
 <body>
   <header class="header">
     <div class="row">
       <div class="env">
-        <button id="devPreset" class="btn ghost" title="開発APIに切替">DEV</button>
-        <button id="prodPreset" class="btn ghost" title="本番APIに切替">PROD</button>
+        <button id="devPreset" class="btn ghost">DEV</button>
+        <button id="prodPreset" class="btn ghost">PROD</button>
       </div>
-      <label class="label" for="apiBase">API Base</label>
-      <input id="apiBase" class="input" placeholder="https://…/api" autocomplete="off" />
-      <button id="pingBtn" class="btn ghost" title="ヘルスチェック">疎通</button>
-      <span id="pingState" class="muted" aria-live="polite"></span>
+      <label class="label">API Base</label>
+      <input id="apiBase" class="input" placeholder="https://…/api" />
+      <button id="pingBtn" class="btn ghost">疎通</button>
+      <span id="pingState" class="muted"></span>
     </div>
 
     <div class="row gap">
-      <button id="loadBtn" class="btn" title="BLOBから読み込み">読込</button>
-      <button id="saveBtn" class="btn primary" title="BLOBへ保存">保存</button>
-      <button id="addRowBtn" class="btn ghost" title="行を追加">行を追加</button>
-      <button id="exportBtn" class="btn ghost" title="JSONとしてダウンロード">JSON出力</button>
-
-      <label class="fileLabel btn ghost" for="importFile" title="JSONを取り込む">
+      <button id="loadBtn" class="btn">読込</button>
+      <button id="saveBtn" class="btn primary">保存</button>
+      <button id="addRowBtn" class="btn ghost">行を追加</button>
+      <button id="exportBtn" class="btn ghost">JSON出力</button>
+      <label class="fileLabel btn ghost">
         JSON取込<input id="importFile" type="file" accept="application/json" hidden />
       </label>
-
-      <span id="etagBadge" class="badge" title="ETag"></span>
-      <span id="status" class="muted" aria-live="polite"></span>
+      <span id="etagBadge" class="badge" title="If-Match ETag"></span>
+      <span id="status" class="muted"></span>
     </div>
 
     <div class="meta">
@@ -39,33 +36,40 @@
       <span>updatedAt: <span id="updatedAt">-</span></span>
       <span>件数: <span id="count">0</span></span>
     </div>
-
     <div id="alert" class="alert" hidden></div>
   </header>
 
   <main>
     <table id="grid" class="grid">
+      <!-- 列幅をガッチリ維持 -->
+      <colgroup>
+        <col style="width:180px" />   <!-- コード -->
+        <col />                       <!-- 名称 -->
+        <col style="width:120px" />   <!-- 挙動 -->
+        <col />                       <!-- Spreadsheet -->
+        <col style="width:140px" />   <!-- 作成日 -->
+        <col style="width:64px" />    <!-- 操作 -->
+      </colgroup>
       <thead>
         <tr>
-          <th style="width:120px">コード（4桁英数）</th>
+          <th>コード（4桁英数）</th>
           <th>名称</th>
-          <th style="width:90px">挙動</th>
+          <th>挙動</th>
           <th>Spreadsheet ID / URL</th>
-          <th style="width:140px">作成日</th>
-          <th style="width:64px">操作</th>
+          <th>作成日</th>
+          <th>操作</th>
         </tr>
       </thead>
       <tbody id="gridBody"></tbody>
     </table>
   </main>
 
-  <!-- 行テンプレート -->
   <template id="rowTmpl">
     <tr>
-      <td><input class="cell code" placeholder="B001" maxlength="4" pattern="[A-Za-z0-9]{4}" /></td>
+      <td><input class="cell code" placeholder="B001" /></td>
       <td><input class="cell name" placeholder="○○不動産" /></td>
       <td>
-        <select class="cell behavior" title="BASE=手動 / R=TYPE-R / S=TYPE-S">
+        <select class="cell behavior">
           <option value="">BASE</option>
           <option value="R">R</option>
           <option value="S">S</option>
@@ -74,7 +78,7 @@
       <td><input class="cell sheet" placeholder="Spreadsheet ID または URL" /></td>
       <td><input class="cell created" placeholder="YYYY-MM-DD" /></td>
       <td class="ops">
-        <button class="btn tiny danger delBtn">削除</button>
+        <button class="btn tiny danger delBtn" title="行を削除">削除</button>
       </td>
     </tr>
   </template>

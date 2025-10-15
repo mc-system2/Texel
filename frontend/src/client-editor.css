@@ -1,32 +1,114 @@
 :root{
-  --bg:#0f172a; --fg:#e2e8f0; --muted:#94a3b8; --card:#111827; --line:#1f2937;
-  --accent:#22c55e; --danger:#ef4444; --ghost:#334155; --warn:#fde68a;
+  --txl-bg:#f7fff9;           /* ほのかな薄緑 */
+  --txl-surface:#ffffff;
+  --txl-text:#172026;
+  --txl-muted:#5b6b73;
+  --txl-border:#dfeee4;
+  --txl-accent:#2fbf71;       /* Texel グリーン */
+  --txl-accent-weak:#baf2d4;
+  --txl-danger:#d93025;
+  --txl-shadow:0 2px 10px rgba(0,0,0,.05);
 }
-*{box-sizing:border-box}
-body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.6 ui-sans-serif,system-ui,Segoe UI,Roboto,Helvetica,Arial}
-.header{position:sticky;top:0;background:linear-gradient(180deg,rgba(15,23,42,.98),rgba(15,23,42,.92));backdrop-filter:blur(6px);padding:14px 16px;border-bottom:1px solid var(--line);z-index:5}
-.row{display:flex;gap:8px;align-items:center;margin:4px 0}
-.row.gap{gap:10px}
-.env{display:flex;gap:6px;margin-right:8px}
-.label{opacity:.9}
-.input{min-width:520px;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:#0b1220;color:var(--fg)}
-.meta{display:flex;gap:16px;margin-top:6px;color:var(--muted)}
-.badge{margin-left:8px;padding:2px 8px;border-radius:10px;background:#0b1220;border:1px solid var(--line);color:var(--muted)}
-.muted{color:var(--muted)}
-.alert{margin-top:10px;padding:10px 12px;border-radius:8px;background:#452b05;color:#fff;border:1px solid #7c4a03}
-.btn{padding:8px 12px;border:1px solid var(--line);background:#0b1220;color:var(--fg);border-radius:8px;cursor:pointer}
-.btn:hover{filter:brightness(1.1)}
-.btn.primary{background:var(--accent);border-color:transparent;color:#04210f}
-.btn.ghost{background:var(--ghost);border-color:transparent}
-.btn.tiny{padding:4px 8px;font-size:12px}
-.btn.danger{background:var(--danger);border-color:transparent}
-.fileLabel{display:inline-flex;align-items:center;gap:6px}
 
-main{padding:14px}
-.grid{width:100%;border-collapse:collapse;background:var(--card);border:1px solid var(--line);border-radius:10px;overflow:hidden}
-.grid th,.grid td{border-bottom:1px solid var(--line);padding:10px}
-.grid th{background:#0b1220;color:#cbd5e1;text-align:left;font-weight:600}
-.grid tbody tr:hover{background:#0b1322}
-.cell{width:100%;padding:8px;border:1px solid var(--line);border-radius:6px;background:#0b1220;color:var(--fg)}
-.cell:focus{outline:2px solid #2563eb33;border-color:#2563eb55}
-.ops{display:flex;align-items:center;gap:6px}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{
+  margin:0;
+  color:var(--txl-text);
+  background:var(--txl-bg);
+  font:14px/1.6 system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Noto Sans JP", "Hiragino Kaku Gothic ProN", Meiryo, sans-serif;
+}
+
+.header{
+  position:sticky; top:0; z-index:10;
+  background:var(--txl-surface);
+  box-shadow:var(--txl-shadow);
+  border-bottom:1px solid var(--txl-border);
+  padding:12px 16px;
+}
+
+.row{display:flex; align-items:center; gap:8px; flex-wrap:wrap;}
+.row.gap{margin-top:10px}
+.env{display:flex; gap:6px; margin-right:8px}
+.label{font-weight:600; margin-right:6px}
+.input{
+  min-width:420px; max-width:60vw;
+  padding:8px 10px; border:1px solid var(--txl-border);
+  border-radius:8px; background:#fff; outline:0;
+}
+.input:focus{border-color:var(--txl-accent); box-shadow:0 0 0 3px var(--txl-accent-weak)}
+
+.btn{
+  height:34px; padding:0 12px; border-radius:8px;
+  border:1px solid var(--txl-border); background:#fff; cursor:pointer;
+}
+.btn:hover{border-color:var(--txl-accent)}
+.btn.primary{
+  background:var(--txl-accent); border-color:var(--txl-accent); color:#fff;
+}
+.btn.primary:hover{filter:brightness(.95)}
+.btn.ghost{background:#fff}
+.btn.tiny{height:26px; padding:0 8px; font-size:12px; border-radius:6px}
+.btn.danger{border-color:#f3d0cc; color:var(--txl-danger); background:#fff}
+.btn.danger:hover{background:#fff3f2}
+
+.badge{
+  padding:4px 8px; border-radius:999px; border:1px solid var(--txl-border);
+  background:#fff; color:var(--txl-muted);
+}
+.muted{color:var(--txl-muted)}
+.meta{display:flex; gap:18px; margin-top:8px; color:var(--txl-muted); font-size:12px}
+.alert{margin-top:8px; padding:10px 12px; border-radius:8px; border:1px solid #ffe9a3; background:#fffdf3; color:#7a5d00}
+
+main{padding:18px}
+
+.grid{
+  width:100%;
+  border-collapse:collapse;
+  table-layout:auto;        /* ← セル幅が伸びる */
+  background:var(--txl-surface);
+  border:1px solid var(--txl-border);
+  border-radius:12px;
+  overflow:hidden;
+  box-shadow:var(--txl-shadow);
+}
+.grid thead th{
+  background:#f2fbf6;
+  color:#0f7c46;
+  text-align:left;
+  padding:10px 12px;
+  border-bottom:1px solid var(--txl-border);
+  font-weight:600;
+}
+.grid tbody td{
+  padding:10px 12px;
+  border-top:1px solid var(--txl-border);
+  vertical-align:middle;
+}
+
+.cell{
+  width:100%;
+  padding:8px 10px;
+  border:1px solid var(--txl-border);
+  border-radius:6px;
+  background:#fff;
+  outline:0;
+}
+.cell:focus{border-color:var(--txl-accent); box-shadow:0 0 0 3px var(--txl-accent-weak)}
+
+.cell.code{min-width:160px; width:180px; font-family:ui-monospace,SFMono-Regular,Consolas,Monaco,monospace}
+.cell.name{min-width:220px}
+select.cell.behavior{min-width:110px; width:120px; height:34px}
+.cell.sheet{min-width:340px}
+.cell.created{min-width:120px; width:140px}
+
+.ops{white-space:nowrap}
+
+/* スクロール時の行ホバー */
+.grid tbody tr:hover td{background:#fbfffd}
+
+/* モバイル簡易対応 */
+@media (max-width:900px){
+  .input{min-width:280px; max-width:100%}
+  .cell.sheet{min-width:200px}
+}
