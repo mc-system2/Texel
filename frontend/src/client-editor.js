@@ -1,316 +1,314 @@
 // client-editor.js
 (() => {
-  // === 固定 ===
-  const FILE = "texel-client-catalog.json";
-  const PRESETS = {
-    dev: "https://func-texel-api-dev-jpe-001-b2f6fec8fzcbdrc3.japaneast-01.azurewebsites.net/api",
-    prod:"https://func-texel-api-prod-jpe-001-dsgfhtafbfbxawdz.japaneast-01.azurewebsites.net/api"
+  const FILE = 'texel-client-catalog.json';
+
+  // ---- 環境プリセット（ご提供の URL） ----
+  const PRESET = {
+    dev: 'https://func-texel-api-dev-jpe-001-b2f6fec8fzcbdrc3.japaneast-01.azurewebsites.net/api',
+    prod:'https://func-texel-api-prod-jpe-001-dsgfhtafbfbxawdz.japaneast-01.azurewebsites.net/api'
   };
 
-  // === DOM ===
-  const apiBaseEl   = document.getElementById("apiBase");
-  const pingBtn     = document.getElementById("pingBtn");
-  const pingState   = document.getElementById("pingState");
-  const loadBtn     = document.getElementById("loadBtn");
-  const saveBtn     = document.getElementById("saveBtn");
-  const addRowBtn   = document.getElementById("addRowBtn");
-  const exportBtn   = document.getElementById("exportBtn");
-  const importFile  = document.getElementById("importFile");
-  const gridBody    = document.getElementById("gridBody");
-  const rowTmpl     = document.getElementById("rowTmpl");
-  const etagBadge   = document.getElementById("etagBadge");
-  const statusEl    = document.getElementById("status");
-  const versionEl   = document.getElementById("version");
-  const updatedAtEl = document.getElementById("updatedAt");
-  const countEl     = document.getElementById("count");
-  const alertEl     = document.getElementById("alert");
+  // ---- DOM ----
+  const apiBaseEl  = document.getElementById('apiBase');
+  const pingBtn    = document.getElementById('pingBtn');
+  const pingState  = document.getElementById('pingState');
+  const loadBtn    = document.getElementById('loadBtn');
+  const saveBtn    = document.getElementById('saveBtn');
+  const addRowBtn  = document.getElementById('addRowBtn');
+  const exportBtn  = document.getElementById('exportBtn');
+  const importFile = document.getElementById('importFile');
+  const gridBody   = document.getElementById('gridBody');
+  const rowTmpl    = document.getElementById('rowTmpl');
+  const statusEl   = document.getElementById('status');
+  const etagBadge  = document.getElementById('etagBadge');
+  const versionEl  = document.getElementById('version');
+  const updatedEl  = document.getElementById('updatedAt');
+  const countEl    = document.getElementById('count');
+  const alertEl    = document.getElementById('alert');
 
-  // === 状態（ローカル保存しない） ===
-  let currentETag = null;
-  let currentCatalog = { version: 1, updatedAt: "", clients: [] };
+  const devPresetBtn  = document.getElementById('devPreset');
+  const prodPresetBtn = document.getElementById('prodPreset');
 
-  // ====== Utils ======
-  const nowIso = () => new Date().toISOString();
-  const toast  = (msg, kind="info") => {
-    statusEl.textContent = msg;
-    statusEl.className = `muted ${kind}`;
-    setTimeout(()=>{ statusEl.textContent=""; }, 3000);
-  };
-  const showAlert = (msg) => {
-    alertEl.textContent = msg;
-    alertEl.hidden = false;
-    setTimeout(()=> alertEl.hidden = true, 4000);
-  };
+  // ---- 状態 ----
+  let currentETag = '';
+  let currentCatalog = { version: 1, updatedAt: '', clients: [] };
 
-  const extractSheetId = (input) => {
-    const v = (input||"").trim();
-    if (!v) return "";
-    const m = v.match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]{10,})/);
-    if (m) return m[1];
-    const m2 = v.match(/[?&]id=([a-zA-Z0-9-_]{10,})/);
-    if (m2) return m2[1];
-    return /^[a-zA-Z0-9-_]{10,}$/.test(v) ? v : v; // ID でも URL でも保存可（表示はそのまま）
-  };
-
+  // ---- API ラッパ ----
   const api = {
     load: async () => {
-      const base = apiBaseEl.value.trim().replace(/\/+$/,"");
+      const base = apiBaseEl.value.trim().replace(/\/+$/,'');
       const url = `${base}/LoadClientCatalog?filename=${encodeURIComponent(FILE)}`;
-      const res = await fetch(url, { method: "GET", cache: "no-cache" });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const etag = res.headers.get("etag") || null;
-      const json = await res.json();
-      currentETag = json?.etag || etag || null;
-      return json;
+      const res = await fetch(url, { method: 'GET', cache: 'no-cache' });
+      if (!res.ok) {
+        const t = await res.text().catch(()=> '');
+        throw new Error(`Load 失敗: HTTP ${res.status} ${t || ''}`);
+      }
+      currentETag = res.headers.get('ETag') || '';
+      etagBadge.textContent = currentETag || '';
+      const text = await res.text();
+      return text ? JSON.parse(text) : { version: 1, updatedAt: '', clients: [] };
     },
     save: async (catalog) => {
-      const base = apiBaseEl.value.trim().replace(/\/+$/,"");
+      const base = apiBaseEl.value.trim().replace(/\/+$/,'');
       const res  = await fetch(`${base}/SaveClientCatalog`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          filename: FILE,
-          etag: currentETag,   // 楽観ロック
-          catalog
-        })
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ filename: FILE, etag: currentETag, catalog })
       });
+
+      const text = await res.text().catch(()=> '');
       if (res.status === 409) {
-        const e = await res.json().catch(()=>({error:""}));
-        throw new Error(e.error || "ETag 競合。再読み込みしてください。");
+        let e = {};
+        try { e = JSON.parse(text || '{}'); } catch {}
+        throw new Error(e.error || 'ETag 競合。再読み込みしてください。');
       }
       if (!res.ok) {
-        const e = await res.json().catch(()=>({error:"保存エラー"}));
+        let e = {};
+        try { e = JSON.parse(text || '{}'); } catch {}
         throw new Error(e.error || `HTTP ${res.status}`);
       }
-      return await res.json();
+      const json = text ? JSON.parse(text) : { ok: true };
+      const newTag = res.headers.get('ETag') || json.etag || '';
+      if (newTag) {
+        currentETag = newTag;
+        etagBadge.textContent = currentETag;
+      }
+      return json;
     }
   };
 
-  // ====== UI構築 ======
-  function render(catalog) {
-    // ヘッダ
-    versionEl.textContent   = catalog.version ?? "-";
-    updatedAtEl.textContent = catalog.updatedAt ?? "-";
-    etagBadge.textContent   = currentETag ? `ETag: ${currentETag}` : "";
-    // テーブル
-    gridBody.innerHTML = "";
-    (catalog.clients || []).forEach(addRow);
-    countEl.textContent = String(catalog.clients?.length || 0);
-  }
-
-  function addRow(client) {
+  // ---- 行テンプレ作成 ----
+  function createRow(item = {}) {
     const tr = rowTmpl.content.firstElementChild.cloneNode(true);
+    const codeEl = tr.querySelector('.code');
+    const nameEl = tr.querySelector('.name');
+    const behaviorEl = tr.querySelector('.behavior');
+    const sheetEl = tr.querySelector('.sheet');
+    const createdEl = tr.querySelector('.created');
 
-    const codeEl     = tr.querySelector(".code");
-    const nameEl     = tr.querySelector(".name");
-    const behEl      = tr.querySelector(".behavior");
-    const sheetEl    = tr.querySelector(".sheet");
-    const createdEl  = tr.querySelector(".created");
-    const delBtn     = tr.querySelector(".delBtn");
+    codeEl.value = item.code || '';
+    nameEl.value = item.name || '';
+    behaviorEl.value = normalizeBehavior(item.behavior);
+    sheetEl.value = item.spreadsheetId || item.sheetId || '';
+    createdEl.value = item.createdAt || '';
 
-    codeEl.value    = client?.code || "";
-    nameEl.value    = client?.name || "";
-    // 表示は TYPE-R / TYPE-S、保存は "R"/"S"/""
-    const behVal = (client?.behavior || "").toUpperCase();
-    behEl.value  = behVal === "R" ? "R" : behVal === "S" ? "S" : "";
-    sheetEl.value   = client?.spreadsheetId || client?.sheetId || "";
-    createdEl.value = client?.createdAt || "";
-
-    // 行操作
-    delBtn.addEventListener("click", () => {
+    // 削除
+    tr.querySelector('.delBtn').addEventListener('click', () => {
       tr.remove();
-      updateCount();
+      syncMeta();
     });
 
-    // 変更時の軽いバリデーション
-    codeEl.addEventListener("input", () => codeEl.value = codeEl.value.toUpperCase());
-    gridBody.appendChild(tr);
+    return tr;
   }
 
-  function updateCount() {
-    countEl.textContent = String(gridBody.querySelectorAll("tr").length);
-  }
+  // ---- UI <-> カタログ 変換 ----
+  function uiToCatalog() {
+    const rows = [...gridBody.querySelectorAll('tr')];
+    const clients = rows.map(tr => {
+      const code = tr.querySelector('.code').value.trim().toUpperCase();
+      const name = tr.querySelector('.name').value.trim();
+      const behavior = normalizeBehavior(tr.querySelector('.behavior').value);
+      const sheet = extractSheetId(tr.querySelector('.sheet').value);
+      const createdAt = tr.querySelector('.created').value.trim();
+      return { code, name, behavior, spreadsheetId: sheet, createdAt };
+    }).filter(x => x.code);
 
-  // 重複チェック（保存直前）
-  function collectCatalogFromGrid() {
-    const rows = [...gridBody.querySelectorAll("tr")];
-    const clients = [];
-    const seen = new Set();
-    for (const tr of rows) {
-      const code = tr.querySelector(".code").value.trim().toUpperCase();
-      const name = tr.querySelector(".name").value.trim();
-      const beh  = tr.querySelector(".behavior").value.trim().toUpperCase(); // "" | R | S
-      const sheet= tr.querySelector(".sheet").value.trim();
-      const created = tr.querySelector(".created").value.trim();
-
-      if (!code) continue;
-
-      if (!/^[A-Z0-9]{4}$/.test(code)) {
-        throw new Error(`コード形式が不正です: ${code}`);
-      }
-      if (seen.has(code)) {
-        throw new Error(`クライアントコードが重複しています: ${code}`);
-      }
-      seen.add(code);
-
-      clients.push({
-        code,
-        name,
-        behavior: beh === "R" ? "R" : beh === "S" ? "S" : "",
-        spreadsheetId: extractSheetId(sheet),
-        createdAt: created || ""
-      });
+    // 重複コードチェック
+    const dup = findDuplicateCodes(clients.map(c => c.code));
+    if (dup.length) {
+      throw new Error(`クライアントコードが重複しています: ${dup.join(', ')}`);
     }
+
     return {
-      version: currentCatalog.version ?? 1,
-      updatedAt: nowIso(),
+      version: Number(currentCatalog.version) || 1,
+      updatedAt: new Date().toISOString(),
       clients
     };
   }
 
-  // 複製：新しいコードを自動発番（未使用の 1文字＋3桁）
-  function duplicateRow(tr) {
-    const code = nextClientCode();
-    const c = {
-      code,
-      name: tr.querySelector(".name").value,
-      behavior: tr.querySelector(".behavior").value,
-      spreadsheetId: tr.querySelector(".sheet").value,
-      createdAt: nowIso().slice(0,10)
-    };
-    addRow(c);
-    updateCount();
+  function catalogToUI(catalog) {
+    gridBody.innerHTML = '';
+    const list = Array.isArray(catalog.clients) ? catalog.clients : [];
+    list.forEach(c => gridBody.appendChild(createRow(c)));
+    versionEl.textContent = String(catalog.version ?? 1);
+    updatedEl.textContent = catalog.updatedAt || '-';
+    countEl.textContent = String(list.length);
   }
 
-  function nextClientCode() {
+  function syncMeta() {
+    countEl.textContent = String(gridBody.querySelectorAll('tr').length);
+  }
+
+  // ---- ユーティリティ ----
+  function normalizeBehavior(b) {
+    const v = String(b || '').toUpperCase();
+    if (v === 'R' || v === 'TYPE-R') return 'R';
+    if (v === 'S' || v === 'TYPE-S') return 'S';
+    return ''; // BASE
+  }
+  function extractSheetId(input) {
+    const v = (input || '').trim();
+    if (!v) return '';
+    const m = v.match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]{10,})/);
+    if (m) return m[1];
+    const m2 = v.match(/[?&]id=([a-zA-Z0-9-_]{10,})/);
+    if (m2) return m2[1];
+    return /^[a-zA-Z0-9-_]{10,}$/.test(v) ? v : v; // URL そのままでも許容（保存側ではそのまま保持）
+  }
+  function findDuplicateCodes(arr) {
+    const seen = new Set();
+    const dup = new Set();
+    for (const c of arr) {
+      if (seen.has(c)) dup.add(c);
+      seen.add(c);
+    }
+    return [...dup];
+  }
+
+  // 一意な 4桁英数コード（先頭アルファ + 3桁 base36）
+  function issueUniqueCode(prefix = 'B') {
     const used = new Set(
-      [...gridBody.querySelectorAll(".code")].map(i => i.value.trim().toUpperCase()).filter(Boolean)
+      [...gridBody.querySelectorAll('.code')].map(i => i.value.trim().toUpperCase())
     );
-    const letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
-    for (const L of letters) {
-      for (let n=1; n<=999; n++) {
-        const code = `${L}${String(n).padStart(3,"0")}`;
-        if (!used.has(code)) return code;
-      }
+    for (let i = 0; i < 10000; i++) {
+      const n = (Math.floor(Math.random() * 46656)).toString(36).toUpperCase().padStart(3, '0');
+      const code = `${prefix}${n}`.slice(0, 4);
+      if (!used.has(code)) return code;
     }
-    // 予備：完全ランダム
-    return Math.random().toString(36).slice(2,6).toUpperCase();
+    // フォールバック
+    return `${prefix}${Date.now().toString(36).toUpperCase().slice(-3)}`.slice(0, 4);
   }
 
-  // ====== イベント ======
-  document.getElementById("devPreset").addEventListener("click", () => {
-    apiBaseEl.value = PRESETS.dev;
-    localStorage.setItem("texel-client-editor-apiBase", PRESETS.dev);
-    loadBtn.click();
+  function showAlert(msg, kind = 'error') {
+    alertEl.hidden = false;
+    alertEl.textContent = msg;
+    alertEl.className = `alert ${kind}`;
+    setTimeout(() => { alertEl.hidden = true; }, 4000);
+  }
+
+  // ---- ボタン挙動 ----
+  devPresetBtn.addEventListener('click', () => {
+    apiBaseEl.value = PRESET.dev;
+    devPresetBtn.classList.add('active');
+    prodPresetBtn.classList.remove('active');
   });
-  document.getElementById("prodPreset").addEventListener("click", () => {
-    apiBaseEl.value = PRESETS.prod;
-    localStorage.setItem("texel-client-editor-apiBase", PRESETS.prod);
-    loadBtn.click();
+  prodPresetBtn.addEventListener('click', () => {
+    apiBaseEl.value = PRESET.prod;
+    prodPresetBtn.classList.add('active');
+    devPresetBtn.classList.remove('active');
   });
 
-  pingBtn.addEventListener("click", async () => {
+  pingBtn.addEventListener('click', async () => {
+    pingState.textContent = '確認中…';
     try {
-      await api.load(); // 実質疎通
-      pingState.textContent = "OK";
-      pingState.style.color = "#1a7f37";
+      const base = apiBaseEl.value.trim().replace(/\/+$/,'');
+      const url = `${base}/LoadClientCatalog?filename=${encodeURIComponent(FILE)}`;
+      const res = await fetch(url, { method:'HEAD' }).catch(()=>null);
+      pingState.textContent = res && (res.ok || res.status === 404) ? 'OK' : 'NG';
     } catch {
-      pingState.textContent = "NG";
-      pingState.style.color = "#b00020";
-    }
-    setTimeout(()=> pingState.textContent = "", 2000);
-  });
-
-  loadBtn.addEventListener("click", async () => {
-    try {
-      const data = await api.load();
-      // API は { etag?, version, updatedAt, clients } を返す想定
-      currentETag   = data?.etag || currentETag;
-      currentCatalog= { version: data.version ?? 1, updatedAt: data.updatedAt ?? "", clients: data.clients || [] };
-      render(currentCatalog);
-      toast("読み込み完了");
-    } catch (e) {
-      showAlert(`読込に失敗しました：${e.message}`);
+      pingState.textContent = 'NG';
     }
   });
 
-  saveBtn.addEventListener("click", async () => {
-    try {
-      const catalog = collectCatalogFromGrid();
-      // 画面反映だけ先に
-      currentCatalog = catalog;
-      updatedAtEl.textContent = catalog.updatedAt;
+  loadBtn.addEventListener('click', async () => {
+    await doLoad();
+  });
 
+  saveBtn.addEventListener('click', async () => {
+    try {
+      const catalog = uiToCatalog();
+      statusEl.textContent = '保存中…';
       const res = await api.save(catalog);
-      currentETag = res?.etag || currentETag;
-      etagBadge.textContent = currentETag ? `ETag: ${currentETag}` : "";
-      toast("保存しました", "ok");
+      currentCatalog = { ...catalog };
+      statusEl.textContent = '保存しました';
+      updatedEl.textContent = catalog.updatedAt || '-';
     } catch (e) {
-      showAlert(`保存に失敗しました：${e.message}`);
+      showAlert(`保存に失敗しました： ${e.message || e}`);
+      statusEl.textContent = '';
     }
   });
 
-  addRowBtn.addEventListener("click", () => {
-    addRow({ code: nextClientCode(), name:"", behavior:"", spreadsheetId:"", createdAt: nowIso().slice(0,10) });
-    updateCount();
+  addRowBtn.addEventListener('click', () => {
+    const tr = createRow({
+      code: issueUniqueCode(),
+      name: '',
+      behavior: '',
+      spreadsheetId: '',
+      createdAt: new Date().toISOString().slice(0,10)
+    });
+    gridBody.prepend(tr);
+    syncMeta();
   });
 
-  exportBtn.addEventListener("click", () => {
+  exportBtn.addEventListener('click', () => {
     try {
-      const catalog = collectCatalogFromGrid();
-      const blob = new Blob([JSON.stringify(catalog, null, 2)], { type:"application/json" });
-      const a = document.createElement("a");
+      const catalog = uiToCatalog();
+      const blob = new Blob([JSON.stringify(catalog, null, 2)], { type: 'application/json' });
+      const a = document.createElement('a');
       a.href = URL.createObjectURL(blob);
       a.download = FILE;
       a.click();
       URL.revokeObjectURL(a.href);
     } catch (e) {
-      showAlert(`JSON出力に失敗: ${e.message}`);
+      showAlert(`JSON出力に失敗： ${e.message || e}`);
     }
   });
 
-  importFile.addEventListener("change", async (e) => {
+  importFile.addEventListener('change', async (e) => {
     const f = e.target.files?.[0];
     if (!f) return;
     try {
       const text = await f.text();
       const json = JSON.parse(text);
-      currentCatalog = { version: json.version ?? 1, updatedAt: json.updatedAt ?? "", clients: json.clients || [] };
-      currentETag = null; // インポート後は必ず最新ロード→保存推奨
-      render(currentCatalog);
-      toast("JSONを読み込みました");
+      currentCatalog = json;
+      catalogToUI(json);
+      currentETag = ''; // 手取り込みは ETag 破棄（次保存で取得し直す）
+      etagBadge.textContent = '';
     } catch (err) {
-      showAlert("JSONの読み込みに失敗しました");
+      showAlert('JSONの読み込みに失敗しました');
     } finally {
-      e.target.value = "";
+      importFile.value = '';
     }
   });
 
-  // 行の「複製」ボタンを動的委譲（テンプレート変更に合わせる）
-  gridBody.addEventListener("click", (ev) => {
-    const btn = ev.target.closest(".dupBtn");
+  // ---- 行の複製（新しいコードを自動発番） ----
+  gridBody.addEventListener('click', (e) => {
+    const btn = e.target.closest('.btn.dupBtn');
     if (!btn) return;
-    const tr = btn.closest("tr");
-    if (tr) duplicateRow(tr);
+    const tr = btn.closest('tr');
+    if (!tr) return;
+
+    const item = {
+      code: issueUniqueCode(),
+      name: tr.querySelector('.name').value,
+      behavior: normalizeBehavior(tr.querySelector('.behavior').value),
+      spreadsheetId: tr.querySelector('.sheet').value,
+      createdAt: new Date().toISOString().slice(0,10)
+    };
+    const newRow = createRow(item);
+    tr.after(newRow);
+    syncMeta();
   });
 
-  // ===== 起動時 =====
-  document.addEventListener("DOMContentLoaded", async () => {
-    // API Base 初期値（前回の選択を復元）
-    apiBaseEl.value = localStorage.getItem("texel-client-editor-apiBase") || PRESETS.dev;
+  // ---- 初期化：色・プリセット・自動ロード ----
+  (function initOnce() {
+    // 初期色（薄緑系）は CSS 側で定義済み前提
+    apiBaseEl.value = PRESET.dev;
+    devPresetBtn.classList.add('active');
+    doLoad().catch(()=>{});
+  })();
 
-    // 画面を薄緑トーンへ：body にクラス付与（CSS側で反映済み）
-    document.body.classList.add("theme-texel-green");
-
-    // 起動時に即ロード
+  // ---- ロード共通処理 ----
+  async function doLoad() {
+    statusEl.textContent = '読込中…';
     try {
-      const data = await api.load();
-      currentETag   = data?.etag || null;
-      currentCatalog= { version: data.version ?? 1, updatedAt: data.updatedAt ?? "", clients: data.clients || [] };
-      render(currentCatalog);
-      toast("自動読み込み完了");
+      const json = await api.load();
+      currentCatalog = json;
+      catalogToUI(json);
+      statusEl.textContent = '読込完了';
     } catch (e) {
-      showAlert(`初期読込に失敗：${e.message}`);
+      showAlert(`読込に失敗しました： ${e.message || e}`);
+      statusEl.textContent = '';
     }
-  });
+  }
 })();

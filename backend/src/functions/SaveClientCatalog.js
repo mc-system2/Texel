@@ -2,70 +2,107 @@
 const { app } = require('@azure/functions');
 const { BlobServiceClient } = require('@azure/storage-blob');
 
-const connectionString = process.env["AzureWebJobsStorage"];
-const containerName = "prompts";
+const connectionString = process.env['AzureWebJobsStorage'];
+const containerName = 'prompts';
 
 app.http('SaveClientCatalog', {
   methods: ['POST'],
   authLevel: 'anonymous',
   handler: async (request, context) => {
-    context.log("◆ SaveClientCatalog - START");
+    context.log('◆ SaveClientCatalog - START');
 
     let body;
     try {
       body = await request.json();
     } catch {
-      return { status: 400, body: { error: "JSON body が不正です" } };
+      return {
+        status: 400,
+        headers: { 'Content-Type': 'application/json; charset=utf-8' },
+        body: JSON.stringify({ error: 'リクエストボディが不正です（JSON必須）' })
+      };
     }
 
-    const filename = (body?.filename || "").trim();
-    const catalog  = body?.catalog;
-    const ifMatch  = body?.etag || body?.IfMatch || null;
+    const filename = body?.filename || 'texel-client-catalog.json';
+    const etagIfMatch = body?.etag || body?.ETag || null;
+    const catalog = body?.catalog;
 
-    if (!filename) return { status: 400, body: { error: "filename が必須です" } };
-    if (!catalog || typeof catalog !== "object")
-      return { status: 400, body: { error: "catalog が必須です（version/updatedAt/clients を含む）" } };
+    if (!filename || !catalog) {
+      return {
+        status: 400,
+        headers: { 'Content-Type': 'application/json; charset=utf-8' },
+        body: JSON.stringify({ error: 'filename または catalog が不足しています' })
+      };
+    }
 
-    // 形だけ検証
+    // ざっくり妥当性チェック
+    if (typeof catalog !== 'object' || catalog === null) {
+      return {
+        status: 400,
+        headers: { 'Content-Type': 'application/json; charset=utf-8' },
+        body: JSON.stringify({ error: 'catalog はオブジェクト(JSON)である必要があります' })
+      };
+    }
     if (!Array.isArray(catalog.clients)) {
-      return { status: 400, body: { error: "catalog.clients は配列である必要があります" } };
+      return {
+        status: 400,
+        headers: { 'Content-Type': 'application/json; charset=utf-8' },
+        body: JSON.stringify({ error: 'catalog.clients は配列である必要があります' })
+      };
     }
 
     try {
       const blobServiceClient = BlobServiceClient.fromConnectionString(connectionString);
-      const containerClient  = blobServiceClient.getContainerClient(containerName);
+      const containerClient = blobServiceClient.getContainerClient(containerName);
       await containerClient.createIfNotExists();
 
-      const blockBlob = containerClient.getBlockBlobClient(filename);
-
-      // JSONをそのまま保存（wrap しない）
-      const jsonText = JSON.stringify(catalog, null, 2);
-
-      const uploadOptions = {
-        blobHTTPHeaders: { blobContentType: "application/json; charset=utf-8" }
+      // 上書きする本文を確定（サーバ側で updatedAt を更新）
+      const nowIso = new Date().toISOString();
+      const toSave = {
+        version: Number(catalog.version) || 1,
+        updatedAt: nowIso,
+        clients: catalog.clients
       };
+      const text = JSON.stringify(toSave, null, 2);
 
-      // ETag 条件（If-Match）— 上書き競合対策
-      if (ifMatch) uploadOptions.conditions = { ifMatch };
+      const blockBlobClient = containerClient.getBlockBlobClient(filename);
 
-      await blockBlob.upload(jsonText, Buffer.byteLength(jsonText), uploadOptions);
+      // 条件付き（ETag一致時のみ）アップロード
+      const options = {
+        blobHTTPHeaders: { blobContentType: 'application/json; charset=utf-8' }
+      };
+      if (etagIfMatch) {
+        options.conditions = { ifMatch: etagIfMatch };
+      }
 
-      // 新しい ETag を取得
-      const props = await blockBlob.getProperties();
+      await blockBlobClient.upload(text, Buffer.byteLength(text), options);
 
-      context.log("◆ 保存成功:", filename, "ETag:", props.etag);
+      // 新しい ETag を再取得して返す
+      const props = await blockBlobClient.getProperties();
+      const newEtag = props.etag;
+
       return {
         status: 200,
-        headers: { "Content-Type": "application/json; charset=utf-8" },
-        body: { ok: true, etag: props.etag, updatedAt: catalog.updatedAt }
+        headers: {
+          'Content-Type': 'application/json; charset=utf-8',
+          'ETag': newEtag
+        },
+        body: JSON.stringify({ ok: true, etag: newEtag, updatedAt: toSave.updatedAt })
       };
     } catch (err) {
-      // 412: ETag 不一致（競合）
+      // ETag 不一致 → 409
       if (err?.statusCode === 412) {
-        return { status: 409, body: { error: "競合しました。最新を読み込み直してください。(ETag mismatch)" } };
+        return {
+          status: 409,
+          headers: { 'Content-Type': 'application/json; charset=utf-8' },
+          body: JSON.stringify({ error: '競合しました。最新を読み込み直してください。(ETag mismatch)' })
+        };
       }
-      context.log("◆ 保存失敗:", err);
-      return { status: 500, body: { error: "保存に失敗しました", details: err.message } };
+
+      return {
+        status: 500,
+        headers: { 'Content-Type': 'application/json; charset=utf-8' },
+        body: JSON.stringify({ error: '保存に失敗しました', details: err.message })
+      };
     }
   }
 });
