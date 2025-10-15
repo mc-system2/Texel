@@ -48,6 +48,13 @@ body{
 }
 .btn.primary:hover{filter:brightness(.95)}
 .btn.ghost{background:#fff}
+/* client-editor.css 追記例 */
+.btn.ghost.active {
+  border-color: #4caf50;
+  color: #4caf50;
+  background: rgba(76,175,80,0.08);
+}
+
 .btn.tiny{height:26px; padding:0 8px; font-size:12px; border-radius:6px}
 .btn.danger{border-color:#f3d0cc; color:var(--txl-danger); background:#fff}
 .btn.danger:hover{background:#fff3f2}

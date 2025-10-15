@@ -152,61 +152,84 @@ async function loadCommitmentMaster() {
 }
 loadCommitmentMaster().catch(() => {});
 
-/* ------ クライアントカタログ（ローカル保存しない） ------ */
-const /* ------ クライアントカタログ（ラッパ無しJSON） ------ */
+/* ------ クライアントカタログ（BLOBのマスターを読む） ------ */
 const CLIENT_CATALOG_FILE = "texel-client-catalog.json";
-let clientCatalog = { version:1, updatedAt:"", clients: {} }; // { code: {name,behavior,spreadsheetId,createdAt} }
 
-function extractSheetId(input){
-  const v = (input||"").trim();
+/** Texel 内で使う形：
+ *  {
+ *    version: number,
+ *    updatedAt: string,
+ *    clients: {
+ *      B001: { name, behavior:""|"R"|"S", spreadsheetId, createdAt }
+ *      ...
+ *    }
+ *  }
+ */
+let clientCatalog = { version: 1, updatedAt: "", clients: {} };
+
+/* helpers */
+function extractSheetId(input) {
+  const v = String(input || "").trim();
   if (!v) return "";
   const m = v.match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]{10,})/);
   if (m) return m[1];
   const m2 = v.match(/[?&]id=([a-zA-Z0-9-_]{10,})/);
   if (m2) return m2[1];
-  return /^[a-zA-Z0-9-_]{10,}$/.test(v) ? v : "";
+  return /^[a-zA-Z0-9-_]{10,}$/.test(v) ? v : v; // URLも許容
 }
-function normBehavior(b){
-  const v = String(b||"").toUpperCase();
-  return v === "R" ? "R" : v === "S" ? "S" : ""; // ""|R|S
+function normBehavior(b) {
+  const v = String(b || "").trim().toUpperCase();
+  return v === "R" ? "R" : v === "S" ? "S" : ""; // "" | R | S
 }
 
-/** BLOBから texel-client-catalog.json を読み込み、グローバル clientCatalog を更新 */
-async function loadClientCatalog(){
+/** BLOB から texel-client-catalog.json を読み込み、配列→マップへ正規化 */
+async function loadClientCatalog() {
   try {
-    // Texel の既存APIと同じ方法でURLを得る（関数基盤→拡張→SWAの順で到達できるやつ）
-    const url = API.loadPromptText(CLIENT_CATALOG_FILE);
+    // Functions（API.loadPromptText）がURLを返す前提。なければ相対パスでもOK。
+    const url = (typeof API?.loadPromptText === "function")
+      ? API.loadPromptText(CLIENT_CATALOG_FILE)
+      : `${location.origin}/prompts/${CLIENT_CATALOG_FILE}`;
+
     const res = await fetch(url, { cache: "no-cache" });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
     const raw = await res.json();
 
+    // ★ ここがポイント：clients は配列で来る
     const list = Array.isArray(raw?.clients) ? raw.clients : [];
     const map = {};
     for (const c of list) {
-      const code = String(c.code||"").trim().toUpperCase();
+      const code = String(c?.code || "").trim().toUpperCase();
       if (!code) continue;
       map[code] = {
-        name: String(c.name||""),
-        behavior: normBehavior(c.behavior),
-        spreadsheetId: extractSheetId(c.spreadsheetId || c.sheetId || ""),
-        createdAt: c.createdAt || ""
+        name: String(c?.name || ""),
+        behavior: normBehavior(c?.behavior),
+        spreadsheetId: extractSheetId(c?.spreadsheetId || c?.sheetId || ""),
+        createdAt: String(c?.createdAt || "")
       };
     }
-    clientCatalog = { version: raw?.version||1, updatedAt: raw?.updatedAt||"", clients: map };
+
+    clientCatalog = {
+      version: Number(raw?.version || 1),
+      updatedAt: String(raw?.updatedAt || ""),
+      clients: map
+    };
+
     console.info("✅ client catalog loaded:", Object.keys(map).length, "clients");
   } catch (e) {
-    console.warn("⚠️ client catalog load failed:", e?.message||e);
-    clientCatalog = { version:1, updatedAt:"", clients:{} };
+    console.warn("⚠️ client catalog load failed:", e?.message || e);
+    clientCatalog = { version: 1, updatedAt: "", clients: {} };
   }
 }
 
-/** CLコードから設定を取り出す（見つからなければ null） */
-function resolveClientConfig(clientCode){
-  const key = String(clientCode||"").trim().toUpperCase();
+/** CL コードから設定を取得（無ければ null） */
+function resolveClientConfig(clientCode) {
+  const key = String(clientCode || "").trim().toUpperCase();
   const v = clientCatalog.clients[key];
   return v ? { code: key, ...v } : null;
 }
 
+// 起動時ローディング（他の初期ロードと併走OK）
 loadClientCatalog().catch(() => {});
 
 /* ==============================
