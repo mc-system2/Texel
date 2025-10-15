@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <title>Texel Client Catalog Editor</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <link rel="stylesheet" href="./client-editor.css" />
+</head>
+<body>
+  <header>
+    <div class="left">
+      <h1>Client Catalog Editor</h1>
+      <span id="status" class="pill">idle</span>
+      <span id="etag" class="pill mono">ETag: -</span>
+      <span id="updatedAt" class="pill">updated: -</span>
+    </div>
+    <div class="right bar">
+      <input id="apiBase" class="api" placeholder="API Base (例: https://<app>.azurewebsites.net/api)" />
+      <input id="apiKey" placeholder="x-api-key（任意）" />
+      <button id="btnLoad">読込</button>
+      <button id="btnSave" class="primary">保存</button>
+    </div>
+  </header>
+
+  <main>
+    <div class="bar">
+      <button id="btnAdd">行を追加</button>
+      <button id="btnImportCsv" class="ghost">CSVインポート</button>
+      <button id="btnImportJson" class="ghost">JSONインポート</button>
+      <button id="btnExport" class="ghost">JSONダウンロード</button>
+      <span class="muted small">
+        コードは4桁英数字（例: B001）／挙動は「空/R/S」／SpreadsheetはIDまたはURL可
+      </span>
+      <span class="grow"></span>
+      <details>
+        <summary>使い方</summary>
+        <div class="muted small">
+          <p>
+            1) 右上で API Base を設定 → 読込<br />
+            2) 行を編集/追加/削除<br />
+            3) 保存で Blob (<code>prompts/texel-client-catalog.json</code>) に反映
+          </p>
+        </div>
+      </details>
+    </div>
+
+    <div class="panel">
+      <table id="grid">
+        <thead>
+          <tr>
+            <th class="nowrap">コード</th>
+            <th>名称</th>
+            <th class="nowrap">挙動</th>
+            <th>Spreadsheet ID / URL</th>
+            <th class="nowrap">作成日</th>
+            <th class="nowrap">検証</th>
+            <th class="nowrap">操作</th>
+          </tr>
+        </thead>
+        <tbody id="tbody"></tbody>
+      </table>
+    </div>
+  </main>
+
+  <input id="fileInput" type="file" class="hidden" accept=".json,.csv,application/json,text/csv" />
+  <div id="toast" class="toast hidden"></div>
+
+  <script src="./client-editor.js"></script>
+</body>
+</html>

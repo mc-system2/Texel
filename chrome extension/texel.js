@@ -153,105 +153,58 @@ async function loadCommitmentMaster() {
 loadCommitmentMaster().catch(() => {});
 
 /* ------ クライアントカタログ（ローカル保存しない） ------ */
+const /* ------ クライアントカタログ（ラッパ無しJSON） ------ */
 const CLIENT_CATALOG_FILE = "texel-client-catalog.json";
-let clientCatalog = null; // その都度参照。ローカル保存しない。
+let clientCatalog = { version:1, updatedAt:"", clients: {} }; // { code: {name,behavior,spreadsheetId,createdAt} }
 
-async function loadClientCatalog() {
+function extractSheetId(input){
+  const v = (input||"").trim();
+  if (!v) return "";
+  const m = v.match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]{10,})/);
+  if (m) return m[1];
+  const m2 = v.match(/[?&]id=([a-zA-Z0-9-_]{10,})/);
+  if (m2) return m2[1];
+  return /^[a-zA-Z0-9-_]{10,}$/.test(v) ? v : "";
+}
+function normBehavior(b){
+  const v = String(b||"").toUpperCase();
+  return v === "R" ? "R" : v === "S" ? "S" : ""; // ""|R|S
+}
+
+/** BLOBから texel-client-catalog.json を読み込み、グローバル clientCatalog を更新 */
+async function loadClientCatalog(){
   try {
+    // Texel の既存APIと同じ方法でURLを得る（関数基盤→拡張→SWAの順で到達できるやつ）
     const url = API.loadPromptText(CLIENT_CATALOG_FILE);
     const res = await fetch(url, { cache: "no-cache" });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const raw = await res.json();
 
-    const ctype = (res.headers.get("content-type") || "").toLowerCase();
-
-    const raw = ctype.includes("application/json")
-      ? await res.json()
-      : JSON.parse((await res.text()).replace(/^\uFEFF/, ""));
-
-    let payload;
-    if (raw && typeof raw === "object" && "PROMPT" in raw) {
-      if (typeof raw.PROMPT === "string") {
-        try {
-          payload = JSON.parse(raw.PROMPT.replace(/^\uFEFF/, ""));
-        } catch {
-          payload = raw.PROMPT;
-        }
-      } else if (typeof raw.PROMPT === "object" && raw.PROMPT) {
-        payload = raw.PROMPT;
-      } else {
-        payload = raw;
-      }
-    } else {
-      payload = raw;
+    const list = Array.isArray(raw?.clients) ? raw.clients : [];
+    const map = {};
+    for (const c of list) {
+      const code = String(c.code||"").trim().toUpperCase();
+      if (!code) continue;
+      map[code] = {
+        name: String(c.name||""),
+        behavior: normBehavior(c.behavior),
+        spreadsheetId: extractSheetId(c.spreadsheetId || c.sheetId || ""),
+        createdAt: c.createdAt || ""
+      };
     }
-
-    // ★ BLOB 側が { "prompt": {...}, "params": {...} } 構造なので、
-    // 実際に使うのは payload.prompt
-    const catalogRoot = payload.prompt || payload;
-
-    clientCatalog = normalizeClientCatalog(catalogRoot);
-
-    console.info("✅ client-catalog loaded (no local cache).", {
-      keys: Object.keys(clientCatalog?.clients || {})
-    });
-
-    try { evaluateDialogState(); } catch {}
+    clientCatalog = { version: raw?.version||1, updatedAt: raw?.updatedAt||"", clients: map };
+    console.info("✅ client catalog loaded:", Object.keys(map).length, "clients");
   } catch (e) {
-    clientCatalog = null;
-    console.warn("ℹ️ client-catalog load skipped:", e?.message || e);
+    console.warn("⚠️ client catalog load failed:", e?.message||e);
+    clientCatalog = { version:1, updatedAt:"", clients:{} };
   }
 }
 
-function normalizeClientCatalog(src) {
-  if (!src || typeof src !== "object") return null;
-  const rawClients = src.clients || src || {};
-  const normalized = {};
-  // すべてのキーを trim + toUpperCase で正規化して詰め替える
-  Object.keys(rawClients).forEach((k) => {
-    if (k === "default") return; // default は別扱い
-    const nk = (k || "").toString().trim().toUpperCase();
-    const v  = rawClients[k] || {};
-    normalized[nk] = {
-      ...v,
-      // 念のため behavior も正規化
-      behavior: (v?.behavior || "").toString().trim().toUpperCase(),
-      sheetId : (v?.sheetId  || "").toString().trim(),
-    };
-  });
-  const def = src.default ? {
-    ...src.default,
-    sheetId: (src.default.sheetId || "").toString().trim()
-  } : null;
-  return { clients: normalized, default: def };
-}
-function resolveClientConfig(clientCode) {
-  if (!clientCode || !clientCatalog) return null;
-  const want = clientCode.toString().trim().toUpperCase();
-
-  // 1) まずはダイレクトヒット
-  let entry = clientCatalog.clients?.[want];
-
-  // 2) 見つからない場合はキーを総当たりで正規化比較（不可視文字・全角スペース対策）
-  if (!entry && clientCatalog.clients && typeof clientCatalog.clients === "object") {
-    for (const rawKey of Object.keys(clientCatalog.clients)) {
-      const normKey = String(rawKey).replace(/\u3000/g, " ").trim().toUpperCase();
-      if (normKey === want) {
-        entry = clientCatalog.clients[rawKey];
-        break;
-      }
-    }
-  }
-
-  // 3) 返却前に behavior / sheetId も念のため正規化
-  if (entry) {
-    return {
-      ...entry,
-      behavior: (entry.behavior || "").toString().trim().toUpperCase(),
-      sheetId : (entry.sheetId  || "").toString().trim(),
-    };
-  }
-  // 4) 見つからなければ null（＝デフォルトなし）
-  return null;
+/** CLコードから設定を取り出す（見つからなければ null） */
+function resolveClientConfig(clientCode){
+  const key = String(clientCode||"").trim().toUpperCase();
+  const v = clientCatalog.clients[key];
+  return v ? { code: key, ...v } : null;
 }
 
 loadClientCatalog().catch(() => {});
@@ -392,24 +345,23 @@ function evaluateDialogState() {
   }
 
   // sheetId 反映（CLごと）
-  sheetIdForGPT = (cfg?.sheetId || DEFAULT_SHEET_ID).trim();
+  sheetIdForGPT = (cfg?.spreadsheetId || DEFAULT_SHEET_ID).trim();
   sessionSheetId = sheetIdForGPT;
-  let behavior = (cfg?.behavior || "").toString().toUpperCase();
+  const behavior = cfg?.behavior || ""; // "" | "R" | "S"
 
   if (!behavior) {
-    // behavior空＝手動モード（BK不要）
-    setModalModeText("BASE", false);
-    btn.disabled = false; // BK不要
+    setModalModeText("BASE", false);  // ベース＝BK不要
+    btn.disabled = false;
     return;
   }
-  if (behavior === "TYPE-R") {
-    setModalModeText("TYPE-R", true);
+  if (behavior === "R") {
+    setModalModeText("TYPE-R", true); // 表示文言は従来のまま
     btn.disabled = sanitizeBK(bkIn.value).length === 0;
     return;
   }
-  if (behavior === "TYPE-S") {
+  if (behavior === "S") {
     setModalModeText("TYPE-S", true);
-    btn.disabled = sanitizeBK(bkIn.value).length === 0; // 押下時にS-NET検証も行う
+    btn.disabled = sanitizeBK(bkIn.value).length === 0;
     return;
   }
   // 未知の指定は BK 必須扱い
@@ -919,32 +871,25 @@ document.addEventListener("DOMContentLoaded", async () => {
 
     if (!cfg) { alert("このCL IDは登録がありません。CatalogのCL（例：B001）を指定してください。"); return; }
   
-    const behavior = (cfg.behavior || "").toString().toUpperCase();
-    CURRENT_BEHAVIOR = behavior || "BASE";
+    const behavior = cfg.behavior || "";      // "" | "R" | "S"
+    CURRENT_BEHAVIOR = behavior ? `TYPE-${behavior}` : "BASE"; // "BASE" | "TYPE-R" | "TYPE-S"
 
-    // 共通：sheetId セット（catalog＞default）
-    sheetIdForGPT = (cfg.sheetId || DEFAULT_SHEET_ID).trim();
+    // 共通：sheetId セット
+    sheetIdForGPT = (cfg.spreadsheetId || DEFAULT_SHEET_ID).trim();
     sessionSheetId = sheetIdForGPT;
-    console.info("[Texel] Using spreadsheetId:", sessionSheetId, "for CL:", clientId);
 
-    // モード分岐
     if (!behavior) {
-      // ベースグレード：BK不要／物件IDは乱数＋日時
-      propertyCode = generateRandomPropertyCode();
-    } else if (behavior === "TYPE-R") {
+      propertyCode = generateRandomPropertyCode();       // BASE: BK不要
+    } else if (behavior === "R") {
       if (!bkId) { alert("BK ID は必須です"); return; }
       propertyCode = bkId;
-    } else if (behavior === "TYPE-S") {
+    } else if (behavior === "S") {
       if (!bkId) { alert("BK ID は必須です"); return; }
       const ok = await isSuumoPreviewOpen(bkId);
-      if (!ok) {
-        alert("S-NET のプレビューページ（bc="+bkId+"）が開かれていません。該当タブを開いてから再度お試しください。");
-        return;
-      }
+      if (!ok) { alert(`S-NET プレビュー（bc=${bkId}）を開いてください。`); return; }
       propertyCode = bkId;
     } else {
-      // 未知指定は TYPE-R 相当で BK 必須扱い
-      if (!bkId) { alert("BK ID は必須です"); return; }
+      if (!bkId) { alert("BK ID は必須です"); return; } // 安全側
       propertyCode = bkId;
     }
 

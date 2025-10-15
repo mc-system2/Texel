@@ -1,305 +1,347 @@
-/* Texel Client Editor – 静的Webアプリ
- * 依存API: LoadPromptText (GET), SavePromptText (POST)
- * BLOB構成: prompts/<CLIENT_CODE>/*, prompts/texel-client-catalog.json
- * コピー元: prompts 直下のテンプレ（例：texel-r-roomphoto.json）
- */
+(() => {
+  // --- state ---
+  let catalog = { version: 1, updatedAt: "", clients: [] }; // array in editor; API save converts
+  let etag = "";
 
-/* ============ 1) 環境切替（Texelと同規則） ============ */
-const ENV_BASES = {
-  dev : "https://func-texel-api-dev-jpe-001-b2f6fec8fzcbdrc3.japaneast-01.azurewebsites.net/api",
-  prod: "https://func-texel-api-prod-jpe-001-dsgfhtafbfbxawdz.japaneast-01.azurewebsites.net/api",
-};
-function resolveEnv(){
-  const q = new URLSearchParams(location.search).get("env");
-  if (q === "dev" || q === "prod") return q;
-  const h = location.host;
-  if (h.includes("lively-tree-019937900.2.azurestaticapps.net")) return "dev";
-  if (h.includes("lemon-beach-0ae87bc00.2.azurestaticapps.net"))  return "prod";
-  try { const x = localStorage.getItem("texel_env"); if (x==="dev"||x==="prod") return x; } catch {}
-  return "prod";
-}
-const API_BASE = () => (ENV_BASES[resolveEnv()] || ENV_BASES.prod);
-document.getElementById("envLabel").textContent = resolveEnv();
-
-/* ============ 2) パスとテンプレ一覧 ============ */
-const CATALOG_BLOB = "texel-client-catalog.json";
-
-// R/S のテンプレは prompts 直下（コピー元）
-const TEMPLATE_FILES = {
-  R: [
-    "texel-r-roomphoto.json",
-    "texel-r-suggestion.json",
-    "texel-r-suumo-catch.json",
-    "texel-r-suumo-comment.json",
-    "texel-r-athome-appeal.json",
-    "texel-r-athome-comment.json",
-  ],
-  S: [
-    "texel-s-roomphoto.json",
-    "texel-s-suggestion.json",
-    "texel-s-suumo-catch.json",
-    "texel-s-suumo-comment.json",
-  ],
-};
-
-/* ============ 3) ユーティリティ ============ */
-const $ = (id) => document.getElementById(id);
-const $tbody = $("clientTbody");
-const $status = $("statusMsg");
-function setStatus(msg, ok=true){
-  $status.textContent = msg;
-  $status.style.color = ok ? "#22c55e" : "#ef4444";
-  if (ok) setTimeout(()=>($status.textContent=""), 2500);
-}
-async function loadJSON(url){
-  const r = await fetch(url);
-  if (!r.ok) throw new Error(`HTTP ${r.status}`);
-  return r.json();
-}
-async function postJSON(url, body){
-  const r = await fetch(url, { method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify(body) });
-  if (!r.ok) throw new Error(await r.text());
-  return r.json().catch(()=> ({}));
-}
-// URL or ID から Spreadsheet ID を抽出
-function extractSheetId(input){
-  const v = (input||"").trim();
-  if (!v) return "";
-  // フルURLのとき
-  const m = v.match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]{10,})/);
-  if (m) return m[1];
-  // 共有リンクの?id=形式
-  const m2 = v.match(/[?&]id=([a-zA-Z0-9-_]{10,})/);
-  if (m2) return m2[1];
-  // それ以外はIDとみなす（ざっくり長さ・文字種チェック）
-  return /^[a-zA-Z0-9-_]{10,}$/.test(v) ? v : "";
-}
-function sheetUrl(id){
-  return `https://docs.google.com/spreadsheets/d/${id}/edit`;
-}
-
-/* ============ 4) カタログ I/O ============ */
-let catalog = { version:1, updatedAt:"", clients:[] };
-
-function normalizeCatalog(obj){
-  const clients = Array.isArray(obj?.clients) ? obj.clients : [];
-  return {
-    version: typeof obj?.version === "number" ? obj.version : 1,
-    updatedAt: new Date().toISOString(),
-    clients: clients.map(x=>({
-      code: String(x.code ?? "").trim(),
-      name: String(x.name ?? "").trim(),
-      behavior: (x.behavior === "R" || x.behavior === "S") ? x.behavior : "", // 空を許容
-      spreadsheetId: extractSheetId(x.spreadsheetId || x.sheetId || ""), // 旧キー取り込み互換
-      createdAt: x.createdAt || new Date().toISOString(),
-    })).filter(x=>x.code),
+  // --- el helpers ---
+  const qs = (s, r = document) => r.querySelector(s);
+  const ce = (tag, props = {}) => Object.assign(document.createElement(tag), props);
+  const toast = (msg) => {
+    const t = qs("#toast");
+    t.textContent = msg;
+    t.classList.remove("hidden");
+    setTimeout(() => t.classList.add("hidden"), 2400);
   };
-}
-async function loadCatalog(){
-  try{
-    const data = await loadJSON(`${API_BASE()}/LoadPromptText?filename=${encodeURIComponent(CATALOG_BLOB)}`);
-    return normalizeCatalog(data);
-  }catch{
-    return { version:1, updatedAt:new Date().toISOString(), clients:[] };
-  }
-}
-async function saveCatalog(){
-  const body = { filename: CATALOG_BLOB, prompt: catalog };
-  await postJSON(`${API_BASE()}/SavePromptText`, body);
-}
+  const setStatus = (s) => (qs("#status").textContent = s);
 
-/* ============ 5) 描画 ============ */
-function renderTable(filter=""){
-  const q = filter.trim().toLowerCase();
-  $tbody.innerHTML = "";
-  catalog.clients
-    .filter(c => {
-      if (!q) return true;
-      return (
-        c.code.toLowerCase().includes(q) ||
-        c.name.toLowerCase().includes(q) ||
-        (c.spreadsheetId||"").toLowerCase().includes(q)
-      );
-    })
-    .sort((a,b)=>a.code.localeCompare(b.code))
-    .forEach(client=>{
-      const tr = document.createElement("tr");
+  // --- validators / normalizers ---
+  const extractSheetId = (input) => {
+    const v = String(input || "").trim();
+    if (!v) return "";
+    let m = v.match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]{10,})/);
+    if (m) return m[1];
+    m = v.match(/[?&]id=([a-zA-Z0-9-_]{10,})/);
+    if (m) return m[1];
+    return /^[a-zA-Z0-9-_]{10,}$/.test(v) ? v : "";
+  };
+  const normCode = (s) => String(s || "").trim().toUpperCase();
+  const isCode = (s) => /^[A-Z0-9]{4}$/.test(normCode(s));
+  const normBehavior = (b) => {
+    const v = String(b || "").toUpperCase();
+    return v === "R" ? "R" : v === "S" ? "S" : ""; // ""|R|S
+  };
 
-      // code
-      const tdCode = document.createElement("td");
-      tdCode.textContent = client.code;
-      tr.appendChild(tdCode);
+  // --- API ---
+  const apiBaseInput = qs("#apiBase");
+  const apiKeyInput = qs("#apiKey");
+  const api = (url) => apiBaseInput.value.trim().replace(/\/+$/, "") + url;
 
-      // name (editable)
-      const tdName = document.createElement("td");
-      const inpName = document.createElement("input");
-      inpName.value = client.name;
-      inpName.addEventListener("input", ()=>{ client.name = inpName.value; });
-      tdName.appendChild(inpName);
-      tr.appendChild(tdName);
-
-      // behavior (label)
-      const tdBeh = document.createElement("td");
-      const label = document.createElement("span");
-      label.textContent = client.behavior || "（なし）";
-      label.className = "muted";
-      tdBeh.appendChild(label);
-      tr.appendChild(tdBeh);
-
-      // spreadsheet id (editable + open)
-      const tdId = document.createElement("td");
-      tdId.className = "idcell";
-      const inpId = document.createElement("input");
-      inpId.placeholder = "1AbCdEfGhIjKlmNoP...";
-      inpId.value = client.spreadsheetId || "";
-      const btnOpen = document.createElement("button");
-      btnOpen.textContent = "開く";
-      function refreshOpenBtn(){
-        const sid = extractSheetId(inpId.value);
-        btnOpen.disabled = !sid;
+  async function loadCatalog() {
+    const url = api("/LoadClientCatalog");
+    setStatus("loading");
+    try {
+      const headers = {};
+      if (etag) headers["If-None-Match"] = etag;
+      const res = await fetch(url, { headers });
+      if (res.status === 304) {
+        setStatus("not modified");
+        return;
       }
-      inpId.addEventListener("input", ()=>{
-        client.spreadsheetId = extractSheetId(inpId.value);
-        refreshOpenBtn();
-      });
-      btnOpen.addEventListener("click", ()=>{
-        const sid = extractSheetId(inpId.value);
-        if (sid) window.open(sheetUrl(sid), "_blank");
-      });
-      refreshOpenBtn();
-      tdId.appendChild(inpId);
-      tdId.appendChild(btnOpen);
-      tr.appendChild(tdId);
-
-      // createdAt
-      const tdAt = document.createElement("td");
-      tdAt.textContent = (client.createdAt||"").replace("T"," ").replace("Z","");
-      tdAt.className = "muted";
-      tr.appendChild(tdAt);
-
-      // ops
-      const tdOps = document.createElement("td");
-      const wrap = document.createElement("div");
-      wrap.className="toolbar";
-
-      const btnRecopy = document.createElement("button");
-      btnRecopy.textContent = "テンプレ再コピー";
-      btnRecopy.disabled = !client.behavior; // 空は対象外
-      btnRecopy.addEventListener("click", ()=>provisionPrompts(client.code, client.behavior, true));
-
-      const btnDelete = document.createElement("button");
-      btnDelete.textContent = "台帳から削除";
-      btnDelete.className = "danger";
-      btnDelete.addEventListener("click", ()=>removeClient(client.code));
-
-      wrap.appendChild(btnRecopy);
-      wrap.appendChild(btnDelete);
-      tdOps.appendChild(wrap);
-      tr.appendChild(tdOps);
-
-      $tbody.appendChild(tr);
-    });
-}
-
-/* ============ 6) 登録/削除/コピー ============ */
-function validateCode(v){
-  return /^[0-9A-Za-z_\-]{1,32}$/.test(v); // 4桁推奨だが柔軟に
-}
-async function onCreate(){
-  const code = $("clientCode").value.trim();
-  const name = $("clientName").value.trim();
-  const behavior = $("behavior").value; // "" | "R" | "S"
-  const overwrite = $("overwrite").checked;
-  const spreadsheetId = extractSheetId($("sheetId").value);
-
-  if (!validateCode(code)) { setStatus("コードが不正です", false); return; }
-  if (!name) { setStatus("名称を入力してください", false); return; }
-
-  if (catalog.clients.some(c=>c.code===code)) {
-    if (!confirm("同一コードが存在します。名称/シートIDのみ更新し、テンプレコピーを続行しますか？")) return;
-    catalog.clients = catalog.clients.map(c =>
-      c.code===code ? { ...c, name, spreadsheetId } : c
-    );
-  } else {
-    catalog.clients.push({ code, name, behavior, spreadsheetId, createdAt:new Date().toISOString() });
-  }
-  catalog.updatedAt = new Date().toISOString();
-  await saveCatalog();
-  renderTable($("searchBox").value);
-
-  await provisionPrompts(code, behavior, overwrite);
-}
-
-async function removeClient(code){
-  if (!confirm(`クライアント ${code} を台帳から削除します。BLOBの /${code}/ は残ります。`)) return;
-  catalog.clients = catalog.clients.filter(x=>x.code!==code);
-  catalog.updatedAt = new Date().toISOString();
-  await saveCatalog();
-  renderTable($("searchBox").value);
-  setStatus("削除しました");
-}
-
-/** BehaviorがR/Sのときのみ、テンプレを prompts 直下から prompts/<code>/ へコピー */
-async function provisionPrompts(code, behavior, overwrite){
-  if (!behavior) { setStatus("テンプレコピー不要（Behavior なし）"); return; }
-
-  const files = TEMPLATE_FILES[behavior] || [];
-  if (!files.length) { setStatus("テンプレ一覧が見つかりません", false); return; }
-
-  setStatus(`コピー中: ${code} (${behavior}) ...`);
-  try{
-    for (const file of files){
-      const src = file;                    // ルート直下
-      const dst = `${code}/${file}`;       // <CLIENT_CODE>/file
-
-      if (!overwrite) {
-        const chk = await fetch(`${API_BASE()}/LoadPromptText?filename=${encodeURIComponent(dst)}`);
-        if (chk.ok) continue; // 既存あり → スキップ
-      }
-
-      const data = await loadJSON(`${API_BASE()}/LoadPromptText?filename=${encodeURIComponent(src)}`);
-      const body = { filename: dst, prompt: data?.prompt ?? data, params: data?.params };
-      await postJSON(`${API_BASE()}/SavePromptText`, body);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      etag = res.headers.get("ETag") || "";
+      const json = await res.json();
+      const list = Array.isArray(json?.clients) ? json.clients : [];
+      catalog = {
+        version: Number(json?.version || 1),
+        updatedAt: String(json?.updatedAt || ""),
+        clients: list,
+      };
+      qs("#updatedAt").textContent = `updated: ${catalog.updatedAt || "-"}`;
+      qs("#etag").textContent = `ETag: ${etag || "-"}`;
+      render();
+      setStatus("loaded");
+      toast("カタログを読み込みました");
+    } catch (e) {
+      setStatus("error");
+      toast("読込に失敗しました: " + e.message);
     }
-    setStatus("テンプレコピー完了");
-  }catch(e){
-    console.error(e);
-    setStatus("コピー中にエラー: " + e.message, false);
   }
-}
 
-/* ============ 7) イベント & 初期化 ============ */
-$("createBtn").addEventListener("click", onCreate);
-$("reloadBtn").addEventListener("click", async ()=>{
-  catalog = await loadCatalog(); renderTable($("searchBox").value);
-});
-$("saveCatalogBtn").addEventListener("click", async ()=>{
-  catalog.updatedAt = new Date().toISOString();
-  await saveCatalog();
-  setStatus("台帳を保存しました");
-});
-$("exportBtn").addEventListener("click", ()=>{
-  const blob = new Blob([JSON.stringify(catalog, null, 2)], {type:"application/json"});
-  const a = document.createElement("a");
-  a.href = URL.createObjectURL(blob);
-  a.download = "texel-client-catalog.json";
-  a.click();
-  URL.revokeObjectURL(a.href);
-});
-$("searchBox").addEventListener("input", (e)=>renderTable(e.target.value));
+  async function saveCatalog() {
+    const url = api("/SaveClientCatalog");
+    const payload = {
+      version: Number(catalog.version || 1),
+      updatedAt: new Date().toISOString(),
+      clients: catalog.clients.map((r) => ({
+        code: normCode(r.code),
+        name: String(r.name || ""),
+        behavior: normBehavior(r.behavior),
+        spreadsheetId: extractSheetId(r.spreadsheetId || r.sheetId || ""),
+        createdAt: String(r.createdAt || ""),
+      })),
+    };
 
-/* 登録ブロック：シートID入力で「開く」を有効化 */
-const openBtn = $("openSheetBtn");
-$("sheetId").addEventListener("input", ()=>{
-  const sid = extractSheetId($("sheetId").value);
-  openBtn.disabled = !sid;
-});
-openBtn.addEventListener("click", ()=>{
-  const sid = extractSheetId($("sheetId").value);
-  if (sid) window.open(sheetUrl(sid), "_blank");
-});
+    // 重複コードは後勝ちで圧縮
+    const map = new Map();
+    for (const row of payload.clients) map.set(row.code, row);
+    payload.clients = Array.from(map.values());
 
-(async function init(){
-  catalog = await loadCatalog();
-  renderTable();
+    // バリデーション
+    const errs = [];
+    for (const row of payload.clients) {
+      if (!isCode(row.code)) errs.push(`invalid code: ${row.code}`);
+      if (row.behavior !== "" && row.behavior !== "R" && row.behavior !== "S")
+        errs.push(`invalid behavior: ${row.code}`);
+    }
+    if (errs.length) {
+      toast("保存できません: " + errs[0]);
+      return;
+    }
+
+    setStatus("saving");
+    try {
+      const headers = { "Content-Type": "application/json" };
+      const key = apiKeyInput.value.trim();
+      if (key) headers["x-api-key"] = key;
+
+      const res = await fetch(url, { method: "POST", headers, body: JSON.stringify(payload) });
+      const text = await res.text();
+      let json;
+      try {
+        json = JSON.parse(text);
+      } catch {
+        json = { message: text };
+      }
+      if (!res.ok) throw new Error(json?.error || text || `HTTP ${res.status}`);
+
+      etag = res.headers.get("ETag") || json?.etag || "";
+      qs("#etag").textContent = `ETag: ${etag || "-"}`;
+      setStatus("saved");
+      toast("保存しました");
+    } catch (e) {
+      setStatus("error");
+      toast("保存に失敗しました: " + e.message);
+    }
+  }
+
+  // --- table render ---
+  const tbody = qs("#tbody");
+
+  function render() {
+    tbody.innerHTML = "";
+    const rows = Array.isArray(catalog.clients) ? catalog.clients : [];
+    if (!rows.length) {
+      const tr = ce("tr");
+      const td = ce("td", {
+        colSpan: 7,
+        className: "muted",
+        textContent: "データがありません。『行を追加』で作成してください。",
+      });
+      tr.appendChild(td);
+      tbody.appendChild(tr);
+      return;
+    }
+    rows.forEach((row, idx) => {
+      tbody.appendChild(renderRow(row, idx));
+    });
+  }
+
+  function renderRow(row, idx) {
+    const tr = ce("tr");
+
+    const tdCode = ce("td");
+    const inCode = ce("input", { value: row.code || "", placeholder: "B001" });
+    inCode.addEventListener("input", () => {
+      row.code = normCode(inCode.value);
+      validateRow(tr, row);
+    });
+    tdCode.appendChild(inCode);
+
+    const tdName = ce("td");
+    const inName = ce("input", { value: row.name || "", placeholder: "お客様名など" });
+    inName.addEventListener("input", () => (row.name = inName.value));
+    tdName.appendChild(inName);
+
+    const tdBeh = ce("td");
+    const sel = ce("select");
+    ["", "R", "S"].forEach((v) => {
+      const o = ce("option", { value: v, textContent: v === "" ? "BASE(空)" : v });
+      if ((row.behavior || "") === v) o.selected = true;
+      sel.appendChild(o);
+    });
+    sel.addEventListener("change", () => {
+      row.behavior = normBehavior(sel.value);
+      validateRow(tr, row);
+    });
+    tdBeh.appendChild(sel);
+
+    const tdSheet = ce("td");
+    const inSheet = ce("input", {
+      value: row.spreadsheetId || row.sheetId || "",
+      placeholder: "ID または URL",
+    });
+    inSheet.addEventListener("input", () => {
+      const v = inSheet.value.trim();
+      const id = extractSheetId(v);
+      row.spreadsheetId = id || v; // 未確定でも保持
+      validateRow(tr, row);
+    });
+    tdSheet.appendChild(inSheet);
+
+    const tdCreated = ce("td");
+    const inDate = ce("input", { value: row.createdAt || "", placeholder: "YYYY-MM-DD" });
+    inDate.addEventListener("input", () => (row.createdAt = inDate.value));
+    tdCreated.appendChild(inDate);
+
+    const tdCheck = ce("td");
+    tdCheck.className = "small";
+    tdCheck.appendChild(ce("div", { className: "muted", innerHTML: auditRowHTML(row) }));
+
+    const tdOps = ce("td");
+    tdOps.appendChild(rowTools(idx));
+
+    tr.append(tdCode, tdName, tdBeh, tdSheet, tdCreated, tdCheck, tdOps);
+    validateRow(tr, row);
+    return tr;
+  }
+
+  function auditRowHTML(r) {
+    const msgs = [];
+    if (!isCode(r.code)) msgs.push(`<span class="err">コード不正</span>`);
+    const b = normBehavior(r.behavior);
+    if (b && b !== "R" && b !== "S") msgs.push(`<span class="err">挙動不正</span>`);
+    const id = extractSheetId(r.spreadsheetId || r.sheetId || "");
+    if ((b === "R" || b === "S") && !id) msgs.push(`<span class="warn">要:SheetID</span>`);
+    if (!msgs.length) return `<span class="ok">OK</span>`;
+    return msgs.join(" / ");
+  }
+
+  function validateRow(tr, r) {
+    const valid = isCode(r.code);
+    tr.style.outline = valid ? "none" : "1px solid var(--danger)";
+    const chk = tr.querySelector("td:nth-child(6) > div");
+    if (chk) chk.innerHTML = auditRowHTML(r);
+  }
+
+  function rowTools(idx) {
+    const wrap = ce("div", { className: "rowtools" });
+    const up = ce("button", { className: "ghost", textContent: "↑" });
+    const down = ce("button", { className: "ghost", textContent: "↓" });
+    const del = ce("button", { className: "danger", textContent: "削除" });
+    up.onclick = () => {
+      if (idx <= 0) return;
+      const r = catalog.clients.splice(idx, 1)[0];
+      catalog.clients.splice(idx - 1, 0, r);
+      render();
+    };
+    down.onclick = () => {
+      if (idx >= catalog.clients.length - 1) return;
+      const r = catalog.clients.splice(idx, 1)[0];
+      catalog.clients.splice(idx + 1, 0, r);
+      render();
+    };
+    del.onclick = () => {
+      catalog.clients.splice(idx, 1);
+      render();
+    };
+    wrap.append(up, down, del);
+    return wrap;
+  }
+
+  // --- actions ---
+  qs("#btnAdd").onclick = () => {
+    catalog.clients.push({ code: "", name: "", behavior: "", spreadsheetId: "", createdAt: "" });
+    render();
+  };
+
+  qs("#btnLoad").onclick = loadCatalog;
+  qs("#btnSave").onclick = saveCatalog;
+
+  // --- import/export ---
+  const fileInput = qs("#fileInput");
+
+  qs("#btnImportJson").onclick = () => {
+    fileInput.accept = ".json,application/json";
+    fileInput.onchange = async (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      const text = await file.text();
+      let data;
+      try {
+        data = JSON.parse(text);
+      } catch {
+        toast("JSONが不正です");
+        return;
+      }
+      const list = Array.isArray(data?.clients) ? data.clients : Array.isArray(data) ? data : [];
+      if (!Array.isArray(list)) {
+        toast("JSONに clients 配列がありません");
+        return;
+      }
+      const map = new Map(catalog.clients.map((r) => [normCode(r.code), r]));
+      for (const r of list) {
+        map.set(normCode(r.code), {
+          code: normCode(r.code),
+          name: String(r.name || ""),
+          behavior: normBehavior(r.behavior),
+          spreadsheetId: r.spreadsheetId || r.sheetId || "",
+          createdAt: String(r.createdAt || ""),
+        });
+      }
+      catalog.clients = Array.from(map.values());
+      render();
+      fileInput.value = "";
+      toast("JSONを取り込みました");
+    };
+    fileInput.click();
+  };
+
+  qs("#btnImportCsv").onclick = () => {
+    fileInput.accept = ".csv,text/csv";
+    fileInput.onchange = async (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      const text = await file.text();
+      const lines = text.split(/\r?\n/).filter(Boolean);
+      if (!lines.length) {
+        toast("CSVが空です");
+        return;
+      }
+      const head = lines[0].split(",").map((s) => s.trim().toLowerCase());
+      const idx = (k) => head.indexOf(k);
+      const rows = lines.slice(1).map((line) => {
+        const a = line.split(",");
+        return {
+          code: normCode(a[idx("code")] || ""),
+          name: a[idx("name")] || "",
+          behavior: normBehavior(a[idx("behavior")] || ""),
+          spreadsheetId: a[idx("spreadsheetid")] || a[idx("sheetid")] || "",
+          createdAt: a[idx("createdat")] || "",
+        };
+      });
+      const map = new Map(catalog.clients.map((r) => [normCode(r.code), r]));
+      for (const r of rows) map.set(r.code, r);
+      catalog.clients = Array.from(map.values());
+      render();
+      fileInput.value = "";
+      toast("CSVを取り込みました");
+    };
+    fileInput.click();
+  };
+
+  qs("#btnExport").onclick = () => {
+    const payload = {
+      version: Number(catalog.version || 1),
+      updatedAt: new Date().toISOString(),
+      clients: catalog.clients,
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+    const a = ce("a", { href: URL.createObjectURL(blob), download: "texel-client-catalog.json" });
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  };
+
+  // --- sensible defaults for local testing ---
+  apiBaseInput.value ||= location.origin.replace(/\/$/, "") + "/api";
 })();
