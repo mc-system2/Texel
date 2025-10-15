@@ -193,19 +193,24 @@ async function saveCatalog(){
 
 // ====== イベント ======
 function bindEvents(){
-  // env 切替
-  els.envDev?.addEventListener("change", () => {
-    if (!els.envDev.checked) return;
-    savePref("env","dev");
-    els.apiBase.value = API_BASES.dev;
-    loadCatalog(true);
-  });
-  els.envProd?.addEventListener("change", () => {
-    if (!els.envProd.checked) return;
-    savePref("env","prod");
-    els.apiBase.value = API_BASES.prod;
-    loadCatalog(true);
-  });
+  // env 切替（要素があればだけバインド）
+  if (els.envDev) {
+    els.envDev.addEventListener("change", () => {
+      if (!els.envDev.checked) return;
+      savePref("env","dev");
+      els.apiBase.value = API_BASES.dev;
+      loadCatalog(true);
+    });
+  }
+
+  if (els.envProd) {
+    els.envProd.addEventListener("change", () => {
+      if (!els.envProd.checked) return;
+      savePref("env","prod");
+      els.apiBase.value = API_BASES.prod;
+      loadCatalog(true);
+    });
+  }
 
   // API Base 手入力を保持
   els.apiBase?.addEventListener("input", () => savePref("apiBase", els.apiBase.value));
@@ -223,10 +228,17 @@ function bindEvents(){
 document.addEventListener("DOMContentLoaded", () => {
   // 直前の選択を復元
   const env = getPref("env", "dev");
-  (env === "prod" ? els.envProd : els.envDev).checked = true;
 
+  // ラジオがある場合だけチェックを付ける
+  if (env === "prod") {
+    if (els.envProd) els.envProd.checked = true;
+  } else {
+    if (els.envDev) els.envDev.checked = true;
+  }
+
+  // API Base はラジオの有無に関わらず復元
   const savedBase = getPref("apiBase", API_BASES[env]);
-  els.apiBase.value = savedBase || API_BASES[env];
+  if (els.apiBase) els.apiBase.value = (savedBase || API_BASES[env]).replace(/\/+$/,"");
 
   bindEvents();
 
