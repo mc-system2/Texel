@@ -1,123 +1,252 @@
-// client-editor.js
+/* =====================================================================
+ * Client Catalog Editor - client-editor.js  [FULL]
+ * - Dev/Prod API Base 切替（ボタン／手入力）
+ * - 起動時に自動ロード
+ * - 保存時：Spreadsheet ID / URL が空ならエラー
+ * - ステータス「読込完了／保存しました」は自動で消える
+ * - 複製時：重複しないクライアントコードを自動発番
+ * - ローカル保存(localStorage等)は一切しない
+ * ===================================================================== */
+
 (() => {
-  const FILE = 'texel-client-catalog.json';
+  /* ====== 定数・要素取得 ====== */
+  const FILENAME = "texel-client-catalog.json";
 
-  // ---- 環境プリセット（ご提供の URL） ----
-  const PRESET = {
-    dev: 'https://func-texel-api-dev-jpe-001-b2f6fec8fzcbdrc3.japaneast-01.azurewebsites.net/api',
-    prod:'https://func-texel-api-prod-jpe-001-dsgfhtafbfbxawdz.japaneast-01.azurewebsites.net/api'
-  };
+  const DEV_BASE  = "https://func-texel-api-dev-jpe-001-b2f6fec8fzcbdrc3.japaneast-01.azurewebsites.net/api";
+  const PROD_BASE = "https://func-texel-api-prod-jpe-001-dsgfhtafbfbxawdz.japaneast-01.azurewebsites.net/api";
 
-  // ---- DOM ----
-  const apiBaseEl  = document.getElementById('apiBase');
-  const pingBtn    = document.getElementById('pingBtn');
-  const pingState  = document.getElementById('pingState');
-  const loadBtn    = document.getElementById('loadBtn');
-  const saveBtn    = document.getElementById('saveBtn');
-  const addRowBtn  = document.getElementById('addRowBtn');
-  const exportBtn  = document.getElementById('exportBtn');
-  const importFile = document.getElementById('importFile');
-  const gridBody   = document.getElementById('gridBody');
-  const rowTmpl    = document.getElementById('rowTmpl');
-  const statusEl   = document.getElementById('status');
-  const etagBadge  = document.getElementById('etagBadge');
-  const versionEl  = document.getElementById('version');
-  const updatedEl  = document.getElementById('updatedAt');
-  const countEl    = document.getElementById('count');
-  const alertEl    = document.getElementById('alert');
+  const apiBaseEl   = document.getElementById("apiBase");
+  const pingBtn     = document.getElementById("pingBtn");
+  const pingStateEl = document.getElementById("pingState");
 
-  const devPresetBtn  = document.getElementById('devPreset');
-  const prodPresetBtn = document.getElementById('prodPreset');
+  const devPresetBtn  = document.getElementById("devPreset");
+  const prodPresetBtn = document.getElementById("prodPreset");
 
-  // ---- 状態 ----
-  let currentETag = '';
-  let currentCatalog = { version: 1, updatedAt: '', clients: [] };
+  const loadBtn   = document.getElementById("loadBtn");
+  const saveBtn   = document.getElementById("saveBtn");
+  const addRowBtn = document.getElementById("addRowBtn");
+  const exportBtn = document.getElementById("exportBtn");
+  const importFile= document.getElementById("importFile");
 
-  // ---- API ラッパ ----
+  const gridBody  = document.getElementById("gridBody");
+  const rowTmpl   = document.getElementById("rowTmpl");
+
+  const etagBadge = document.getElementById("etagBadge");
+  const statusEl  = document.getElementById("status");
+  const alertEl   = document.getElementById("alert");
+
+  const versionEl   = document.getElementById("version");
+  const updatedAtEl = document.getElementById("updatedAt");
+  const countEl     = document.getElementById("count");
+
+  /* ====== 状態 ====== */
+  let currentCatalog = { version: 1, updatedAt: "", clients: [] };
+  let currentETag = "";
+  let statusTimer = null;
+
+  /* ====== ユーティリティ ====== */
+  function setStatus(msg = "", kind = "ok", durationMs = 2500) {
+    clearTimeout(statusTimer);
+    statusEl.textContent = msg || "";
+    statusEl.className = kind; // .ok / .error / .muted など CSS があれば色付け
+    if (msg) {
+      statusTimer = setTimeout(() => {
+        statusEl.textContent = "";
+        statusEl.className = "";
+      }, durationMs);
+    }
+  }
+  function showAlert(msg) {
+    alertEl.textContent = msg;
+    alertEl.hidden = false;
+  }
+  function clearAlert() {
+    alertEl.hidden = true;
+    alertEl.textContent = "";
+  }
+
+  function normalizeBehavior(viewValue) {
+    const v = String(viewValue || "").toUpperCase();
+    if (v === "TYPE-R" || v === "R") return "R";
+    if (v === "TYPE-S" || v === "S") return "S";
+    return ""; // BASE
+  }
+  function viewBehavior(model) {
+    if (!model) return "BASE";
+    if (model === "R") return "TYPE-R";
+    if (model === "S") return "TYPE-S";
+    return "BASE";
+  }
+  function extractSheetId(input) {
+    const v = (input || "").trim();
+    if (!v) return "";
+    const m = v.match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]{10,})/);
+    if (m) return m[1];
+    const m2 = v.match(/[?&]id=([a-zA-Z0-9-_]{10,})/);
+    if (m2) return m2[1];
+    return /^[a-zA-Z0-9-_]{10,}$/.test(v) ? v : "";
+  }
+  function findDuplicateCodes(codes) {
+    const seen = new Set();
+    const dup = [];
+    for (const c of codes) {
+      if (seen.has(c)) dup.push(c);
+      else seen.add(c);
+    }
+    return dup;
+  }
+  function randBase36(n = 3) {
+    // 0-9A-Z
+    const chars = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+    return Array.from({ length: n }, () => chars[Math.floor(Math.random() * chars.length)]).join("");
+  }
+  function issueNewClientCode(existingSet, basePrefix = "B") {
+    // 先頭1字 + 3桁（英数字）= 4桁
+    for (let i = 0; i < 200; i++) {
+      const code = (basePrefix + randBase36(3)).slice(0, 4).toUpperCase();
+      if (!existingSet.has(code)) return code;
+    }
+    // 念のためフォールバック
+    return (basePrefix + Date.now().toString(36).slice(-3)).slice(0, 4).toUpperCase();
+  }
+
+  /* ====== API ラッパ（BLOBのJSONを素のまま読み書き） ====== */
   const api = {
-    load: async () => {
-      const base = apiBaseEl.value.trim().replace(/\/+$/,'');
-      const url = `${base}/LoadClientCatalog?filename=${encodeURIComponent(FILE)}`;
-      const res = await fetch(url, { method: 'GET', cache: 'no-cache' });
-      if (!res.ok) {
-        const t = await res.text().catch(()=> '');
-        throw new Error(`Load 失敗: HTTP ${res.status} ${t || ''}`);
-      }
-      currentETag = res.headers.get('ETag') || '';
-      etagBadge.textContent = currentETag || '';
-      const text = await res.text();
-      return text ? JSON.parse(text) : { version: 1, updatedAt: '', clients: [] };
+    get base() {
+      return (apiBaseEl.value || "").replace(/\/+$/, "");
     },
-    save: async (catalog) => {
-      const base = apiBaseEl.value.trim().replace(/\/+$/,'');
-      const res  = await fetch(`${base}/SaveClientCatalog`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ filename: FILE, etag: currentETag, catalog })
+    async ping() {
+      // 軽い GET を投げる（LoadClientCatalog の 404 回避のため filename 同じに）
+      const url = `${this.base}/LoadClientCatalog?filename=${encodeURIComponent(FILENAME)}`;
+      return fetch(url, { method: "GET", cache: "no-cache" });
+    },
+    async load() {
+      const url = `${this.base}/LoadClientCatalog?filename=${encodeURIComponent(FILENAME)}`;
+      const res = await fetch(url, { method: "GET", cache: "no-cache" });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      currentETag = res.headers.get("etag") || "";
+      etagBadge.textContent = currentETag ? `ETag: ${currentETag}` : "";
+      const data = await res.json();
+      // 期待する形: { version, updatedAt, clients:[{code,name,behavior,spreadsheetId,createdAt}, ...] }
+      if (!Array.isArray(data?.clients)) throw new Error("Invalid catalog format");
+      return data;
+    },
+    async save(catalog) {
+      // サーバ側の SaveClientCatalog は “素の JSON を保存” する想定
+      // 互換性のため text も併送（サーバ側が string を期待していても通る）
+      const url = `${this.base}/SaveClientCatalog`;
+      const payload = {
+        filename: FILENAME,
+        json: catalog,                   // ← オブジェクト
+        text: JSON.stringify(catalog),   // ← 文字列（両対応）
+        etag: currentETag || undefined   // ← If-Match 的に使うなら
+      };
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json; charset=utf-8" },
+        body: JSON.stringify(payload)
       });
-
-      const text = await res.text().catch(()=> '');
-      if (res.status === 409) {
-        let e = {};
-        try { e = JSON.parse(text || '{}'); } catch {}
-        throw new Error(e.error || 'ETag 競合。再読み込みしてください。');
-      }
       if (!res.ok) {
-        let e = {};
-        try { e = JSON.parse(text || '{}'); } catch {}
-        throw new Error(e.error || `HTTP ${res.status}`);
+        const t = await res.text().catch(() => "");
+        throw new Error(`HTTP ${res.status} ${t}`);
       }
-      const json = text ? JSON.parse(text) : { ok: true };
-      const newTag = res.headers.get('ETag') || json.etag || '';
-      if (newTag) {
-        currentETag = newTag;
-        etagBadge.textContent = currentETag;
+      // 新しい ETag が返ることを期待（なくても可）
+      try {
+        const js = await res.json();
+        currentETag = js?.etag || currentETag;
+        if (currentETag) etagBadge.textContent = `ETag: ${currentETag}`;
+      } catch {
+        // ignore
       }
-      return json;
+      return true;
     }
   };
 
-  // ---- 行テンプレ作成 ----
-  function createRow(item = {}) {
+  /* ====== テーブル行の生成・操作 ====== */
+  function addRow(data = {}) {
     const tr = rowTmpl.content.firstElementChild.cloneNode(true);
-    const codeEl = tr.querySelector('.code');
-    const nameEl = tr.querySelector('.name');
-    const behaviorEl = tr.querySelector('.behavior');
-    const sheetEl = tr.querySelector('.sheet');
-    const createdEl = tr.querySelector('.created');
 
-    codeEl.value = item.code || '';
-    nameEl.value = item.name || '';
-    behaviorEl.value = normalizeBehavior(item.behavior);
-    sheetEl.value = item.spreadsheetId || item.sheetId || '';
-    createdEl.value = item.createdAt || '';
+    const codeEl     = tr.querySelector(".code");
+    const nameEl     = tr.querySelector(".name");
+    const behaviorEl = tr.querySelector(".behavior");
+    const sheetEl    = tr.querySelector(".sheet");
+    const createdEl  = tr.querySelector(".created");
+    const delBtn     = tr.querySelector(".delBtn");
 
-    // 削除
-    tr.querySelector('.delBtn').addEventListener('click', () => {
-      tr.remove();
-      syncMeta();
+    codeEl.value     = (data.code || "").toUpperCase();
+    nameEl.value     = data.name || "";
+    behaviorEl.value = viewBehavior(data.behavior || "");
+    sheetEl.value    = data.spreadsheetId || data.sheetId || data.sheet || "";
+    createdEl.value  = data.createdAt || "";
+
+    delBtn.addEventListener("click", () => tr.remove());
+
+    // 行を複製する（新コード発番）
+    const cloneBtn = document.createElement("button");
+    cloneBtn.className = "btn tiny ghost";
+    cloneBtn.textContent = "複製";
+    cloneBtn.title = "この行を複製して新しいコードを発番";
+    cloneBtn.addEventListener("click", () => {
+      const existCodes = new Set(
+        [...gridBody.querySelectorAll("tr .code")].map((i) => i.value.trim().toUpperCase()).filter(Boolean)
+      );
+      const newCode = issueNewClientCode(existCodes, (codeEl.value || "B")[0]);
+      const newRow = addRow({
+        code: newCode,
+        name: nameEl.value,
+        behavior: normalizeBehavior(behaviorEl.value),
+        spreadsheetId: extractSheetId(sheetEl.value) || sheetEl.value,
+        createdAt: createdEl.value
+      });
+      // スクロールして見せる
+      newRow.scrollIntoView({ behavior: "smooth", block: "center" });
+      newRow.querySelector(".code").focus();
     });
 
+    tr.querySelector(".ops").prepend(cloneBtn);
+    gridBody.appendChild(tr);
     return tr;
   }
 
-  // ---- UI <-> カタログ 変換 ----
-  function uiToCatalog() {
-    const rows = [...gridBody.querySelectorAll('tr')];
-    const clients = rows.map(tr => {
-      const code = tr.querySelector('.code').value.trim().toUpperCase();
-      const name = tr.querySelector('.name').value.trim();
-      const behavior = normalizeBehavior(tr.querySelector('.behavior').value);
-      const sheet = extractSheetId(tr.querySelector('.sheet').value);
-      const createdAt = tr.querySelector('.created').value.trim();
-      return { code, name, behavior, spreadsheetId: sheet, createdAt };
-    }).filter(x => x.code);
+  function catalogToUI(catalog) {
+    gridBody.innerHTML = "";
+    const list = Array.isArray(catalog?.clients) ? catalog.clients : [];
+    list.forEach((c) => addRow(c));
+    versionEl.textContent = String(catalog.version ?? "");
+    updatedAtEl.textContent = String(catalog.updatedAt ?? "");
+    countEl.textContent = String(list.length);
+  }
 
-    // 重複コードチェック
-    const dup = findDuplicateCodes(clients.map(c => c.code));
-    if (dup.length) {
-      throw new Error(`クライアントコードが重複しています: ${dup.join(', ')}`);
-    }
+  function uiToCatalog() {
+    const rows = [...gridBody.querySelectorAll("tr")];
+    const clients = rows.map((tr, idx) => {
+      const codeEl     = tr.querySelector(".code");
+      const nameEl     = tr.querySelector(".name");
+      const behaviorEl = tr.querySelector(".behavior");
+      const sheetEl    = tr.querySelector(".sheet");
+      const createdEl  = tr.querySelector(".created");
+
+      const code = codeEl.value.trim().toUpperCase();
+      const name = nameEl.value.trim();
+      const behavior = normalizeBehavior(behaviorEl.value);
+      const inputSheet = sheetEl.value.trim();
+      const sheet = extractSheetId(inputSheet) || inputSheet;
+
+      // Spreadsheet 未入力はエラー
+      if (!sheet) {
+        sheetEl.classList.add("invalid");
+        sheetEl.focus();
+        throw new Error(`行${idx + 1}: 「Spreadsheet ID / URL」は必須です`);
+      } else {
+        sheetEl.classList.remove("invalid");
+      }
+
+      return { code, name, behavior, spreadsheetId: sheet, createdAt: createdEl.value.trim() };
+    }).filter((c) => c.code);
+
+    // コード重複チェック
+    const dup = findDuplicateCodes(clients.map((c) => c.code));
+    if (dup.length) throw new Error(`クライアントコードが重複しています: ${dup.join(", ")}`);
 
     return {
       version: Number(currentCatalog.version) || 1,
@@ -126,189 +255,114 @@
     };
   }
 
-  function catalogToUI(catalog) {
-    gridBody.innerHTML = '';
-    const list = Array.isArray(catalog.clients) ? catalog.clients : [];
-    list.forEach(c => gridBody.appendChild(createRow(c)));
-    versionEl.textContent = String(catalog.version ?? 1);
-    updatedEl.textContent = catalog.updatedAt || '-';
-    countEl.textContent = String(list.length);
-  }
-
-  function syncMeta() {
-    countEl.textContent = String(gridBody.querySelectorAll('tr').length);
-  }
-
-  // ---- ユーティリティ ----
-  function normalizeBehavior(b) {
-    const v = String(b || '').toUpperCase();
-    if (v === 'R' || v === 'TYPE-R') return 'R';
-    if (v === 'S' || v === 'TYPE-S') return 'S';
-    return ''; // BASE
-  }
-  function extractSheetId(input) {
-    const v = (input || '').trim();
-    if (!v) return '';
-    const m = v.match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]{10,})/);
-    if (m) return m[1];
-    const m2 = v.match(/[?&]id=([a-zA-Z0-9-_]{10,})/);
-    if (m2) return m2[1];
-    return /^[a-zA-Z0-9-_]{10,}$/.test(v) ? v : v; // URL そのままでも許容（保存側ではそのまま保持）
-  }
-  function findDuplicateCodes(arr) {
-    const seen = new Set();
-    const dup = new Set();
-    for (const c of arr) {
-      if (seen.has(c)) dup.add(c);
-      seen.add(c);
-    }
-    return [...dup];
-  }
-
-  // 一意な 4桁英数コード（先頭アルファ + 3桁 base36）
-  function issueUniqueCode(prefix = 'B') {
-    const used = new Set(
-      [...gridBody.querySelectorAll('.code')].map(i => i.value.trim().toUpperCase())
-    );
-    for (let i = 0; i < 10000; i++) {
-      const n = (Math.floor(Math.random() * 46656)).toString(36).toUpperCase().padStart(3, '0');
-      const code = `${prefix}${n}`.slice(0, 4);
-      if (!used.has(code)) return code;
-    }
-    // フォールバック
-    return `${prefix}${Date.now().toString(36).toUpperCase().slice(-3)}`.slice(0, 4);
-  }
-
-  function showAlert(msg, kind = 'error') {
-    alertEl.hidden = false;
-    alertEl.textContent = msg;
-    alertEl.className = `alert ${kind}`;
-    setTimeout(() => { alertEl.hidden = true; }, 4000);
-  }
-
-  // ---- ボタン挙動 ----
-  devPresetBtn.addEventListener('click', () => {
-    apiBaseEl.value = PRESET.dev;
-    devPresetBtn.classList.add('active');
-    prodPresetBtn.classList.remove('active');
+  /* ====== ボタン操作 ====== */
+  devPresetBtn.addEventListener("click", () => {
+    apiBaseEl.value = DEV_BASE;
+    devPresetBtn.classList.add("active");
+    prodPresetBtn.classList.remove("active");
   });
-  prodPresetBtn.addEventListener('click', () => {
-    apiBaseEl.value = PRESET.prod;
-    prodPresetBtn.classList.add('active');
-    devPresetBtn.classList.remove('active');
+  prodPresetBtn.addEventListener("click", () => {
+    apiBaseEl.value = PROD_BASE;
+    prodPresetBtn.classList.add("active");
+    devPresetBtn.classList.remove("active");
   });
 
-  pingBtn.addEventListener('click', async () => {
-    pingState.textContent = '確認中…';
+  pingBtn.addEventListener("click", async () => {
+    pingStateEl.textContent = "疎通中…";
     try {
-      const base = apiBaseEl.value.trim().replace(/\/+$/,'');
-      const url = `${base}/LoadClientCatalog?filename=${encodeURIComponent(FILE)}`;
-      const res = await fetch(url, { method:'HEAD' }).catch(()=>null);
-      pingState.textContent = res && (res.ok || res.status === 404) ? 'OK' : 'NG';
-    } catch {
-      pingState.textContent = 'NG';
+      const r = await api.ping();
+      pingStateEl.textContent = r.ok ? "疎通 OK" : `NG (${r.status})`;
+    } catch (e) {
+      pingStateEl.textContent = `NG (${e.message || e})`;
     }
+    setTimeout(() => (pingStateEl.textContent = ""), 2500);
   });
 
-  loadBtn.addEventListener('click', async () => {
+  loadBtn.addEventListener("click", async () => {
     await doLoad();
   });
 
-  saveBtn.addEventListener('click', async () => {
+  saveBtn.addEventListener("click", async () => {
+    clearAlert();
     try {
-      const catalog = uiToCatalog();
-      statusEl.textContent = '保存中…';
-      const res = await api.save(catalog);
+      const catalog = uiToCatalog(); // ここで必須チェック＆重複チェック
+      setStatus("保存中…", "muted", 60000);
+      await api.save(catalog);
       currentCatalog = { ...catalog };
-      statusEl.textContent = '保存しました';
-      updatedEl.textContent = catalog.updatedAt || '-';
+      versionEl.textContent = String(currentCatalog.version);
+      updatedAtEl.textContent = String(currentCatalog.updatedAt);
+      countEl.textContent = String(currentCatalog.clients.length);
+      setStatus("保存しました", "ok");
     } catch (e) {
       showAlert(`保存に失敗しました： ${e.message || e}`);
-      statusEl.textContent = '';
+      setStatus("", "");
     }
   });
 
-  addRowBtn.addEventListener('click', () => {
-    const tr = createRow({
-      code: issueUniqueCode(),
-      name: '',
-      behavior: '',
-      spreadsheetId: '',
-      createdAt: new Date().toISOString().slice(0,10)
-    });
-    gridBody.prepend(tr);
-    syncMeta();
-  });
+  addRowBtn.addEventListener("click", () => addRow({ createdAt: new Date().toISOString().slice(0, 10) }));
 
-  exportBtn.addEventListener('click', () => {
+  exportBtn.addEventListener("click", () => {
     try {
       const catalog = uiToCatalog();
-      const blob = new Blob([JSON.stringify(catalog, null, 2)], { type: 'application/json' });
-      const a = document.createElement('a');
+      const blob = new Blob([JSON.stringify(catalog, null, 2)], { type: "application/json" });
+      const a = document.createElement("a");
       a.href = URL.createObjectURL(blob);
-      a.download = FILE;
+      a.download = FILENAME;
       a.click();
       URL.revokeObjectURL(a.href);
     } catch (e) {
-      showAlert(`JSON出力に失敗： ${e.message || e}`);
+      showAlert(`JSON出力に失敗しました： ${e.message || e}`);
     }
   });
 
-  importFile.addEventListener('change', async (e) => {
-    const f = e.target.files?.[0];
-    if (!f) return;
+  importFile.addEventListener("change", async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
     try {
-      const text = await f.text();
+      const text = await file.text();
       const json = JSON.parse(text);
       currentCatalog = json;
       catalogToUI(json);
-      currentETag = ''; // 手取り込みは ETag 破棄（次保存で取得し直す）
-      etagBadge.textContent = '';
+      setStatus("取込完了", "ok");
     } catch (err) {
-      showAlert('JSONの読み込みに失敗しました');
+      showAlert("JSONの読み込みに失敗しました。");
     } finally {
-      importFile.value = '';
+      importFile.value = "";
     }
   });
 
-  // ---- 行の複製（新しいコードを自動発番） ----
-  gridBody.addEventListener('click', (e) => {
-    const btn = e.target.closest('.btn.dupBtn');
-    if (!btn) return;
-    const tr = btn.closest('tr');
-    if (!tr) return;
-
-    const item = {
-      code: issueUniqueCode(),
-      name: tr.querySelector('.name').value,
-      behavior: normalizeBehavior(tr.querySelector('.behavior').value),
-      spreadsheetId: tr.querySelector('.sheet').value,
-      createdAt: new Date().toISOString().slice(0,10)
-    };
-    const newRow = createRow(item);
-    tr.after(newRow);
-    syncMeta();
-  });
-
-  // ---- 初期化：色・プリセット・自動ロード ----
-  (function initOnce() {
-    // 初期色（薄緑系）は CSS 側で定義済み前提
-    apiBaseEl.value = PRESET.dev;
-    devPresetBtn.classList.add('active');
-    doLoad().catch(()=>{});
-  })();
-
-  // ---- ロード共通処理 ----
+  /* ====== 読み込み本体 ====== */
   async function doLoad() {
-    statusEl.textContent = '読込中…';
+    clearAlert();
+    setStatus("読込中…", "muted", 60000);
     try {
       const json = await api.load();
       currentCatalog = json;
       catalogToUI(json);
-      statusEl.textContent = '読込完了';
+      setStatus("読込完了", "ok");
     } catch (e) {
       showAlert(`読込に失敗しました： ${e.message || e}`);
-      statusEl.textContent = '';
+      setStatus("", "");
     }
   }
+
+  /* ====== 初期化：デフォは DEV をセットして自動ロード ====== */
+  document.addEventListener("DOMContentLoaded", async () => {
+    // 直近で使いやすいよう DEV を初期値に
+    devPresetBtn.click();
+    // 自動ロード
+    await doLoad();
+
+    // グリッド内の Enter で次セルへ移動（使い勝手向上）
+    gridBody.addEventListener("keydown", (e) => {
+      if (e.key !== "Enter") return;
+      const inputs = [...gridBody.querySelectorAll("input,select")];
+      const idx = inputs.indexOf(e.target);
+      if (idx >= 0) {
+        e.preventDefault();
+        const next = inputs[idx + 1] || inputs[0];
+        next.focus();
+      }
+    });
+  });
 })();
