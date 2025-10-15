@@ -1,28 +1,28 @@
 /* =========================================================
- * Client Catalog Editor – buttons balanced version
+ * Client Catalog Editor – layout fix + auto-load
  * ========================================================= */
-const DEV_API = "https://func-texel-api-dev-jpe-001-b2f6fec8fzcbdrc3.japaneast-01.azurewebsites.net/api/";
+const DEV_API  = "https://func-texel-api-dev-jpe-001-b2f6fec8fzcbdrc3.japaneast-01.azurewebsites.net/api/";
 const PROD_API = "https://func-texel-api-prod-jpe-001-dsgfhtafbfbxawdz.japaneast-01.azurewebsites.net/api/";
 const FILENAME = "texel-client-catalog.json";
 
 const els = {
-  apiBase: document.getElementById("apiBase"),
-  load: document.getElementById("loadBtn"),
-  save: document.getElementById("saveBtn"),
-  addRow: document.getElementById("addRowBtn"),
-  export: document.getElementById("exportBtn"),
-  import: document.getElementById("importFile"),
-  gridBody: document.getElementById("gridBody"),
-  etag: document.getElementById("etagBadge"),
-  status: document.getElementById("status"),
-  alert: document.getElementById("alert"),
-  dev: document.getElementById("devPreset"),
-  prod: document.getElementById("prodPreset"),
-  pingBtn: document.getElementById("pingBtn"),
+  apiBase:   document.getElementById("apiBase"),
+  load:      document.getElementById("loadBtn"),
+  save:      document.getElementById("saveBtn"),
+  addRow:    document.getElementById("addRowBtn"),
+  export:    document.getElementById("exportBtn"),
+  import:    document.getElementById("importFile"),
+  gridBody:  document.getElementById("gridBody"),
+  etag:      document.getElementById("etagBadge"),
+  status:    document.getElementById("status"),
+  alert:     document.getElementById("alert"),
+  dev:       document.getElementById("devPreset"),
+  prod:      document.getElementById("prodPreset"),
+  pingBtn:   document.getElementById("pingBtn"),
   pingState: document.getElementById("pingState"),
-  version: document.getElementById("version"),
+  version:   document.getElementById("version"),
   updatedAt: document.getElementById("updatedAt"),
-  count: document.getElementById("count"),
+  count:     document.getElementById("count"),
 };
 
 const rowTmpl = document.getElementById("rowTmpl");
@@ -34,7 +34,7 @@ const showAlert = (msg, type="ok")=>{
   els.alert.style.background = type==="error" ? "var(--danger-weak)" : "var(--primary-weak)";
   els.alert.style.color = type==="error" ? "var(--danger)" : "#0d5f3a";
   clearTimeout(showAlert._t);
-  showAlert._t = setTimeout(()=>{ els.alert.hidden = true; }, 3000);
+  showAlert._t = setTimeout(()=>{ els.alert.hidden = true; }, 1800);
 };
 const setStatus = (txt="")=>{ els.status.textContent = txt; };
 
@@ -50,18 +50,15 @@ const extractSheetId = (input)=>{
 
 function makeRow(item = {code:"",name:"",behavior:"BASE",spreadsheetId:"",createdAt:""}) {
   const tr = rowTmpl.content.firstElementChild.cloneNode(true);
-  tr.querySelector(".code").value = item.code || "";
-  tr.querySelector(".name").value = item.name || "";
+  tr.querySelector(".code").value  = item.code || "";
+  tr.querySelector(".name").value  = item.name || "";
   tr.querySelector(".behavior").value = normalizeBehavior(item.behavior);
   tr.querySelector(".sheet").value = item.spreadsheetId || "";
   tr.querySelector(".created").value = item.createdAt || "";
   return tr;
 }
-const normalizeBehavior = (b)=>{
-  const v = String(b||"").toUpperCase();
-  return v==="R" ? "TYPE-R" : v==="S" ? "TYPE-S" : "BASE";
-};
-const behaviorToPayload = (v)=> v==="TYPE-R" ? "R" : v==="TYPE-S" ? "S" : "";
+const normalizeBehavior   = (b)=> (String(b||"").toUpperCase()==="R" ? "TYPE-R" : String(b||"").toUpperCase()==="S" ? "TYPE-S" : "BASE");
+const behaviorToPayload   = (v)=> v==="TYPE-R" ? "R" : v==="TYPE-S" ? "S" : "";
 
 /* ---------- load / render ---------- */
 async function loadCatalog() {
@@ -71,7 +68,7 @@ async function loadCatalog() {
     const url = join(els.apiBase.value, "LoadClientCatalog") + `?filename=${encodeURIComponent(FILENAME)}`;
     const res = await fetch(url, { cache: "no-cache" });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    // 返却は JSON そのもの or JSON.stringify済の両対応
+
     const ctype = (res.headers.get("content-type")||"").toLowerCase();
     const raw = ctype.includes("application/json") ? await res.json() : JSON.parse(await res.text());
     const clients = Array.isArray(raw?.clients) ? raw.clients : [];
@@ -85,11 +82,11 @@ async function loadCatalog() {
         createdAt: c.createdAt || ""
       }));
     }
-    els.version.textContent = String(raw?.version ?? 1);
-    els.updatedAt.textContent = raw?.updatedAt || "-";
-    els.count.textContent = String(clients.length);
-    els.etag.dataset.etag = raw?.etag || "";
-    els.etag.textContent = raw?.etag ? `ETag: ${raw.etag}` : "";
+    els.version.textContent  = String(raw?.version ?? 1);
+    els.updatedAt.textContent= raw?.updatedAt || "-";
+    els.count.textContent    = String(clients.length);
+    els.etag.dataset.etag    = raw?.etag || "";
+    els.etag.textContent     = raw?.etag ? `ETag: ${raw.etag}` : "";
 
     showAlert("読み込み完了", "ok");
   }catch(e){
@@ -104,7 +101,6 @@ function addRow(){ els.gridBody.appendChild(makeRow()); }
 
 /* ---------- save ---------- */
 async function saveCatalog(){
-  // 収集
   const rows = [...els.gridBody.querySelectorAll("tr")];
   const seen = new Set();
   const clients = [];
@@ -135,19 +131,14 @@ async function saveCatalog(){
   setStatus("保存中…");
   try{
     const url = join(els.apiBase.value, "SaveClientCatalog");
-    const res = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type":"application/json; charset=utf-8" },
-      body: JSON.stringify(body)
-    });
+    const res = await fetch(url, { method:"POST", headers:{ "Content-Type":"application/json; charset=utf-8" }, body: JSON.stringify(body) });
     const text = await res.text();
-    let json = {};
-    try{ json = text ? JSON.parse(text) : {}; }catch{ /* noop */ }
+    let json = {}; try{ json = text ? JSON.parse(text) : {}; }catch{}
 
     if (!res.ok) throw new Error(json?.error || `HTTP ${res.status}`);
 
     els.updatedAt.textContent = catalog.updatedAt;
-    els.count.textContent = String(clients.length);
+    els.count.textContent     = String(clients.length);
     if (json?.etag){ els.etag.dataset.etag = json.etag; els.etag.textContent = `ETag: ${json.etag}`; }
     showAlert("保存完了", "ok");
   }catch(e){
@@ -157,7 +148,7 @@ async function saveCatalog(){
   }
 }
 
-/* ---------- duplicate / delete (event delegation) ---------- */
+/* ---------- duplicate / delete ---------- */
 els.gridBody.addEventListener("click", (e)=>{
   const tr = e.target.closest("tr");
   if (!tr) return;
@@ -169,7 +160,6 @@ els.gridBody.addEventListener("click", (e)=>{
   }
   if (e.target.classList.contains("btn-dup")) {
     const copy = tr.cloneNode(true);
-    // 新しいコードを発番（A000〜Z999のランダム）
     copy.querySelector(".code").value = issueNewCode();
     els.gridBody.insertBefore(copy, tr.nextSibling);
     els.count.textContent = String(els.gridBody.querySelectorAll("tr").length);
@@ -183,13 +173,12 @@ function issueNewCode(){
     const code = alph[Math.floor(Math.random()*alph.length)] + String(Math.floor(Math.random()*1000)).padStart(3,"0");
     if (!used.has(code)) return code;
   }
-  // フォールバック
   return "A001";
 }
 
 /* ---------- presets / ping ---------- */
-els.dev.addEventListener("click", ()=>{ els.apiBase.value = DEV_API; showAlert("DEVに切替", "ok"); });
-els.prod.addEventListener("click", ()=>{ els.apiBase.value = PROD_API; showAlert("PRODに切替", "ok"); });
+els.dev .addEventListener("click", ()=>{ els.apiBase.value = DEV_API;  showAlert("DEVに切替","ok"); });
+els.prod.addEventListener("click", ()=>{ els.apiBase.value = PROD_API; showAlert("PRODに切替","ok"); });
 
 document.getElementById("loadBtn").addEventListener("click", loadCatalog);
 document.getElementById("saveBtn").addEventListener("click", saveCatalog);
@@ -208,7 +197,11 @@ function join(base, path){
   return (base||"").replace(/\/+$/,"") + "/" + String(path||"").replace(/^\/+/,"");
 }
 
-/* 初期値 */
-window.addEventListener("DOMContentLoaded", ()=>{
+/* ===== 起動時の自動読込 =====
+   - API Base が未入力なら DEV をデフォルトに
+   - ページ表示後ただちに client-catalog を読込む
+*/
+window.addEventListener("DOMContentLoaded", async ()=>{
   if (!els.apiBase.value) els.apiBase.value = DEV_API;
+  try { await loadCatalog(); } catch {}
 });
