@@ -18,7 +18,6 @@
       <button id="pingBtn" class="btn ghost">疎通</button>
       <span id="pingState" class="muted"></span>
     </div>
-
     <div class="row gap">
       <button id="loadBtn" class="btn">読込</button>
       <button id="saveBtn" class="btn primary">保存</button>
@@ -27,16 +26,14 @@
       <label class="fileLabel btn ghost">
         JSON取込<input id="importFile" type="file" accept="application/json" hidden />
       </label>
-      <span id="etagBadge" class="badge"></span>
+      <span id="etagBadge" class="badge" title="ETag"></span>
       <span id="status" class="muted"></span>
     </div>
-
     <div class="meta">
       <span>version: <span id="version">-</span></span>
       <span>updatedAt: <span id="updatedAt">-</span></span>
       <span>件数: <span id="count">0</span></span>
     </div>
-
     <div id="alert" class="alert" hidden></div>
   </header>
 
@@ -46,32 +43,33 @@
         <tr>
           <th style="width:160px">コード（4桁英数）</th>
           <th>名称</th>
-          <th style="width:110px">挙動</th>
+          <th style="width:120px">挙動</th>
           <th>Spreadsheet ID / URL</th>
           <th style="width:140px">作成日</th>
-          <th style="width:120px">操作</th>
+          <th style="width:128px">操作</th>
         </tr>
       </thead>
       <tbody id="gridBody"></tbody>
     </table>
   </main>
 
+  <!-- 行テンプレート -->
   <template id="rowTmpl">
     <tr>
       <td><input class="cell code" placeholder="B001" /></td>
       <td><input class="cell name" placeholder="○○不動産" /></td>
       <td>
         <select class="cell behavior">
-          <option value="">BASE</option>
-          <option value="R">TYPE-R</option>
-          <option value="S">TYPE-S</option>
+          <option value="BASE">BASE</option>
+          <option value="TYPE-R">TYPE-R</option>
+          <option value="TYPE-S">TYPE-S</option>
         </select>
       </td>
       <td><input class="cell sheet" placeholder="Spreadsheet ID または URL" /></td>
       <td><input class="cell created" placeholder="YYYY-MM-DD" /></td>
       <td class="ops">
-        <button class="btn tiny dupBtn">複製</button>
-        <button class="btn tiny danger delBtn">削除</button>
+        <button class="btn sm outline btn-dup" title="複製">複製</button>
+        <button class="btn sm danger btn-del" title="削除">削除</button>
       </td>
     </tr>
   </template>
