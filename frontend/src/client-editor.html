@@ -24,10 +24,9 @@
       <button id="saveBtn" class="btn primary">保存</button>
       <button id="addRowBtn" class="btn ghost">行を追加</button>
       <button id="exportBtn" class="btn ghost">JSON出力</button>
-
-      <button id="importBtn" class="btn ghost">JSON取込</button>
-      <input id="importFile" type="file" accept="application/json" hidden />
-
+      <label class="fileLabel btn ghost">
+        JSON取込<input id="importFile" type="file" accept="application/json" hidden />
+      </label>
       <span id="etagBadge" class="badge"></span>
       <span id="status" class="muted"></span>
     </div>
@@ -37,6 +36,7 @@
       <span>updatedAt: <span id="updatedAt">-</span></span>
       <span>件数: <span id="count">0</span></span>
     </div>
+
     <div id="alert" class="alert" hidden></div>
   </header>
 
@@ -45,8 +45,8 @@
       <thead>
         <tr>
           <th style="width:160px">コード（4桁英数）</th>
-          <th style="width:280px">名称</th>
-          <th style="width:120px">挙動</th>
+          <th>名称</th>
+          <th style="width:110px">挙動</th>
           <th>Spreadsheet ID / URL</th>
           <th style="width:140px">作成日</th>
           <th style="width:120px">操作</th>
@@ -70,7 +70,7 @@
       <td><input class="cell sheet" placeholder="Spreadsheet ID または URL" /></td>
       <td><input class="cell created" placeholder="YYYY-MM-DD" /></td>
       <td class="ops">
-        <button class="btn tiny ghost dupBtn">複製</button>
+        <button class="btn tiny dupBtn">複製</button>
         <button class="btn tiny danger delBtn">削除</button>
       </td>
     </tr>
