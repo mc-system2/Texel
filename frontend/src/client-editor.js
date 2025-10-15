@@ -28,6 +28,10 @@ const els = {
 const rowTmpl = document.getElementById("rowTmpl");
 
 /* ---------- helpers ---------- */
+function updateEnvActive(which){
+  els.dev.classList.toggle("is-active", which === "dev");
+  els.prod.classList.toggle("is-active", which === "prod");
+}
 const showAlert = (msg, type="ok")=>{
   els.alert.hidden = false;
   els.alert.textContent = msg;
@@ -57,8 +61,11 @@ function makeRow(item = {code:"",name:"",behavior:"BASE",spreadsheetId:"",create
   tr.querySelector(".created").value = item.createdAt || "";
   return tr;
 }
-const normalizeBehavior   = (b)=> (String(b||"").toUpperCase()==="R" ? "TYPE-R" : String(b||"").toUpperCase()==="S" ? "TYPE-S" : "BASE");
-const behaviorToPayload   = (v)=> v==="TYPE-R" ? "R" : v==="TYPE-S" ? "S" : "";
+const normalizeBehavior = (b)=>{
+  const v = String(b||"").toUpperCase();
+  return v==="R" ? "TYPE-R" : v==="S" ? "TYPE-S" : "BASE";
+};
+const behaviorToPayload = (v)=> v==="TYPE-R" ? "R" : v==="TYPE-S" ? "S" : "";
 
 /* ---------- load / render ---------- */
 async function loadCatalog() {
@@ -82,11 +89,11 @@ async function loadCatalog() {
         createdAt: c.createdAt || ""
       }));
     }
-    els.version.textContent  = String(raw?.version ?? 1);
-    els.updatedAt.textContent= raw?.updatedAt || "-";
-    els.count.textContent    = String(clients.length);
-    els.etag.dataset.etag    = raw?.etag || "";
-    els.etag.textContent     = raw?.etag ? `ETag: ${raw.etag}` : "";
+    els.version.textContent   = String(raw?.version ?? 1);
+    els.updatedAt.textContent = raw?.updatedAt || "-";
+    els.count.textContent     = String(clients.length);
+    els.etag.dataset.etag     = raw?.etag || "";
+    els.etag.textContent      = raw?.etag ? `ETag: ${raw.etag}` : "";
 
     showAlert("読み込み完了", "ok");
   }catch(e){
@@ -114,15 +121,12 @@ async function saveCatalog(){
 
     if (!/^[A-Z0-9]{4}$/.test(code)){ showAlert(`コードが不正です: ${code}`, "error"); return; }
     if (seen.has(code)){ showAlert(`コードが重複しています: ${code}`, "error"); return; }
+
     const spreadsheetId = extractSheetId(sheetInput);
     if (!spreadsheetId){ showAlert(`Spreadsheet ID が空です（${code}）`, "error"); return; }
 
     seen.add(code);
-    clients.push({
-      code, name,
-      behavior: behaviorToPayload(behaviorView),
-      spreadsheetId, createdAt
-    });
+    clients.push({ code, name, behavior: behaviorToPayload(behaviorView), spreadsheetId, createdAt });
   }
 
   const catalog = { version:1, updatedAt:new Date().toISOString(), clients };
@@ -131,7 +135,11 @@ async function saveCatalog(){
   setStatus("保存中…");
   try{
     const url = join(els.apiBase.value, "SaveClientCatalog");
-    const res = await fetch(url, { method:"POST", headers:{ "Content-Type":"application/json; charset=utf-8" }, body: JSON.stringify(body) });
+    const res = await fetch(url, {
+      method:"POST",
+      headers:{ "Content-Type":"application/json; charset=utf-8" },
+      body: JSON.stringify(body)
+    });
     const text = await res.text();
     let json = {}; try{ json = text ? JSON.parse(text) : {}; }catch{}
 
@@ -177,12 +185,20 @@ function issueNewCode(){
 }
 
 /* ---------- presets / ping ---------- */
-els.dev .addEventListener("click", ()=>{ els.apiBase.value = DEV_API;  showAlert("DEVに切替","ok"); });
-els.prod.addEventListener("click", ()=>{ els.apiBase.value = PROD_API; showAlert("PRODに切替","ok"); });
+els.dev.addEventListener("click", ()=>{
+  els.apiBase.value = DEV_API;
+  updateEnvActive("dev");
+  showAlert("DEVに切替","ok");
+});
+els.prod.addEventListener("click", ()=>{
+  els.apiBase.value = PROD_API;
+  updateEnvActive("prod");
+  showAlert("PRODに切替","ok");
+});
 
-document.getElementById("loadBtn").addEventListener("click", loadCatalog);
-document.getElementById("saveBtn").addEventListener("click", saveCatalog);
-document.getElementById("addRowBtn").addEventListener("click", addRow);
+els.load.addEventListener("click", loadCatalog);
+els.save.addEventListener("click", saveCatalog);
+els.addRow.addEventListener("click", addRow);
 
 els.pingBtn.addEventListener("click", async ()=>{
   els.pingState.textContent = "…";
@@ -197,11 +213,9 @@ function join(base, path){
   return (base||"").replace(/\/+$/,"") + "/" + String(path||"").replace(/^\/+/,"");
 }
 
-/* ===== 起動時の自動読込 =====
-   - API Base が未入力なら DEV をデフォルトに
-   - ページ表示後ただちに client-catalog を読込む
-*/
+/* ===== 起動時の自動読込（統合版） ===== */
 window.addEventListener("DOMContentLoaded", async ()=>{
   if (!els.apiBase.value) els.apiBase.value = DEV_API;
+  updateEnvActive(els.apiBase.value.includes("-dev-") ? "dev" : "prod");
   try { await loadCatalog(); } catch {}
 });
