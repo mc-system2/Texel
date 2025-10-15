@@ -1,121 +1,69 @@
 :root{
-  --txl-bg:#f7fff9;           /* ほのかな薄緑 */
-  --txl-surface:#ffffff;
-  --txl-text:#172026;
-  --txl-muted:#5b6b73;
-  --txl-border:#dfeee4;
-  --txl-accent:#2fbf71;       /* Texel グリーン */
-  --txl-accent-weak:#baf2d4;
-  --txl-danger:#d93025;
-  --txl-shadow:0 2px 10px rgba(0,0,0,.05);
+  --bg:#f3fbf5;          /* 薄い緑ベース */
+  --fg:#1f2d1f;
+  --muted:#6b7a6b;
+  --border:#d6eadb;
+  --accent:#35b26e;
+  --accent-weak:#b8ebcf;
+  --danger:#d83a52;
+  --row:#ffffff;
+  --row-alt:#f7fdf9;
 }
 
 *{box-sizing:border-box}
 html,body{height:100%}
 body{
   margin:0;
-  color:var(--txl-text);
-  background:var(--txl-bg);
-  font:14px/1.6 system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Noto Sans JP", "Hiragino Kaku Gothic ProN", Meiryo, sans-serif;
+  font:14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans JP", "Apple Color Emoji", "Segoe UI Emoji";
+  color:var(--fg);
+  background:var(--bg);
 }
 
 .header{
-  position:sticky; top:0; z-index:10;
-  background:var(--txl-surface);
-  box-shadow:var(--txl-shadow);
-  border-bottom:1px solid var(--txl-border);
-  padding:12px 16px;
+  padding:16px 16px 8px;
+  position:sticky; top:0; background:var(--bg);
+  border-bottom:1px solid var(--border);
+  z-index:10;
 }
-
-.row{display:flex; align-items:center; gap:8px; flex-wrap:wrap;}
-.row.gap{margin-top:10px}
-.env{display:flex; gap:6px; margin-right:8px}
-.label{font-weight:600; margin-right:6px}
+.row{display:flex; align-items:center; gap:8px; flex-wrap:wrap}
+.row.gap{margin-top:8px}
+.env{display:flex; gap:6px}
+.label{font-weight:600}
 .input{
-  min-width:420px; max-width:60vw;
-  padding:8px 10px; border:1px solid var(--txl-border);
-  border-radius:8px; background:#fff; outline:0;
+  min-width:420px; max-width:70vw;
+  padding:8px 10px; border:1px solid var(--border); border-radius:8px; background:#fff;
 }
-.input:focus{border-color:var(--txl-accent); box-shadow:0 0 0 3px var(--txl-accent-weak)}
-
 .btn{
-  height:34px; padding:0 12px; border-radius:8px;
-  border:1px solid var(--txl-border); background:#fff; cursor:pointer;
+  padding:8px 12px; border-radius:8px; border:1px solid var(--border); background:#fff; cursor:pointer;
 }
-.btn:hover{border-color:var(--txl-accent)}
-.btn.primary{
-  background:var(--txl-accent); border-color:var(--txl-accent); color:#fff;
-}
-.btn.primary:hover{filter:brightness(.95)}
+.btn:hover{box-shadow:0 1px 0 rgba(0,0,0,.06)}
+.btn.primary{background:var(--accent); color:#fff; border-color:var(--accent)}
 .btn.ghost{background:#fff}
-/* client-editor.css 追記例 */
-.btn.ghost.active {
-  border-color: #4caf50;
-  color: #4caf50;
-  background: rgba(76,175,80,0.08);
-}
+.btn.tiny{padding:4px 8px; font-size:12px}
+.btn.danger{background:#fff0f3; color:var(--danger); border-color:#ffd6dd}
 
-.btn.tiny{height:26px; padding:0 8px; font-size:12px; border-radius:6px}
-.btn.danger{border-color:#f3d0cc; color:var(--txl-danger); background:#fff}
-.btn.danger:hover{background:#fff3f2}
+.badge{padding:3px 6px; background:var(--accent-weak); color:#155a35; border-radius:999px}
+.muted{color:var(--muted)}
 
-.badge{
-  padding:4px 8px; border-radius:999px; border:1px solid var(--txl-border);
-  background:#fff; color:var(--txl-muted);
-}
-.muted{color:var(--txl-muted)}
-.meta{display:flex; gap:18px; margin-top:8px; color:var(--txl-muted); font-size:12px}
-.alert{margin-top:8px; padding:10px 12px; border-radius:8px; border:1px solid #ffe9a3; background:#fffdf3; color:#7a5d00}
+.meta{display:flex; gap:18px; margin-top:8px; color:var(--muted); font-size:12px}
+.alert{margin-top:8px; padding:8px 12px; background:#fff7e6; border:1px solid #ffe6b3; border-radius:8px; color:#8a5a00}
 
-main{padding:18px}
+main{padding:14px 16px}
 
-.grid{
-  width:100%;
-  border-collapse:collapse;
-  table-layout:auto;        /* ← セル幅が伸びる */
-  background:var(--txl-surface);
-  border:1px solid var(--txl-border);
-  border-radius:12px;
-  overflow:hidden;
-  box-shadow:var(--txl-shadow);
-}
+.grid{width:100%; border-collapse:separate; border-spacing:0 8px}
 .grid thead th{
-  background:#f2fbf6;
-  color:#0f7c46;
-  text-align:left;
-  padding:10px 12px;
-  border-bottom:1px solid var(--txl-border);
-  font-weight:600;
+  text-align:left; font-weight:700; color:#244c2f; font-size:12px; letter-spacing:.03em;
 }
-.grid tbody td{
-  padding:10px 12px;
-  border-top:1px solid var(--txl-border);
-  vertical-align:middle;
+.grid tbody tr{
+  background:var(--row); border:1px solid var(--border);
 }
-
-.cell{
-  width:100%;
-  padding:8px 10px;
-  border:1px solid var(--txl-border);
-  border-radius:6px;
-  background:#fff;
-  outline:0;
+.grid tbody tr:nth-child(2n){background:var(--row-alt)}
+.grid tbody td{padding:8px}
+.grid .cell{
+  width:100%; padding:8px 10px; border:1px solid var(--border); border-radius:8px; background:#fff;
 }
-.cell:focus{border-color:var(--txl-accent); box-shadow:0 0 0 3px var(--txl-accent-weak)}
+.grid .cell.code{text-transform:uppercase; letter-spacing:.06em; font-weight:600}
+.grid .ops{display:flex; gap:6px; align-items:center; justify-content:flex-end; padding-right:10px}
 
-.cell.code{min-width:160px; width:180px; font-family:ui-monospace,SFMono-Regular,Consolas,Monaco,monospace}
-.cell.name{min-width:220px}
-select.cell.behavior{min-width:110px; width:120px; height:34px}
-.cell.sheet{min-width:340px}
-.cell.created{min-width:120px; width:140px}
-
-.ops{white-space:nowrap}
-
-/* スクロール時の行ホバー */
-.grid tbody tr:hover td{background:#fbfffd}
-
-/* モバイル簡易対応 */
-@media (max-width:900px){
-  .input{min-width:280px; max-width:100%}
-  .cell.sheet{min-width:200px}
-}
+/* スクロール時にヘッダ固定（行間スペースを保つ） */
+.grid thead th{position:sticky; top:0; background:var(--bg); z-index:5; padding:6px 8px}
