@@ -163,7 +163,7 @@
   };
 
   /* ====== テーブル行の生成・操作 ====== */
-  function addRow(data = {}) {
+    function addRow(data = {}) {
     const tr = rowTmpl.content.firstElementChild.cloneNode(true);
 
     const codeEl     = tr.querySelector(".code");
@@ -171,42 +171,52 @@
     const behaviorEl = tr.querySelector(".behavior");
     const sheetEl    = tr.querySelector(".sheet");
     const createdEl  = tr.querySelector(".created");
-    const delBtn     = tr.querySelector(".delBtn");
+    const opsCell    = tr.querySelector(".ops");
+
+    // 既存の中身（テンプレート由来のボタン等）をいったん空にする
+    opsCell.innerHTML = "";
 
     codeEl.value     = (data.code || "").toUpperCase();
     nameEl.value     = data.name || "";
     behaviorEl.value = viewBehavior(data.behavior || "");
     sheetEl.value    = data.spreadsheetId || data.sheetId || data.sheet || "";
-    createdEl.value  = data.createdAt || "";
+    createdEl.value  = data.createdAt || new Date().toISOString().slice(0, 10);
 
+    // 削除ボタン
+    const delBtn = document.createElement("button");
+    delBtn.className = "btn tiny danger";
+    delBtn.textContent = "削除";
     delBtn.addEventListener("click", () => tr.remove());
 
-    // 行を複製する（新コード発番）
+    // 複製ボタン（新コード発番）
     const cloneBtn = document.createElement("button");
-    cloneBtn.className = "btn tiny ghost";
+    cloneBtn.className = "btn tiny success";
     cloneBtn.textContent = "複製";
     cloneBtn.title = "この行を複製して新しいコードを発番";
     cloneBtn.addEventListener("click", () => {
-      const existCodes = new Set(
-        [...gridBody.querySelectorAll("tr .code")].map((i) => i.value.trim().toUpperCase()).filter(Boolean)
-      );
-      const newCode = issueNewClientCode(existCodes, (codeEl.value || "B")[0]);
-      const newRow = addRow({
+        const existCodes = new Set(
+        [...gridBody.querySelectorAll("tr .code")]
+            .map((i) => i.value.trim().toUpperCase())
+            .filter(Boolean)
+        );
+        const newCode = issueNewClientCode(existCodes, (codeEl.value || "B")[0]);
+        const newRow = addRow({
         code: newCode,
         name: nameEl.value,
         behavior: normalizeBehavior(behaviorEl.value),
         spreadsheetId: extractSheetId(sheetEl.value) || sheetEl.value,
-        createdAt: createdEl.value
-      });
-      // スクロールして見せる
-      newRow.scrollIntoView({ behavior: "smooth", block: "center" });
-      newRow.querySelector(".code").focus();
+        createdAt: new Date().toISOString().slice(0, 10)
+        });
+        newRow.scrollIntoView({ behavior: "smooth", block: "center" });
+        newRow.querySelector(".code")?.focus();
     });
 
-    tr.querySelector(".ops").prepend(cloneBtn);
+    // 並び順はお好みで
+    opsCell.append(cloneBtn, delBtn);
+
     gridBody.appendChild(tr);
     return tr;
-  }
+    }
 
   function catalogToUI(catalog) {
     gridBody.innerHTML = "";
