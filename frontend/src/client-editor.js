@@ -1,5 +1,5 @@
 /* =========================================================
- * Client Catalog Editor – save後にクライアント別プロンプト同期
+ * Client Catalog Editor – save後にクライアント別プロンプト同期（堅牢化）
  * ========================================================= */
 const DEV_API  = "https://func-texel-api-dev-jpe-001-b2f6fec8fzcbdrc3.japaneast-01.azurewebsites.net/api/";
 const PROD_API = "https://func-texel-api-prod-jpe-001-dsgfhtafbfbxawdz.japaneast-01.azurewebsites.net/api/";
@@ -151,10 +151,15 @@ async function saveCatalog(){
       headers:{ "Content-Type":"application/json; charset=utf-8" },
       body: JSON.stringify(body)
     });
-    const text = await res.text();
-    let json = {}; try{ json = text ? JSON.parse(text) : {}; }catch{}
+    const rawText = await res.text();
+    let json = {};
+    try {
+      json = rawText ? JSON.parse(rawText) : {};
+    } catch {
+      // Save は通常 JSON を返しますが、万一テキストなら json は空のまま
+    }
 
-    if (!res.ok) throw new Error(json?.error || `HTTP ${res.status}`);
+    if (!res.ok) throw new Error(json?.error || rawText || `HTTP ${res.status}`);
 
     els.updatedAt.textContent = catalog.updatedAt;
     els.count.textContent     = String(clients.length);
@@ -255,13 +260,29 @@ async function syncClientPromptsAfterSave(currentClients){
       headers: { "Content-Type":"application/json; charset=utf-8" },
       body: JSON.stringify(payload)
     });
-    const resultText = await res.text();
-    const result = resultText ? JSON.parse(resultText) : {};
-    if (!res.ok) throw new Error(result?.error || `HTTP ${res.status}`);
 
-    const created = (result.created||[]).length;
-    const skipped = (result.skipped||[]).length;
-    const deleted = (result.deleted||[]).length;
+    const ctype = (res.headers.get("content-type") || "").toLowerCase();
+    let result = {};
+    let rawText = "";
+    try {
+      if (ctype.includes("application/json")) {
+        result = await res.json();
+      } else {
+        rawText = await res.text();               // たとえば "[object Object]" など
+        try { result = JSON.parse(rawText); }     // JSON なら取り込む
+        catch { /* テキストのまま扱う */ }
+      }
+    } catch { /* 何も取れない場合は result = {} のまま */ }
+
+    if (!res.ok) {
+      // Functions 側が text/plain を返した場合にも内容をそのまま表示
+      const reason = result?.error || rawText || `HTTP ${res.status}`;
+      throw new Error(reason);
+    }
+
+    const created = Array.isArray(result.created) ? result.created.length : 0;
+    const skipped = Array.isArray(result.skipped) ? result.skipped.length : 0;
+    const deleted = Array.isArray(result.deleted) ? result.deleted.length : 0;
     showAlert(`プロンプト同期 完了（新規${created} / 既存${skipped} / 削除${deleted}）`, "ok");
   } catch (err) {
     showAlert(`プロンプト同期 失敗：${err.message||err}`, "error");
