@@ -102,7 +102,7 @@ function resolvePromptCandidates(keyLike, fallbackFilename) {
   const name = KEY_TO_NAME[keyLike];
   const list = [];
   if (clientId && name) {
-    list.push(`prompt/${clientId}/texel-${name}.json`);
+    list.push(`client/${clientId}/texel-${name}.json`);
   }
   const beh = (CURRENT_BEHAVIOR || "BASE").toUpperCase();
   if (name) {

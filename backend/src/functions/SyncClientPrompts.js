@@ -1,44 +1,47 @@
-// /functions/SyncClientPrompts.js
 const { app } = require('@azure/functions');
 const { BlobServiceClient } = require('@azure/storage-blob');
 
 const connectionString = process.env["AzureWebJobsStorage"];
 const CONTAINER = "prompts";
 
-// テンプレート → 宛先
+// ======================= テンプレート対応表 =========================
 const TEMPLATE_MAP = {
   "TYPE-S": [
-    ["prompt/texel-s-suumo-catch.json",   (c)=>`prompt/${c}/texel-suumo-catch.json`],
-    ["prompt/texel-s-suumo-comment.json", (c)=>`prompt/${c}/texel-suumo-comment.json`],
-    ["prompt/texel-s-roomphoto.json",     (c)=>`prompt/${c}/texel-roomphoto.json`],
-    ["prompt/texel-s-suggestion.json",    (c)=>`prompt/${c}/texel-suggestion.json`],
+    ["texel-s-suumo-catch.json",   (c)=>`client/${c}/texel-suumo-catch.json`],
+    ["texel-s-suumo-comment.json", (c)=>`client/${c}/texel-suumo-comment.json`],
+    ["texel-s-roomphoto.json",     (c)=>`client/${c}/texel-roomphoto.json`],
+    ["texel-s-suggestion.json",    (c)=>`client/${c}/texel-suggestion.json`],
   ],
   "TYPE-R": [
-    ["prompt/texel-r-athome-appeal.json",   (c)=>`prompt/${c}/texel-athome-appeal.json`],
-    ["prompt/texel-r-athome-comment.json",  (c)=>`prompt/${c}/texel-athome-comment.json`],
-    ["prompt/texel-r-roomphoto.json",       (c)=>`prompt/${c}/texel-roomphoto.json`],
-    ["prompt/texel-r-suggestion.json",      (c)=>`prompt/${c}/texel-suggestion.json`],
-    ["prompt/texel-r-suumo-catch.json",     (c)=>`prompt/${c}/texel-suumo-catch.json`],
-    ["prompt/texel-r-suumo-comment.json",   (c)=>`prompt/${c}/texel-suumo-comment.json`],
+    ["texel-r-athome-appeal.json",   (c)=>`client/${c}/texel-athome-appeal.json`],
+    ["texel-r-athome-comment.json",  (c)=>`client/${c}/texel-athome-comment.json`],
+    ["texel-r-roomphoto.json",       (c)=>`client/${c}/texel-roomphoto.json`],
+    ["texel-r-suggestion.json",      (c)=>`client/${c}/texel-suggestion.json`],
+    ["texel-r-suumo-catch.json",     (c)=>`client/${c}/texel-suumo-catch.json`],
+    ["texel-r-suumo-comment.json",   (c)=>`client/${c}/texel-suumo-comment.json`],
   ],
-  // ★ NEW: BASE は -r/-s なしの素のテンプレートを使用
   "BASE": [
-    ["prompt/texel-athome-appeal.json",   (c)=>`prompt/${c}/texel-athome-appeal.json`],
-    ["prompt/texel-athome-comment.json",  (c)=>`prompt/${c}/texel-athome-comment.json`],
-    ["prompt/texel-roomphoto.json",       (c)=>`prompt/${c}/texel-roomphoto.json`],
-    ["prompt/texel-suggestion.json",      (c)=>`prompt/${c}/texel-suggestion.json`],
-    ["prompt/texel-suumo-catch.json",     (c)=>`prompt/${c}/texel-suumo-catch.json`],
-    ["prompt/texel-suumo-comment.json",   (c)=>`prompt/${c}/texel-suumo-comment.json`],
+    ["texel-athome-appeal.json",   (c)=>`client/${c}/texel-athome-appeal.json`],
+    ["texel-athome-comment.json",  (c)=>`client/${c}/texel-athome-comment.json`],
+    ["texel-roomphoto.json",       (c)=>`client/${c}/texel-roomphoto.json`],
+    ["texel-suggestion.json",      (c)=>`client/${c}/texel-suggestion.json`],
+    ["texel-suumo-catch.json",     (c)=>`client/${c}/texel-suumo-catch.json`],
+    ["texel-suumo-comment.json",   (c)=>`client/${c}/texel-suumo-comment.json`],
   ]
 };
 
+// ======================= メイン処理 =========================
 app.http('SyncClientPrompts', {
   methods: ['POST'],
   authLevel: 'anonymous',
   handler: async (request, context) => {
+    context.log("◆ SyncClientPrompts START");
     let body;
-    try { body = await request.json(); }
-    catch { return { status: 400, body: { error: "JSONボディが必要です" } }; }
+    try {
+      body = await request.json();
+    } catch {
+      return { status: 400, body: { error: "JSONボディが必要です" } };
+    }
 
     const adds = Array.isArray(body.adds) ? body.adds : [];
     const deletes = Array.isArray(body.deletes) ? body.deletes : [];
@@ -50,10 +53,10 @@ app.http('SyncClientPrompts', {
 
       const results = { created: [], skipped: [], deleted: [], errors: [] };
 
-      // 1) 初期コピー
+      // --- 1) 新規コピー ---
       for (const a of adds) {
         const code = String(a.code || "").trim().toUpperCase();
-        const behavior = String(a.behavior || "").trim().toUpperCase(); // "TYPE-R"|"TYPE-S"|"BASE"
+        const behavior = String(a.behavior || "").trim().toUpperCase();
         if (!/^[A-Z0-9]{4}$/.test(code)) continue;
         if (!["TYPE-R","TYPE-S","BASE"].includes(behavior)) continue;
 
@@ -61,15 +64,18 @@ app.http('SyncClientPrompts', {
         for (const [src, dstFn] of pairs) {
           const dst = dstFn(code);
           const dstBlob = container.getBlobClient(dst);
+
           if (await dstBlob.exists()) {
             results.skipped.push({ code, dst, reason: "exists" });
             continue;
           }
+
           const srcBlob = container.getBlobClient(src);
           if (!(await srcBlob.exists())) {
             results.errors.push({ code, src, dst, error: "template_missing" });
             continue;
           }
+
           const dl = await srcBlob.download();
           const buf = await streamToBuffer(dl.readableStreamBody);
           const blockBlobClient = container.getBlockBlobClient(dst);
@@ -80,25 +86,36 @@ app.http('SyncClientPrompts', {
         }
       }
 
-      // 2) フォルダ削除
+      // --- 2) 削除 ---
       for (const codeRaw of deletes) {
         const code = String(codeRaw || "").trim().toUpperCase();
         if (!/^[A-Z0-9]{4}$/.test(code)) continue;
-        const prefix = `prompt/${code}/`;
+        const prefix = `client/${code}/`;
         for await (const blob of container.listBlobsFlat({ prefix })) {
           await container.deleteBlob(blob.name);
           results.deleted.push({ name: blob.name });
         }
       }
 
-      return { status: 200, body: results };
+      context.log("◆ SyncClientPrompts DONE", results);
+      return {
+        status: 200,
+        headers: { "Content-Type": "application/json; charset=utf-8" },
+        body: results
+      };
 
     } catch (err) {
-      return { status: 500, body: { error: "SyncClientPrompts 失敗", details: err.message } };
+      context.log("◆ SyncClientPrompts ERROR", err);
+      return {
+        status: 500,
+        headers: { "Content-Type": "application/json; charset=utf-8" },
+        body: { error: "SyncClientPrompts 失敗", details: err.message }
+      };
     }
   }
 });
 
+// ======================= ストリーム→Buffer =========================
 async function streamToBuffer(readable) {
   return new Promise((resolve, reject) => {
     const chunks = [];

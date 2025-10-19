@@ -1,5 +1,10 @@
 /* =========================================================
- * Client Catalog Editor – save後にクライアント別プロンプト同期（堅牢化）
+ * Client Catalog Editor
+ *  - 重複IDの即時検知/警告（保存ボタン自動無効化）
+ *  - ユニークなランダム発番（表内・既存スナップショットと衝突回避）
+ *  - 保存後にクライアント別プロンプト同期（BASE / TYPE-R / TYPE-S 対応）
+ *  - Prompt Studio（prompt-studio.html）への編集リンク
+ *  - 堅牢なレスポンス処理（Content-Typeを判定）
  * ========================================================= */
 const DEV_API  = "https://func-texel-api-dev-jpe-001-b2f6fec8fzcbdrc3.japaneast-01.azurewebsites.net/api/";
 const PROD_API = "https://func-texel-api-prod-jpe-001-dsgfhtafbfbxawdz.japaneast-01.azurewebsites.net/api/";
@@ -25,7 +30,7 @@ const els = {
 
 const rowTmpl = document.getElementById("rowTmpl");
 
-// 直前ロード時点のスナップショット（code -> behaviorView）
+// 直近ロード時スナップショット（保存後の差分検出に使用）: code -> behaviorView
 let previousCatalogCodes = new Map();
 
 /* ---------- helpers ---------- */
@@ -53,6 +58,13 @@ const extractSheetId = (input)=>{
   return /^[a-zA-Z0-9-_]{10,}$/.test(v) ? v : "";
 };
 
+const normalizeBehavior = (b)=>{
+  const v = String(b||"").toUpperCase();
+  return v==="R" ? "TYPE-R" : v==="S" ? "TYPE-S" : v==="TYPE-R" ? "TYPE-R" : v==="TYPE-S" ? "TYPE-S" : "BASE";
+};
+const behaviorToPayload = (v)=> v==="TYPE-R" ? "R" : v==="TYPE-S" ? "S" : "";
+
+/* ---------- 行生成 & 監視取付 ---------- */
 function makeRow(item = {code:"",name:"",behavior:"BASE",spreadsheetId:"",createdAt:""}) {
   const tr = rowTmpl.content.firstElementChild.cloneNode(true);
   tr.querySelector(".code").value  = item.code || "";
@@ -60,17 +72,30 @@ function makeRow(item = {code:"",name:"",behavior:"BASE",spreadsheetId:"",create
   tr.querySelector(".behavior").value = normalizeBehavior(item.behavior);
   tr.querySelector(".sheet").value = item.spreadsheetId || "";
   tr.querySelector(".created").value = item.createdAt || "";
+  attachCodeWatcher(tr); // コード入力監視（即時検証）
   return tr;
 }
+function attachCodeWatcher(tr){
+  const codeInput = tr.querySelector(".code");
+  if (!codeInput) return;
+  // エラーヒントを行内に生成
+  let hint = tr.querySelector(".code-hint");
+  if (!hint) {
+    hint = document.createElement("div");
+    hint.className = "hint bad code-hint";
+    hint.style.display = "none";
+    codeInput.parentElement.appendChild(hint);
+  }
+  codeInput.addEventListener("input", ()=>{
+    // 英大文字・数字のみ 4桁に矯正
+    const raw = codeInput.value;
+    const norm = raw.toUpperCase().replace(/[^A-Z0-9]/g,"").slice(0,4);
+    if (raw !== norm) codeInput.value = norm;
+    validateGrid(); // 全体再評価
+  });
+}
 
-// behavior 表示 ⇄ 保存ペイロード変換
-const normalizeBehavior = (b)=>{
-  const v = String(b||"").toUpperCase();
-  return v==="R" ? "TYPE-R" : v==="S" ? "TYPE-S" : v==="TYPE-R" ? "TYPE-R" : v==="TYPE-S" ? "TYPE-S" : "BASE";
-};
-const behaviorToPayload = (v)=> v==="TYPE-R" ? "R" : v==="TYPE-S" ? "S" : "";
-
-/* ---------- load / render ---------- */
+/* ---------- 読込 ---------- */
 async function loadCatalog() {
   clearTable();
   setStatus("読込中…");
@@ -98,7 +123,7 @@ async function loadCatalog() {
     els.etag.dataset.etag     = raw?.etag || "";
     els.etag.textContent      = raw?.etag ? `ETag: ${raw.etag}` : "";
 
-    // ▼ スナップショット更新（保存前の比較用）
+    // スナップショット更新（次回保存時の差分検出に使用）
     previousCatalogCodes = new Map();
     for (const c of clients) {
       const code = String(c.code||"").toUpperCase();
@@ -106,6 +131,7 @@ async function loadCatalog() {
       previousCatalogCodes.set(code, normalizeBehavior(c.behavior||""));
     }
 
+    validateGrid(); // 初期状態の検証
     showAlert("読み込み完了", "ok");
   }catch(e){
     showAlert(`読み込み失敗：${e.message||e}`, "error");
@@ -115,12 +141,18 @@ async function loadCatalog() {
 }
 
 function clearTable(){ els.gridBody.innerHTML = ""; }
-function addRow(){ els.gridBody.appendChild(makeRow()); }
+function addRow(){
+  els.gridBody.appendChild(makeRow());
+  validateGrid();
+}
 
-/* ---------- save ---------- */
+/* ---------- 保存 ---------- */
 async function saveCatalog(){
+  // 直前検証（NGなら保存しない）
+  const v = validateGrid();
+  if (!v.ok) { showAlert(v.message || "入力エラーがあります。", "error"); return; }
+
   const rows = [...els.gridBody.querySelectorAll("tr")];
-  const seen = new Set();
   const clients = [];
 
   for (const tr of rows){
@@ -129,14 +161,8 @@ async function saveCatalog(){
     const behaviorView = tr.querySelector(".behavior").value;
     const sheetInput = tr.querySelector(".sheet").value.trim();
     const createdAt = tr.querySelector(".created").value.trim();
-
-    if (!/^[A-Z0-9]{4}$/.test(code)){ showAlert(`コードが不正です: ${code}`, "error"); return; }
-    if (seen.has(code)){ showAlert(`コードが重複しています: ${code}`, "error"); return; }
-
     const spreadsheetId = extractSheetId(sheetInput);
-    if (!spreadsheetId){ showAlert(`Spreadsheet ID が空です（${code}）`, "error"); return; }
 
-    seen.add(code);
     clients.push({ code, name, behavior: behaviorToPayload(behaviorView), spreadsheetId, createdAt });
   }
 
@@ -152,12 +178,7 @@ async function saveCatalog(){
       body: JSON.stringify(body)
     });
     const rawText = await res.text();
-    let json = {};
-    try {
-      json = rawText ? JSON.parse(rawText) : {};
-    } catch {
-      // Save は通常 JSON を返しますが、万一テキストなら json は空のまま
-    }
+    let json = {}; try{ json = rawText ? JSON.parse(rawText) : {}; }catch{}
 
     if (!res.ok) throw new Error(json?.error || rawText || `HTTP ${res.status}`);
 
@@ -166,10 +187,10 @@ async function saveCatalog(){
     if (json?.etag){ els.etag.dataset.etag = json.etag; els.etag.textContent = `ETag: ${json.etag}`; }
     showAlert("保存完了", "ok");
 
-    // ▼ 保存成功後：クライアント別プロンプトの初期コピー／削除を同期
+    // 保存成功後：クライアント別プロンプト 初期コピー/削除 を同期
     await syncClientPromptsAfterSave(clients);
 
-    // ▼ 同期後、スナップショットを最新に更新
+    // スナップショットを最新に
     previousCatalogCodes = new Map();
     for (const c of clients) previousCatalogCodes.set(c.code, normalizeBehavior(c.behavior||""));
 
@@ -180,35 +201,115 @@ async function saveCatalog(){
   }
 }
 
-/* ---------- duplicate / delete ---------- */
+/* ---------- 重複/形式検証（即時） ---------- */
+function validateGrid(){
+  const inputs = [...els.gridBody.querySelectorAll("input.code")];
+  const codes = inputs.map(i => i.value.trim().toUpperCase());
+  const counts = new Map();
+  let hasError = false;
+  let duplicateList = [];
+
+  // カウント
+  for (const c of codes) counts.set(c, (counts.get(c)||0) + 1);
+
+  // 入力ごとに装飾＆ヒント
+  inputs.forEach((inp) => {
+    const v = inp.value.trim().toUpperCase();
+    const isFormatOk = /^[A-Z0-9]{4}$/.test(v);
+    const isDup = v && (counts.get(v) > 1);
+
+    const hint = inp.parentElement.querySelector(".code-hint");
+    inp.classList.toggle("is-invalid", !isFormatOk || isDup);
+    if (!isFormatOk) {
+      hint.textContent = "A〜Z/0〜9の4桁で入力してください";
+      hint.style.display = "block";
+      hasError = true;
+    } else if (isDup) {
+      hint.textContent = "このコードは重複しています";
+      hint.style.display = "block";
+      hasError = true;
+      if (!duplicateList.includes(v)) duplicateList.push(v);
+    } else {
+      hint.textContent = "";
+      hint.style.display = "none";
+    }
+  });
+
+  // Spreadsheet ID 空チェック（保存時は必須）
+  let sheetMissing = false;
+  for (const tr of els.gridBody.querySelectorAll("tr")) {
+    const sid = extractSheetId(tr.querySelector(".sheet").value);
+    if (!sid) { sheetMissing = true; }
+  }
+
+  // 保存ボタンの有効/無効
+  els.save.disabled = hasError || sheetMissing;
+
+  // ステータス表示
+  let message = "";
+  if (hasError) {
+    if (duplicateList.length) message += `重複: ${duplicateList.join(", ")} `;
+  }
+  if (sheetMissing) message += (message ? "/ " : "") + "Spreadsheet ID が未入力の行があります";
+
+  if (message) setStatus(message); else setStatus("");
+
+  return { ok: !(hasError || sheetMissing), message };
+}
+
+/* ---------- 行内ボタン（複製/削除/プロンプト編集） ---------- */
 els.gridBody.addEventListener("click", (e)=>{
   const tr = e.target.closest("tr");
   if (!tr) return;
 
+  // 削除
   if (e.target.classList.contains("btn-del")) {
     tr.remove();
     els.count.textContent = String(els.gridBody.querySelectorAll("tr").length);
+    validateGrid();
     return;
   }
+  // 複製（ユニーク発番＋監視の付け直し）
   if (e.target.classList.contains("btn-dup")) {
     const copy = tr.cloneNode(true);
-    copy.querySelector(".code").value = issueNewCode();
+    copy.querySelectorAll(".code-hint").forEach(h => h.remove());
     els.gridBody.insertBefore(copy, tr.nextSibling);
+    attachCodeWatcher(copy);
+    copy.querySelector(".code").value = issueNewCode();
     els.count.textContent = String(els.gridBody.querySelectorAll("tr").length);
+    validateGrid();
+    return;
+  }
+  // Prompt Studio へ（新タブ）
+  if (e.target.classList.contains("btn-editPrompt")) {
+    const code = tr.querySelector(".code").value.trim().toUpperCase();
+    const behavior = tr.querySelector(".behavior").value;
+    const api = (document.getElementById("apiBase").value || DEV_API).trim();
+    const url = `./prompt-studio.html#?client=${encodeURIComponent(code)}&behavior=${encodeURIComponent(behavior)}&api=${encodeURIComponent(api)}`;
+    window.open(url, "_blank");
+    return;
   }
 });
 
+/* ---------- ユニークなランダム発番 ---------- */
 function issueNewCode(){
-  const used = new Set([...els.gridBody.querySelectorAll(".code")].map(i=>i.value.trim().toUpperCase()));
+  // 表内＋前回ロード時スナップショットの両方に衝突しない
+  const used = new Set([
+    ...[...els.gridBody.querySelectorAll(".code")].map(i=>i.value.trim().toUpperCase()),
+    ...previousCatalogCodes.keys(),
+  ]);
   const alph = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
-  for (let i=0;i<9999;i++){
+  for (let i=0; i<50000; i++){
     const code = alph[Math.floor(Math.random()*alph.length)] + String(Math.floor(Math.random()*1000)).padStart(3,"0");
     if (!used.has(code)) return code;
   }
-  return "A001";
+  // フォールバック（理論上到達しにくい）
+  let n = 0;
+  while (used.has(`Z${String(n).padStart(3,"0")}`)) n++;
+  return `Z${String(n).padStart(3,"0")}`;
 }
 
-/* ---------- presets ---------- */
+/* ---------- 環境切替 ---------- */
 els.dev.addEventListener("click", ()=>{
   els.apiBase.value = DEV_API;
   updateEnvActive("dev");
@@ -220,6 +321,7 @@ els.prod.addEventListener("click", ()=>{
   showAlert("PRODに切替","ok");
 });
 
+/* ---------- ボタン ---------- */
 els.load.addEventListener("click", loadCatalog);
 els.save.addEventListener("click", saveCatalog);
 els.addRow.addEventListener("click", addRow);
@@ -229,23 +331,23 @@ function join(base, path){
   return (base||"").replace(/\/+$/,"") + "/" + String(path||"").replace(/^\/+/,"");
 }
 
-/* ===== プロンプト同期（保存後） ===== */
+/* ===== プロンプト同期（保存後） =====
+ * - adds: 現在行すべて（BASE/TYPE-R/TYPE-S）→ 初回コピーのみ（API側で存在チェック）
+ * - deletes: 前回にあって今回ないコード → client/<CLID>/ と legacy prompt/<CLID>/ を削除（API側実装）
+ */
 async function syncClientPromptsAfterSave(currentClients){
-  // nowMap: 現在（保存送信した）catalogの code -> behaviorView
-  const nowMap = new Map(
-    currentClients.map(c => [c.code, normalizeBehavior(c.behavior||"")])
-  );
+  const nowMap = new Map(currentClients.map(c => [c.code, normalizeBehavior(c.behavior||"")]));
 
-  // 削除検出：前回にあって今回ないコード
+  // 削除検出
   const deletes = [];
   for (const code of previousCatalogCodes.keys()) {
     if (!nowMap.has(code)) deletes.push(code);
   }
 
-  // 追加（初期コピー）対象：現在の全クライアント（BASE/TYPE-R/TYPE-Sすべて）
+  // 追加：全行（存在するものはAPI側でskip）
   const adds = [];
   for (const [code, behavior] of nowMap.entries()) {
-    adds.push({ code, behavior }); // API側で存在チェックし、初回のみコピー
+    adds.push({ code, behavior });
   }
 
   if (adds.length === 0 && deletes.length === 0) return;
@@ -268,14 +370,12 @@ async function syncClientPromptsAfterSave(currentClients){
       if (ctype.includes("application/json")) {
         result = await res.json();
       } else {
-        rawText = await res.text();               // たとえば "[object Object]" など
-        try { result = JSON.parse(rawText); }     // JSON なら取り込む
-        catch { /* テキストのまま扱う */ }
+        rawText = await res.text();
+        try { result = JSON.parse(rawText); } catch {}
       }
-    } catch { /* 何も取れない場合は result = {} のまま */ }
+    } catch {}
 
     if (!res.ok) {
-      // Functions 側が text/plain を返した場合にも内容をそのまま表示
       const reason = result?.error || rawText || `HTTP ${res.status}`;
       throw new Error(reason);
     }
@@ -283,7 +383,9 @@ async function syncClientPromptsAfterSave(currentClients){
     const created = Array.isArray(result.created) ? result.created.length : 0;
     const skipped = Array.isArray(result.skipped) ? result.skipped.length : 0;
     const deleted = Array.isArray(result.deleted) ? result.deleted.length : 0;
-    showAlert(`プロンプト同期 完了（新規${created} / 既存${skipped} / 削除${deleted}）`, "ok");
+    const errors  = Array.isArray(result.errors)  ? result.errors.length  : 0;
+    showAlert(`プロンプト同期 完了（新規${created} / 既存${skipped} / 削除${deleted} / エラー${errors}）`, errors ? "error" : "ok");
+    if (errors && result.errors) console.table(result.errors);
   } catch (err) {
     showAlert(`プロンプト同期 失敗：${err.message||err}`, "error");
   } finally {
