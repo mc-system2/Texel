@@ -1,122 +1,154 @@
-﻿/* prompt-editor.js — ファイル名直指定 & 規約解決（マップ撤廃版）
-   - ?file= または ?filename= で与えられたパス/ベース名をそのまま使用
-   - ?type= があれば TYPE_TO_FILE なしで `${type}.json` に自動解決（規約バリデーションあり）
-   - ?client= と併用時、/ を含まないベース名なら `client/<ID>/` を自動付与
-   - ?api= で Functions ベースURLを上書き可（既定は DEV）
-   - ETag を保持して保存時の競合検知に使用
+﻿/* prompt-editor.js — file直指定 & 規約解決（マップ撤廃） + フルスクリーンUI対応
+   - ?file= / ?filename= を最優先。/を含まないベース名 + ?client= なら client/<ID>/ を自動付与
+   - ?type= は `${type}.json` に自動解決。`texel-s-*` / `texel-r-*` に加えて旧式 `texel-*` も許容
+   - APIは ?api= で上書き可。既定は DEV
+   - ETagで保存競合を検知
 */
 
-// ====== 設定 ======
 const DEV_API = "https://func-texel-api-dev-jpe-001-b2f6fec8fzcbdrc3.japaneast-01.azurewebsites.net/api/";
 
-// ====== DOM 参照（あなたの HTML に合わせて ID をそろえてください） ======
+// ---- DOM ----
 const el = {
-  ta:        document.getElementById("editor"),     // <textarea id="editor">
-  status:    document.getElementById("status"),     // ステータス表示
-  fileLabel: document.getElementById("fileLabel"),  // 現在のファイル名表示（任意）
-  btnLoad:   document.getElementById("btnLoad"),    // 「開く」ボタン（任意）
-  btnSave:   document.getElementById("btnSave"),    // 「保存」ボタン
+  ta:        document.getElementById("promptEditor"),
+  status:    document.getElementById("statusMessage"),
+  fileLabel: document.getElementById("filename"),
+  btnLoad:   document.getElementById("loadButton"),
+  btnSave:   document.getElementById("saveButton"),
+  tabPrompt: document.getElementById("tabPromptBtn"),
+  tabParams: document.getElementById("tabParamsBtn"),
+  panelPrompt: document.getElementById("promptTab"),
+  panelParams: document.getElementById("paramsTab"),
+  // params
+  p_max_tokens: document.getElementById("param_max_tokens"),
+  p_temperature: document.getElementById("param_temperature"),
+  p_top_p: document.getElementById("param_top_p"),
+  p_freq: document.getElementById("param_frequency_penalty"),
+  p_pres: document.getElementById("param_presence_penalty"),
+  p_n: document.getElementById("param_n"),
+  v_max_tokens: document.getElementById("val_max_tokens"),
+  v_temperature: document.getElementById("val_temperature"),
+  v_top_p: document.getElementById("val_top_p"),
+  v_freq: document.getElementById("val_frequency_penalty"),
+  v_pres: document.getElementById("val_presence_penalty"),
+  v_n: document.getElementById("val_n"),
 };
 
-let API_BASE   = DEV_API;
+let API_BASE = DEV_API;
 let currentFilename = null;
-let currentEtag     = null;
-let dirty           = false;
+let currentEtag = null;
+let dirty = false;
+let loadedParams = {};
 
-// ====== 起動 ======
-init().catch(err => showStatus("初期化エラー: " + err.message, "red"));
+init().catch(e=>setStatus("初期化エラー: "+e.message, "red"));
 
 async function init(){
   const qs = new URLSearchParams(location.search);
-
-  // API ベースの上書き（任意）
   API_BASE = (qs.get("api") || DEV_API).replace(/\/+$/,"") + "/";
 
-  // ファイル解決
-  let filename = resolveFilenameFromQuery(qs);
+  // タブ切替
+  el.tabPrompt.addEventListener("click", ()=>toggleTab(true));
+  el.tabParams.addEventListener("click", ()=>toggleTab(false));
+  function toggleTab(isPrompt){
+    el.tabPrompt.classList.toggle("active", isPrompt);
+    el.tabParams.classList.toggle("active", !isPrompt);
+    el.panelPrompt.classList.toggle("active", isPrompt);
+    el.panelParams.classList.toggle("active", !isPrompt);
+  }
 
-  // UI イベント
-  el.ta?.addEventListener("input", ()=>{ dirty = true; });
-  el.btnLoad?.addEventListener("click", async ()=>{
+  // パラメータUIの値表示
+  const bind = (range, view, digits=2)=> range && view && range.addEventListener("input", ()=>{ view.textContent = (+range.value).toFixed(digits); dirty = true; });
+  bind(el.p_max_tokens, el.v_max_tokens, 0);
+  bind(el.p_temperature, el.v_temperature, 2);
+  bind(el.p_top_p, el.v_top_p, 2);
+  bind(el.p_freq, el.v_freq, 2);
+  bind(el.p_pres, el.v_pres, 2);
+  bind(el.p_n, el.v_n, 0);
+
+  // 入力/ショートカット
+  el.ta.addEventListener("input", ()=>{ dirty = true; });
+  el.btnSave.addEventListener("click", save);
+  el.btnLoad.addEventListener("click", async ()=>{
     const client = (qs.get("client") || "").trim();
     const manual = prompt("読み込むファイル名（client/.. から or ベース名のみ）を入力", currentFilename || "");
     if (!manual) return;
-    const name = attachClientDirIfNeeded(manual.trim(), client);
-    await openFile(name);
+    await openFile(attachClientDirIfNeeded(manual.trim(), client));
   });
-  el.btnSave?.addEventListener("click", save);
-  window.addEventListener("keydown", (e)=>{
-    if ((e.ctrlKey||e.metaKey) && e.key.toLowerCase()==="s"){ e.preventDefault(); save(); }
-  });
-  window.addEventListener("beforeunload", (e)=>{ if (!dirty) return; e.preventDefault(); e.returnValue=""; });
+  window.addEventListener("keydown",(e)=>{ if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==="s"){ e.preventDefault(); save(); }});
+  window.addEventListener("beforeunload",(e)=>{ if(!dirty) return; e.preventDefault(); e.returnValue=""; });
 
-  // 自動ロード
+  // ファイル解決
+  const filename = resolveFilenameFromQuery(qs);
   if (filename) {
     await openFile(filename);
   } else {
-    showStatus("ファイル未指定です。?file= または ?type= を付けてアクセスしてください。", "#0AA0A6");
+    setStatus("ファイル未指定です。?file= または ?type= を付けてアクセスしてください。","#0AA0A6");
   }
 }
 
-/** クエリからファイル名を解決（file/filename 優先 → type 規約 → null） */
+/* ===== 解決ロジック ===== */
 function resolveFilenameFromQuery(qs){
   const client = (qs.get("client") || "").trim();
-  // 1) file / filename 直指定を最優先
-  let file = qs.get("file") || qs.get("filename");
-  if (file) return attachClientDirIfNeeded(file.trim(), client);
+  // 1) ?file / ?filename
+  let f = qs.get("file") || qs.get("filename");
+  if (f) return attachClientDirIfNeeded(f.trim(), client);
 
-  // 2) 後方互換: type=xxx → `${type}.json` へ自動解決（一覧マップ不要）
+  // 2) ?type -> `${type}.json`（規約: texel-(s|r)-* か texel-* を許容）
   const type = (qs.get("type") || "").trim();
-  if (type){
-    // 許可規約: texel-(s|r)-[a-z0-9-]+ だけ通す（必要なら調整）
-    if (!/^texel-(s|r)-[a-z0-9-]+$/i.test(type)) {
-      showStatus(`不正な type です: ${type}`, "red");
-      return null;
-    }
-    const name = `${type}.json`;
-    return attachClientDirIfNeeded(name, client);
-  }
-  return null;
+  if (!type) return null;
+
+  const ok =
+    /^texel-(s|r)-[a-z0-9-]+$/i.test(type) ||   // 新: texel-s-..., texel-r-...
+    /^texel-[a-z0-9-]+$/i.test(type);          // 旧: texel-...（互換）
+  if (!ok){ setStatus(`不正なtypeです: ${type}`, "red"); return null; }
+
+  return attachClientDirIfNeeded(`${type}.json`, client);
 }
 
-/** client= があり、file に / が含まれない（ベース名）なら client/<ID>/ を付与 */
 function attachClientDirIfNeeded(file, client){
   if (!file) return file;
-  if (!file.includes("/") && client) return `client/${client}/${file}`;
-  return file;
+  // すでにサブパスつきならそのまま
+  if (file.includes("/")) return file;
+  // ベース名 + client= なら client/<id>/ を付与
+  return client ? `client/${client}/${file}` : file;
 }
 
-/** ファイル名バリデーション（最低限のクライアント側ガード） */
 function validateFilename(name){
   if (!name || name.startsWith("/") || name.includes("..")) return false;
-  if (!/^[A-Za-z0-9/_\-.]+\.json$/.test(name)) return false; // .json 必須
+  if (!/^[A-Za-z0-9/_\-.]+\.json$/.test(name)) return false;
   if (name.includes("//")) return false;
   return true;
 }
 
-// ====== 読み込み ======
+/* ===== I/O ===== */
 async function openFile(filename){
-  if (!validateFilename(filename)) { showStatus(`不正なファイル名です: ${filename}`, "red"); return; }
+  if (!validateFilename(filename)){ setStatus(`不正なファイル名です: ${filename}`, "red"); return; }
   if (dirty && !confirm("未保存の変更があります。読み込みますか？")) return;
 
-  showStatus("読み込み中…", "orange");
+  setStatus("読み込み中…","orange");
   try{
     const { data, etag } = await loadPrompt(filename);
-    const text = extractPromptText(data);
-    if (el.ta) el.ta.value = text;
     currentFilename = filename;
     currentEtag = etag || null;
     if (el.fileLabel) el.fileLabel.textContent = filename;
+
+    // promptテキスト抽出
+    const text = extractPromptText(data);
+    el.ta.value = text;
+
+    // params（あれば反映）
+    loadedParams = data?.params || {};
+    writeParamsUI(loadedParams);
+
     dirty = false;
-    showStatus("読み込み完了", "green");
+    setStatus("読み込み完了","green");
   }catch(err){
-    showStatus("読み込み失敗: " + err.message, "red");
+    setStatus("読み込み失敗: "+err.message,"red");
   }
 }
 
 async function loadPrompt(filename){
   const url = API_BASE + "LoadPromptText?filename=" + encodeURIComponent(filename);
-  const res = await fetch(url, { cache: "no-store" });
+  const res = await fetch(url, { cache:"no-store" });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const etag = res.headers.get("etag");
   let json = {};
@@ -129,44 +161,58 @@ function extractPromptText(data){
   if (typeof data === "string") return data;
   if (typeof data.prompt === "string") return data.prompt;
   if (data.prompt && typeof data.prompt.text === "string") return data.prompt.text;
-  return JSON.stringify(data, null, 2); // 想定外形式はJSONをそのまま編集
+  return JSON.stringify(data, null, 2);
 }
 
-// ====== 保存 ======
+function readParamsUI(){
+  return {
+    max_tokens:         Number(el.p_max_tokens.value),
+    temperature:        Number(el.p_temperature.value),
+    top_p:              Number(el.p_top_p.value),
+    frequency_penalty:  Number(el.p_freq.value),
+    presence_penalty:   Number(el.p_pres.value),
+    n:                  Number(el.p_n.value),
+  };
+}
+function writeParamsUI(p){
+  if (!p) return;
+  if (p.max_tokens!=null){ el.p_max_tokens.value=p.max_tokens; el.v_max_tokens.textContent=p.max_tokens.toFixed(0); }
+  if (p.temperature!=null){ el.p_temperature.value=p.temperature; el.v_temperature.textContent=p.temperature.toFixed(2); }
+  if (p.top_p!=null){ el.p_top_p.value=p.top_p; el.v_top_p.textContent=p.top_p.toFixed(2); }
+  if (p.frequency_penalty!=null){ el.p_freq.value=p.frequency_penalty; el.v_freq.textContent=p.frequency_penalty.toFixed(2); }
+  if (p.presence_penalty!=null){ el.p_pres.value=p.presence_penalty; el.v_pres.textContent=p.presence_penalty.toFixed(2); }
+  if (p.n!=null){ el.p_n.value=p.n; el.v_n.textContent=p.n.toFixed(0); }
+}
+
+/* ===== 保存 ===== */
 async function save(){
-  if (!currentFilename) { showStatus("保存先ファイルが未選択です。", "red"); return; }
-  if (!validateFilename(currentFilename)) { showStatus("不正なファイル名です。", "red"); return; }
+  if (!currentFilename){ setStatus("保存先ファイルが未選択です。","red"); return; }
+  if (!validateFilename(currentFilename)){ setStatus("不正なファイル名です。","red"); return; }
 
   const body = {
     filename: currentFilename,
-    prompt: el.ta ? el.ta.value : "",
-    params: {},                 // prompt-editor は params 未使用（将来用に保持）
+    prompt: el.ta.value,
+    params: readParamsUI(),      // JSONカタログの場合はサーバ側で無視される想定
     etag: currentEtag || undefined
   };
 
-  showStatus("保存中…", "orange");
+  setStatus("保存中…","orange");
   try{
-    const res = await fetch(API_BASE + "SavePromptText", {
-      method: "POST",
-      headers: { "Content-Type": "application/json; charset=utf-8" },
+    const res = await fetch(API_BASE+"SavePromptText", {
+      method:"POST",
+      headers:{ "Content-Type":"application/json; charset=utf-8" },
       body: JSON.stringify(body)
     });
-    const raw = await res.text();
-    let json = {}; try { json = raw ? JSON.parse(raw) : {}; } catch {}
+    const raw = await res.text(); let json={}; try{ json = raw?JSON.parse(raw):{} }catch{}
     if (!res.ok) throw new Error(json?.error || raw || `HTTP ${res.status}`);
-
     currentEtag = json?.etag || currentEtag || null;
     dirty = false;
-    showStatus("保存完了", "green");
+    setStatus("保存完了","green");
   }catch(err){
-    showStatus("保存失敗: " + err.message, "red");
+    setStatus("保存失敗: "+err.message,"red");
     if (String(err).includes("412")) alert("他の人が更新しました。再読み込みしてから保存してください。");
   }
 }
 
-// ====== UI ユーティリティ ======
-function showStatus(msg, color){
-  if (!el.status) return;
-  el.status.textContent = msg;
-  el.status.style.color = color || "#0AA0A6";
-}
+/* ===== util ===== */
+function setStatus(msg, color){ el.status.textContent = msg; el.status.style.color = color || "#0AA0A6"; }
