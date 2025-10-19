@@ -3,7 +3,7 @@
  *  - 重複IDの即時検知/警告（保存ボタン自動無効化）
  *  - ユニークなランダム発番（表内・既存スナップショットと衝突回避）
  *  - 保存後にクライアント別プロンプト同期（BASE / TYPE-R / TYPE-S 対応）
- *  - Prompt Studio（prompt-studio.html）への編集リンク
+ *  - Prompt Studio（prompt-studio.html）を Studio ピル/行ダブルクリックで起動
  *  - 堅牢なレスポンス処理（Content-Typeを判定）
  * ========================================================= */
 const DEV_API  = "https://func-texel-api-dev-jpe-001-b2f6fec8fzcbdrc3.japaneast-01.azurewebsites.net/api/";
@@ -257,7 +257,7 @@ function validateGrid(){
   return { ok: !(hasError || sheetMissing), message };
 }
 
-/* ---------- 行内ボタン（複製/削除/プロンプト編集） ---------- */
+/* ---------- 行内操作 + Studio 起動 ---------- */
 els.gridBody.addEventListener("click", (e)=>{
   const tr = e.target.closest("tr");
   if (!tr) return;
@@ -280,16 +280,29 @@ els.gridBody.addEventListener("click", (e)=>{
     validateGrid();
     return;
   }
-  // Prompt Studio へ（新タブ）
-  if (e.target.classList.contains("btn-editPrompt")) {
-    const code = tr.querySelector(".code").value.trim().toUpperCase();
-    const behavior = tr.querySelector(".behavior").value;
-    const api = (document.getElementById("apiBase").value || DEV_API).trim();
-    const url = `./prompt-studio.html#?client=${encodeURIComponent(code)}&behavior=${encodeURIComponent(behavior)}&api=${encodeURIComponent(api)}`;
-    window.open(url, "_blank");
+  // Studio ピルで Prompt Studio を開く
+  if (e.target.classList.contains("studio-link")) {
+    openPromptStudioForRow(tr);
     return;
   }
 });
+
+// 行ダブルクリックでも Studio を開く（入力上のダブルクリックは除外）
+els.gridBody.addEventListener("dblclick", (e)=>{
+  const tr = e.target.closest("tr");
+  if (!tr) return;
+  if (e.target.matches('input, select, textarea')) return;
+  openPromptStudioForRow(tr);
+});
+
+function openPromptStudioForRow(tr){
+  const code = tr.querySelector(".code").value.trim().toUpperCase();
+  if (!/^[A-Z0-9]{4}$/.test(code)) { showAlert("コードが不正です", "error"); return; }
+  const behavior = tr.querySelector(".behavior").value;
+  const api = (document.getElementById("apiBase").value || DEV_API).trim();
+  const url = `./prompt-studio.html#?client=${encodeURIComponent(code)}&behavior=${encodeURIComponent(behavior)}&api=${encodeURIComponent(api)}`;
+  window.open(url, "_blank");
+}
 
 /* ---------- ユニークなランダム発番 ---------- */
 function issueNewCode(){

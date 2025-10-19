@@ -39,7 +39,7 @@
     <table id="grid" class="grid">
       <thead>
         <tr>
-          <th style="width:160px">コード（4桁英数）</th>
+          <th style="width:200px">コード（4桁英数）</th>
           <th>名称</th>
           <th style="width:120px">挙動</th>
           <th>Spreadsheet ID / URL</th>
@@ -54,7 +54,11 @@
   <!-- 行テンプレート -->
   <template id="rowTmpl">
     <tr>
-      <td><input class="cell code" placeholder="B001" /></td>
+      <td class="code-cell">
+        <input class="cell code" placeholder="B001" />
+        <!-- 行ホバー時のみ出現する“Studio”ピル -->
+        <button class="studio-link" type="button" title="Prompt Studio を開く">Studio</button>
+      </td>
       <td><input class="cell name" placeholder="○○不動産" /></td>
       <td>
         <select class="cell behavior">
@@ -67,7 +71,7 @@
       <td><input class="cell created" placeholder="YYYY-MM-DD" /></td>
       <td class="ops">
         <button class="btn sm outline btn-dup" title="複製">複製</button>
-        <button class="btn sm outline btn-editPrompt" title="プロンプト編集">⚙ 編集</button>
+        <!-- 旧「⚙ 編集」ボタンは廃止。Studioピル/ダブルクリックで開きます -->
         <button class="btn sm danger btn-del" title="削除">削除</button>
       </td>
     </tr>

@@ -71,7 +71,7 @@ main{padding:18px}
 
 /* カラム幅微調整 */
 .grid input.code{font-weight:700;letter-spacing:.3px}
-.grid th:first-child{width:160px}
+.grid th:first-child{width:200px}
 .grid th:nth-child(3){width:120px}
 .grid th:last-child{width:128px}
 
@@ -87,3 +87,15 @@ main{padding:18px}
   font-size: 12px;
   color: var(--danger);
 }
+
+/* ===== “Studio” ピル（コードセル右に重ね、行ホバーで表示） ===== */
+.code-cell{ position: relative; }
+.code-cell .studio-link{
+  position: absolute; right: 8px; top: 50%; transform: translateY(-50%);
+  display: none; padding: 5px 12px; border-radius: 999px;
+  font-size: 12px; line-height: 1; cursor: pointer;
+  border: 1px solid var(--primary-weak); background: #f2fffb; color: #0b6b4f;
+  box-shadow: 0 1px 0 rgba(0,0,0,.05);
+}
+tr:hover .studio-link{ display: inline-block; }
+.code-cell .studio-link:hover{ filter: brightness(0.98); }
