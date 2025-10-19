@@ -1,4 +1,4 @@
-/* ===== Full-screen Prompt Studio (auto layout) ===== */
+/* ===== Prompt Studio – logic ===== */
 const DEV_API  = "https://func-texel-api-dev-jpe-001-b2f6fec8fzcbdrc3.japaneast-01.azurewebsites.net/api/";
 const PROD_API = "https://func-texel-api-prod-jpe-001-dsgfhtafbfbxawdz.japaneast-01.azurewebsites.net/api/";
 
@@ -45,7 +45,7 @@ let templateText = "";
 let loadedParams = {};
 let dirty = false;
 
-/* ---------- タブ ---------- */
+/* ---------- Tabs ---------- */
 function showTab(which){
   const isPrompt = which === "prompt";
   els.tabPromptBtn.classList.toggle("active", isPrompt);
@@ -56,7 +56,7 @@ function showTab(which){
 els.tabPromptBtn.addEventListener("click", ()=>showTab("prompt"));
 els.tabParamsBtn.addEventListener("click", ()=>showTab("params"));
 
-/* ---------- Param UI ---------- */
+/* ---------- Params ---------- */
 const paramKeys = [
   ["max_tokens",         800],
   ["temperature",       1.00],
@@ -95,7 +95,7 @@ paramKeys.forEach(([k])=>{
   }
 });
 
-/* ---------- 起動 ---------- */
+/* ---------- Boot ---------- */
 window.addEventListener("DOMContentLoaded", boot);
 function boot(){
   const q = new URLSearchParams(location.hash.replace(/^#\??/, ''));
@@ -105,12 +105,10 @@ function boot(){
 
   renderFileList();
 
-  // ショートカット
   window.addEventListener("keydown", (e)=>{
     if ((e.ctrlKey||e.metaKey) && e.key.toLowerCase()==="s"){ e.preventDefault(); saveCurrent(); }
   });
 
-  // 検索
   els.search.addEventListener("input", ()=>{
     const kw = els.search.value.toLowerCase();
     [...els.fileList.children].forEach(it=>{
@@ -119,14 +117,13 @@ function boot(){
     });
   });
 
-  // Dirty
   els.promptEditor.addEventListener("input", markDirty);
 }
 function markDirty(){ dirty = true; }
 function clearDirty(){ dirty = false; }
 window.addEventListener("beforeunload", (e)=>{ if (!dirty) return; e.preventDefault(); e.returnValue=""; });
 
-/* ---------- ファイル一覧 ---------- */
+/* ---------- File List ---------- */
 async function renderFileList(){
   els.fileList.innerHTML = "";
   const clid = els.clientId.value.trim().toUpperCase();
@@ -162,7 +159,7 @@ function behaviorTemplatePath(beh, kind){
   return base;
 }
 
-/* ---------- 読み込み ---------- */
+/* ---------- Load ---------- */
 async function tryLoad(filename){
   const url = join(els.apiBase.value, "LoadPromptText") + `?filename=${encodeURIComponent(filename)}`;
   const res = await fetch(url, { cache: "no-store" }).catch(()=>null);
@@ -242,7 +239,7 @@ async function openKind(kind){
   clearDirty();
 }
 
-/* ---------- 保存 ---------- */
+/* ---------- Save ---------- */
 els.btnSave.addEventListener("click", saveCurrent);
 async function saveCurrent(){
   if (!currentFilenameTarget) return;
@@ -271,14 +268,14 @@ async function saveCurrent(){
   }
 }
 
-/* ---------- 差分 ---------- */
+/* ---------- Diff ---------- */
 els.btnDiff.addEventListener("click", ()=>{
   els.diffLeft.value  = templateText || "(テンプレートなし)";
   els.diffRight.value = els.promptEditor.value || "";
   els.diffPanel.hidden = !els.diffPanel.hidden;
 });
 
-/* ---------- utils ---------- */
+/* ---------- Utils ---------- */
 function setStatus(msg, color="#0AA0A6"){ els.status.style.color = color; els.status.textContent = msg; }
 function setBadges(stateText, etag, mode){
   els.badgeState.textContent = stateText;
