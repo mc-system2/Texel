@@ -4,62 +4,123 @@
   <meta charset="utf-8" />
   <title>Prompt Studio</title>
   <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <!-- 既存の prompt-editor の雰囲気に合わせる -->
+  <link rel="stylesheet" href="./prompt-editor.css" />
   <link rel="stylesheet" href="./prompt-studio.css" />
-  <!-- Monaco Editor (VSCodeエンジン) -->
-  <script>window.require = { paths: { 'vs': 'https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.45.0/min/vs' } };</script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.45.0/min/vs/loader.min.js"></script>
 </head>
 <body>
-  <header class="ps-header glass">
+  <header class="ps-header">
     <div class="left">
-      <a class="btn ghost" href="./client-editor.html">← 戻る</a>
-      <h1>Prompt Studio</h1>
+      <a class="btn" href="./client-editor.html">← 戻る</a>
+      <h2 style="margin:0">Prompt Studio</h2>
     </div>
     <div class="middle">
-      <label>Client</label>
+      <label class="label">Client</label>
       <input id="clientId" class="input sm" placeholder="A001" />
-      <label class="ml8">Behavior</label>
+      <label class="label" style="margin-left:.8em;">Behavior</label>
       <select id="behavior" class="input sm">
         <option>BASE</option>
         <option>TYPE-R</option>
         <option>TYPE-S</option>
       </select>
-      <label class="ml8">API Base</label>
+      <label class="label" style="margin-left:.8em;">API Base</label>
       <input id="apiBase" class="input sm wide" placeholder="https://.../api" />
     </div>
-    <div class="right cmdbar">
-      <button id="btnFormat" class="btn ghost">整形</button>
-      <button id="btnValidate" class="btn ghost">検証</button>
-      <button id="btnDiff" class="btn ghost">差分</button>
-      <button id="btnSave" class="btn primary">保存 (Ctrl+S)</button>
+    <div class="right">
+      <button id="btnCreateFromTemplate" class="btn" style="display:none;">テンプレから新規作成</button>
+      <button id="btnDiff" class="btn">差分</button>
+      <button id="btnSave" class="btn">保存 (Ctrl+S)</button>
     </div>
   </header>
 
   <main class="ps-main">
-    <aside class="ps-side">
-      <div class="search">
-        <input id="search" class="input" placeholder="ファイル検索…" />
-      </div>
+    <!-- 左：ファイルリスト -->
+    <aside class="ps-side panel">
+      <div class="tips" style="margin-top:0">クライアント別の編集対象を選択してください。</div>
+      <input id="search" class="input" placeholder="ファイル検索…" />
       <div id="fileList" class="filelist"></div>
     </aside>
 
-    <section class="ps-editor">
-      <div class="toprow">
-        <div class="badges">
-          <span id="badgeState" class="chip">—</span>
-          <span id="badgeEtag" class="chip">ETag: —</span>
-        </div>
-        <div id="fileTitle" class="title">ファイルを選択してください</div>
+    <!-- 右：エディタ（prompt-editor のUIを融合） -->
+    <section class="ps-editor panel">
+      <div class="tips">
+        <span>状態:</span> <span id="badgeState" class="chip">—</span>
+        <span style="margin-left:8px;">ETag:</span> <span id="badgeEtag" class="chip">—</span>
+        <span style="margin-left:8px;">ファイル:</span> <code id="fileTitle">未選択</code>
       </div>
-      <div id="editorHost" class="editor"></div>
-      <div id="diffHost" class="editor" hidden></div>
+
+      <!-- タブ（prompt-editor準拠） -->
+      <div class="tab-header">
+        <button class="tab-button active" id="tabPromptBtn">プロンプト</button>
+        <button class="tab-button" id="tabParamsBtn">パラメータ</button>
+      </div>
+
+      <!-- プロンプト編集 -->
+      <div class="tab-panel active" id="promptTab">
+        <textarea id="promptEditor" placeholder="ここにプロンプトが読み込まれます..."></textarea>
+      </div>
+
+      <!-- パラメータ編集（prompt-editor のUIそのまま） -->
+      <div class="tab-panel" id="paramsTab">
+        <div>
+          <div class="slider-group">
+            <div class="slider-label">
+              入力補完トークンの最大数（100～32768）
+              <span class="slider-value" id="val_max_tokens">800</span>
+            </div>
+            <input type="range" id="param_max_tokens" min="100" max="32768" step="1" value="800" />
+          </div>
+
+          <div class="slider-group">
+            <div class="slider-label">
+              温度 [temperature]（0.00～1.00）
+              <span class="slider-value" id="val_temperature">1.00</span>
+            </div>
+            <input type="range" id="param_temperature" min="0" max="1" step="0.01" value="1.00" />
+          </div>
+
+          <div class="slider-group">
+            <div class="slider-label">
+              Top P（0.01～1.00）
+              <span class="slider-value" id="val_top_p">1.00</span>
+            </div>
+            <input type="range" id="param_top_p" min="0.01" max="1" step="0.01" value="1.00" />
+          </div>
+
+          <div class="slider-group">
+            <div class="slider-label">
+              頻度ペナルティ [frequency_penalty]（-2.00～2.00）
+              <span class="slider-value" id="val_frequency_penalty">0.00</span>
+            </div>
+            <input type="range" id="param_frequency_penalty" min="-2" max="2" step="0.01" value="0.00" />
+          </div>
+
+          <div class="slider-group">
+            <div class="slider-label">
+              プレゼンスペナルティ [presence_penalty]（-2.00～2.00）
+              <span class="slider-value" id="val_presence_penalty">0.00</span>
+            </div>
+            <input type="range" id="param_presence_penalty" min="-2" max="2" step="0.01" value="0.00" />
+          </div>
+
+          <div class="slider-group">
+            <div class="slider-label">
+              応答数 n（1～4）
+              <span class="slider-value" id="val_n">1</span>
+            </div>
+            <input type="range" id="param_n" min="1" max="4" step="1" value="1" />
+          </div>
+        </div>
+      </div>
+
+      <div id="statusMessage" class="tips">ファイルを選択してください。</div>
+      <div id="diffPanel" class="diff" hidden>
+        <div class="diff-head">テンプレートとの差分（左：テンプレ / 右：現在）</div>
+        <textarea id="diffLeft" readonly></textarea>
+        <textarea id="diffRight" readonly></textarea>
+      </div>
     </section>
   </main>
-
-  <footer class="ps-footer">
-    <span id="status">ready</span>
-  </footer>
-
   <script src="./prompt-studio.js"></script>
 </body>
 </html>

@@ -1,9 +1,8 @@
-/* ================== Prompt Studio core ================== */
-// 既存のAPIエンドポイント（ClientEditorと同じ値を使ってOK）
+/* ============== Prompt Studio – prompt-editor 融合UI ============== */
 const DEV_API  = "https://func-texel-api-dev-jpe-001-b2f6fec8fzcbdrc3.japaneast-01.azurewebsites.net/api/";
 const PROD_API = "https://func-texel-api-prod-jpe-001-dsgfhtafbfbxawdz.japaneast-01.azurewebsites.net/api/";
 
-// 対象kind → ファイル共通名
+/* 種別 → 共通ファイル名（Client側は client/<CLID>/<name> になる） */
 const KIND_TO_NAME = {
   "suumo-catch":   "texel-suumo-catch.json",
   "suumo-comment": "texel-suumo-comment.json",
@@ -12,301 +11,332 @@ const KIND_TO_NAME = {
   "athome-appeal": "texel-athome-appeal.json",
   "athome-comment":"texel-athome-comment.json",
 };
-
-// 行動別テンプレ可用性
+/* 行動別で扱うファイル集合（テンプレ可用性） */
 const FAMILY = {
-  "BASE":  new Set(["suumo-catch","suumo-comment","roomphoto","suggestion","athome-appeal","athome-comment"]),
-  "TYPE-R":new Set(["suumo-catch","suumo-comment","roomphoto","suggestion","athome-appeal","athome-comment"]),
-  "TYPE-S":new Set(["suumo-catch","suumo-comment","roomphoto","suggestion"]),
+  "BASE":   new Set(["suumo-catch","suumo-comment","roomphoto","suggestion","athome-appeal","athome-comment"]),
+  "TYPE-R": new Set(["suumo-catch","suumo-comment","roomphoto","suggestion","athome-appeal","athome-comment"]),
+  "TYPE-S": new Set(["suumo-catch","suumo-comment","roomphoto","suggestion"]),
 };
 
-// UI refs
+/* UI refs */
 const els = {
   clientId:  document.getElementById("clientId"),
   behavior:  document.getElementById("behavior"),
   apiBase:   document.getElementById("apiBase"),
+
   fileList:  document.getElementById("fileList"),
+  search:    document.getElementById("search"),
+
   fileTitle: document.getElementById("fileTitle"),
   badgeState:document.getElementById("badgeState"),
   badgeEtag: document.getElementById("badgeEtag"),
-  status:    document.getElementById("status"),
+
+  tabPromptBtn: document.getElementById("tabPromptBtn"),
+  tabParamsBtn: document.getElementById("tabParamsBtn"),
+  promptTab:    document.getElementById("promptTab"),
+  paramsTab:    document.getElementById("paramsTab"),
+
+  promptEditor: document.getElementById("promptEditor"),
+
+  btnCreate: document.getElementById("btnCreateFromTemplate"),
   btnSave:   document.getElementById("btnSave"),
-  btnFormat: document.getElementById("btnFormat"),
-  btnValidate:document.getElementById("btnValidate"),
   btnDiff:   document.getElementById("btnDiff"),
-  search:    document.getElementById("search"),
-  editorHost:document.getElementById("editorHost"),
-  diffHost:  document.getElementById("diffHost"),
+
+  diffPanel: document.getElementById("diffPanel"),
+  diffLeft:  document.getElementById("diffLeft"),
+  diffRight: document.getElementById("diffRight"),
+
+  status:    document.getElementById("statusMessage"),
 };
 
-let editor = null;
-let diffEditor = null;
 let currentKind = null;
-let currentFilename = null;
-let currentEtag = null;
-let currentTemplateText = ""; // diff用
-let currentClientText = "";   // editor原本
+let currentFilenameTarget = null; // いつでも client/<CLID>/<name> を指す
+let currentEtag = null;           // client/ を開いた時のみ反映
+let templateText = "";            // diff用
+let loadedText = "";              // 右ペイン現在値（編集テキスト）
+let loadedParams = {};            // スライダー値
+let dirty = false;
 
-// Monaco 初期化
-require(['vs/editor/editor.main'], function () {
-  editor = monaco.editor.create(els.editorHost, {
-    value: "",
-    language: "json",
-    theme: "vs-dark",
-    automaticLayout: true,
-    fontLigatures: true,
-    fontSize: 14,
-    minimap: { enabled: false }
-  });
-  diffEditor = monaco.editor.createDiffEditor(els.diffHost, {
-    theme: "vs-dark",
-    automaticLayout: true,
-    renderOverviewRuler: false,
-    readOnly: true,
-    originalEditable: false
-  });
+/* ==== タブ切替（prompt-editor準拠） ==== */
+function showTab(which){
+  if (which==="prompt"){
+    els.tabPromptBtn.classList.add("active"); els.tabParamsBtn.classList.remove("active");
+    els.promptTab.classList.add("active");    els.paramsTab.classList.remove("active");
+  }else{
+    els.tabPromptBtn.classList.remove("active"); els.tabParamsBtn.classList.add("active");
+    els.promptTab.classList.remove("active");    els.paramsTab.classList.add("active");
+  }
+}
+els.tabPromptBtn.addEventListener("click", ()=>showTab("prompt"));
+els.tabParamsBtn.addEventListener("click", ()=>showTab("params"));
 
-  // ショートカット
-  editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => saveCurrent());
-  // 起動
-  boot();
+/* ==== Param スライダー（prompt-editor と同じキーバリエーション） ==== */
+const paramKeys = [
+  ["max_tokens",         800],
+  ["temperature",       1.00],
+  ["top_p",             1.00],
+  ["frequency_penalty", 0.00],
+  ["presence_penalty",  0.00],
+  ["n",                 1   ],
+];
+function writeParamUI(params){
+  paramKeys.forEach(([k, def])=>{
+    const input = document.getElementById("param_"+k);
+    const span  = document.getElementById("val_"+k);
+    if (input && span){
+      input.value = (params && params[k] !== undefined) ? params[k] : def;
+      span.textContent = (""+input.value).includes(".") ? Number(input.value).toFixed(2) : input.value;
+    }
+  });
+}
+function readParamUI(){
+  const o = {};
+  paramKeys.forEach(([k])=>{
+    const v = document.getElementById("param_"+k).value;
+    o[k] = (""+v).includes(".") ? parseFloat(v) : parseInt(v,10);
+  });
+  return o;
+}
+paramKeys.forEach(([k])=>{
+  const input = document.getElementById("param_"+k);
+  const span  = document.getElementById("val_"+k);
+  if (input && span){
+    input.addEventListener("input", ()=>{
+      span.textContent = (""+input.value).includes(".") ? Number(input.value).toFixed(2) : input.value;
+      markDirty();
+    });
+  }
 });
 
+/* ==== 起動 ==== */
+window.addEventListener("DOMContentLoaded", boot);
 function boot(){
-  // クエリ（client, behavior, apiBase, kind）から初期化
-  const q = new URLSearchParams(location.hash.replace(/^#\??/,'') || location.search.replace(/^\?/,''));
+  // クエリ/ハッシュから初期化（ClientEditor から渡ってくる）
+  const q = new URLSearchParams(location.hash.replace(/^#\??/, ''));
   els.clientId.value = (q.get("client") || "").toUpperCase();
   els.behavior.value = (q.get("behavior") || "BASE").toUpperCase();
   els.apiBase.value  = q.get("api") || DEV_API;
-  // ファイル一覧描画
-  renderFileList();
-  // 初期kind指定があれば開く
-  const initKind = q.get("kind");
-  if (initKind && KIND_TO_NAME[initKind]) openKind(initKind);
-}
 
-// ファイル一覧（ステータス付き）
+  // ファイルリスト描画
+  renderFileList();
+
+  // ショートカット
+  window.addEventListener("keydown", (e)=>{
+    if ((e.ctrlKey||e.metaKey) && e.key.toLowerCase()==="s"){ e.preventDefault(); saveCurrent(); }
+  });
+
+  // 検索
+  els.search.addEventListener("input", ()=>{
+    const q = els.search.value.toLowerCase();
+    [...els.fileList.children].forEach(it=>{
+      const t = it.querySelector(".name").textContent.toLowerCase();
+      it.style.display = t.includes(q) ? "" : "none";
+    });
+  });
+
+  // 入力変更で dirty
+  els.promptEditor.addEventListener("input", markDirty);
+}
+function markDirty(){ dirty = true; }
+function clearDirty(){ dirty = false; }
+window.addEventListener("beforeunload", (e)=>{ if (!dirty) return; e.preventDefault(); e.returnValue=""; });
+
+/* ==== ファイルリスト ==== */
 async function renderFileList(){
   els.fileList.innerHTML = "";
   const clid = els.clientId.value.trim().toUpperCase();
   const beh  = els.behavior.value.toUpperCase();
 
-  const kinds = Object.keys(KIND_TO_NAME).filter(k => FAMILY[beh].has(k));
+  const kinds = Object.keys(KIND_TO_NAME).filter(k=>FAMILY[beh].has(k));
   for (const kind of kinds){
     const name = KIND_TO_NAME[kind];
-    const item = document.createElement("div");
-    item.className = "fileitem";
-    item.dataset.kind = kind;
-    item.innerHTML = `
-      <div class="name">${name}</div>
-      <div class="meta">
-        <span class="chip info" data-role="state">checking…</span>
-      </div>`;
-    els.fileList.appendChild(item);
 
-    // 状態判定（client → legacy → template）
+    const li = document.createElement("div");
+    li.className = "fileitem";
+    li.dataset.kind = kind;
+    li.innerHTML = `
+      <div class="name">${name}</div>
+      <div class="meta"><span class="chip">checking…</span></div>
+    `;
+    els.fileList.appendChild(li);
+
+    // 状態 (client → legacy → template)
     const clientPath = `client/${clid}/${name}`;
     const legacyPath = `prompt/${clid}/${name}`;
-    const templatePath = behaviorTemplatePath(beh, kind);
+    const template   = behaviorTemplatePath(beh, kind);
 
-    const st = await resolveState([clientPath, legacyPath], templatePath);
-    const chip = item.querySelector('[data-role="state"]');
-    if (st === "client") { chip.textContent = "Overridden"; chip.classList.add("ok"); }
-    else if (st === "legacy") { chip.textContent = "Overridden (legacy)"; chip.classList.add("ok"); }
-    else if (st === "template") { chip.textContent = "Template"; chip.classList.add("info"); }
+    const state = await resolveState([clientPath, legacyPath], template);
+    const chip  = li.querySelector(".chip");
+    if (state === "client") { chip.textContent = "Overridden"; chip.classList.add("ok"); }
+    else if (state === "legacy"){ chip.textContent = "Overridden (legacy)"; chip.classList.add("ok"); }
+    else if (state === "template"){ chip.textContent = "Template"; chip.classList.add("info"); }
     else { chip.textContent = "Missing"; chip.classList.add("warn"); }
 
-    item.addEventListener("click", ()=> openKind(kind));
+    li.addEventListener("click", ()=> openKind(kind));
   }
-
-  // 検索
-  els.search.oninput = () => {
-    const q = els.search.value.toLowerCase();
-    [...els.fileList.children].forEach(c=>{
-      const text = c.querySelector('.name').textContent.toLowerCase();
-      c.style.display = text.includes(q) ? "" : "none";
-    });
-  };
 }
 
 function behaviorTemplatePath(beh, kind){
   const base = KIND_TO_NAME[kind];
   if (beh === "TYPE-R") return base.replace("texel-", "texel-r-");
   if (beh === "TYPE-S") return base.replace("texel-", "texel-s-");
-  return base; // BASE
+  return base;
 }
 
-// 存在チェック兼ロード（順に試す）
+/* ==== ロード・状態判定 ==== */
 async function tryLoad(filename){
   const url = join(els.apiBase.value, "LoadPromptText") + `?filename=${encodeURIComponent(filename)}`;
-  const res = await fetch(url, { cache:"no-store" });
+  const res = await fetch(url, { cache: "no-store" });
   if (!res.ok) return null;
-  const etag = res.headers.get("etag") || (await res.clone().text() && null);
-  let json = {};
-  try { json = await res.json(); } catch {}
-  return { json, etag };
+  const etag = res.headers.get("etag") || null;
+  let data = {};
+  try { data = await res.json(); } catch { data = {}; }
+  return { data, etag };
 }
-
 async function resolveState(clientCandidates, templatePath){
   for (const c of clientCandidates){
-    const got = await tryLoad(c);
-    if (got) return c.includes("prompt/") ? "legacy" : "client";
+    const r = await tryLoad(c);
+    if (r) return c.includes("/prompt/") ? "legacy" : "client";
   }
   if (await tryLoad(templatePath)) return "template";
   return "missing";
 }
 
 async function openKind(kind){
+  if (dirty && !confirm("未保存の変更があります。破棄して読み込みますか？")) return;
+
   currentKind = kind;
+  els.diffPanel.hidden = true;
   els.fileTitle.textContent = KIND_TO_NAME[kind];
   [...els.fileList.children].forEach(n=>n.classList.toggle("active", n.dataset.kind===kind));
-  els.status.textContent = "loading…"; els.diffHost.hidden = true; els.editorHost.hidden = false;
+  setStatus("読込中…","orange");
 
   const clid = els.clientId.value.trim().toUpperCase();
   const beh  = els.behavior.value.toUpperCase();
-
   const name = KIND_TO_NAME[kind];
+
+  currentFilenameTarget = `client/${clid}/${name}`; // 保存先は常に client 配下
+
+  // ロード候補（優先順）
   const candidates = [
     `client/${clid}/${name}`,
-    `prompt/${clid}/${name}`, // legacy fallback
-    behaviorTemplatePath(beh, kind),
+    `prompt/${clid}/${name}`,                // 旧
+    behaviorTemplatePath(beh, kind)         // テンプレ
   ];
 
-  let loaded = null, usedPath = null;
+  let loaded = null, used = null;
   for (const f of candidates){
-    const got = await tryLoad(f);
-    if (got){ loaded = got; usedPath = f; break; }
+    const r = await tryLoad(f);
+    if (r) { loaded = r; used = f; break; }
   }
-
-  // diff用にテンプレも保持
+  // テンプレも取得（diff用）
   const templ = await tryLoad(behaviorTemplatePath(beh, kind));
-  currentTemplateText = templ ? JSON.stringify(templ.json, null, 2) : "";
+  templateText = templ ? JSON.stringify(templ.data, null, 2) : "";
 
+  // UI反映
   if (!loaded){
-    // 何もない → 新規
-    currentFilename = `client/${clid}/${name}`;
+    // 何も無い → 新規
     currentEtag = null;
-    currentClientText = JSON.stringify({ prompt:"", params:{} }, null, 2);
-    editor.setValue(currentClientText);
+    loadedText = ""; loadedParams = {};
+    els.promptEditor.value = loadedText;
+    writeParamUI(loadedParams);
     setBadges("Missing（新規）", null);
-    els.status.textContent = "new file";
+    els.btnCreate.style.display = templ ? "" : "none"; // テンプレがあれば「テンプレから新規作成」
+    setStatus("新規作成できます。右上の保存を押すと client 配下に作成します。");
+    clearDirty();
     return;
   }
 
-  currentFilename = usedPath.includes("prompt/") ? `client/${clid}/${name}` : usedPath; // legacyを開いた場合は保存先をclientに寄せる
-  currentEtag = loaded.etag || null;
-  currentClientText = JSON.stringify(loaded.json, null, 2);
-  editor.setValue(currentClientText);
+  // { prompt, params } の形を吸収（prompt-editorと同じ判定）
+  const d = loaded.data || {};
+  let promptText = "";
+  if (typeof d.prompt === "string") promptText = d.prompt;
+  else if (d.prompt && typeof d.prompt.text === "string") promptText = d.prompt.text;
+  else if (typeof d === "string") promptText = d;
+  else promptText = JSON.stringify(d, null, 2);
 
-  // バッジ
-  if (usedPath.startsWith("client/")) setBadges("Overridden", currentEtag, "ok");
-  else if (usedPath.startsWith("prompt/")) setBadges("Overridden (legacy)", currentEtag, "ok");
-  else setBadges("Template（未上書き）", currentEtag, "info");
+  loadedText   = promptText;
+  loadedParams = d.params || {};
 
-  els.status.textContent = "loaded";
+  els.promptEditor.value = loadedText;
+  writeParamUI(loadedParams);
+
+  currentEtag = (used.startsWith("client/") || used.startsWith("prompt/")) ? loaded.etag : null;
+
+  // 状態バッジ＆ボタン
+  if (used.startsWith("client/")) {
+    setBadges("Overridden", currentEtag, "ok");
+    els.btnCreate.style.display = "none";
+  } else if (used.startsWith("prompt/")) {
+    setBadges("Overridden (legacy)", currentEtag, "ok");
+    els.btnCreate.style.display = ""; // client/ に移行作成を許可
+  } else {
+    setBadges("Template（未上書き）", loaded.etag || "—", "info");
+    els.btnCreate.style.display = ""; // テンプレから作成
+  }
+
+  setStatus("読み込み完了","green");
+  clearDirty();
 }
 
+/* ==== Save / Create ==== */
+els.btnSave.addEventListener("click", saveCurrent);
+els.btnCreate.addEventListener("click", createFromTemplate);
+
+async function saveCurrent(){
+  if (!currentFilenameTarget) return;
+  const prompt = els.promptEditor.value;
+  const params = readParamUI();
+  const body = {
+    filename: currentFilenameTarget,
+    prompt, params,
+    etag: currentEtag || undefined
+  };
+  setStatus("保存中…","orange");
+  try{
+    const r = await fetch(join(els.apiBase.value, "SavePromptText"), {
+      method:"POST",
+      headers:{ "Content-Type":"application/json; charset=utf-8" },
+      body: JSON.stringify(body)
+    });
+    const raw = await r.text(); let json={}; try{ json = raw?JSON.parse(raw):{} }catch{}
+    if (!r.ok) throw new Error(json?.error || raw || `HTTP ${r.status}`);
+
+    currentEtag = json?.etag || currentEtag || null;
+    setBadges("Overridden", currentEtag, "ok");
+    setStatus("保存完了","green");
+    clearDirty();
+    // 左のチップも更新したいので再描画（軽い）
+    renderFileList();
+  }catch(e){
+    setStatus("保存失敗: " + e.message, "red");
+    if (String(e).includes("412")) alert("他の人が更新しました。再読み込みしてから保存してください。");
+  }
+}
+async function createFromTemplate(){
+  // 今表示中の内容をそのまま client/ に保存（テンプレから読み込んだ直後の値でもOK）
+  currentEtag = null;
+  await saveCurrent();
+}
+
+/* ==== Diff（簡易） ==== */
+els.btnDiff.addEventListener("click", ()=>{
+  els.diffLeft.value  = templateText || "(テンプレートなし)";
+  els.diffRight.value = els.promptEditor.value || "";
+  els.diffPanel.hidden = !els.diffPanel.hidden;
+});
+
+/* ==== ステータス/バッジ ==== */
+function setStatus(msg, color="#0AA0A6"){
+  els.status.style.color = color;
+  els.status.textContent = msg;
+}
 function setBadges(stateText, etag, mode){
   els.badgeState.textContent = stateText;
   els.badgeState.className = "chip " + (mode||"");
-  els.badgeEtag.textContent = `ETag: ${etag || "—"}`;
+  els.badgeEtag.textContent = etag || "—";
+  els.fileTitle.textContent = currentFilenameTarget || "—";
 }
 
-// 保存
-async function saveCurrent(){
-  if (!currentFilename) return;
-  els.status.textContent = "saving…";
-
-  let text = editor.getValue();
-  try { JSON.parse(text); }
-  catch(e){ els.status.textContent = "JSONエラー: " + e.message; flashDanger(); return; }
-
-  const body = {
-    filename: currentFilename,
-    // SavePromptText: { prompt, params } 形式で保存する前提
-    ...splitPromptAndParams(JSON.parse(text)),
-    etag: currentEtag || undefined
-  };
-
-  const url = join(els.apiBase.value, "SavePromptText");
-  const res = await fetch(url, {
-    method:"POST",
-    headers:{ "Content-Type":"application/json; charset=utf-8" },
-    body: JSON.stringify(body)
-  });
-
-  const raw = await res.text();
-  let json = {}; try { json = raw ? JSON.parse(raw) : {}; } catch {}
-
-  if (!res.ok){
-    const msg = json?.error || raw || `HTTP ${res.status}`;
-    els.status.textContent = "保存失敗: " + msg;
-    flashDanger();
-    if (res.status === 412) { // 競合 → 最新を取得してdiff表示を促す
-      await openKind(currentKind);
-      showDiff();
-    }
-    return;
-  }
-
-  currentEtag = json?.etag || currentEtag;
-  setBadges("Overridden", currentEtag, "ok");
-  els.status.textContent = "保存完了";
-}
-
-function splitPromptAndParams(obj){
-  // {prompt, params} 以外で来た場合も吸収
-  if ("prompt" in obj || "params" in obj) {
-    return { prompt: obj.prompt ?? "", params: obj.params ?? {} };
-  }
-  // それ以外は丸ごとpromptとして保存
-  return { prompt: obj, params: {} };
-}
-
-function flashDanger(){
-  els.status.style.color = "#ff9b9b";
-  clearTimeout(flashDanger._t);
-  flashDanger._t = setTimeout(()=>{ els.status.style.color=""; }, 1400);
-}
-
-// 整形
-els.btnFormat.onclick = ()=>{
-  try{
-    const obj = JSON.parse(editor.getValue());
-    editor.setValue(JSON.stringify(obj, null, 2));
-    els.status.textContent = "整形しました";
-  }catch(e){ els.status.textContent = "JSONエラー: " + e.message; flashDanger(); }
-};
-
-// 検証
-els.btnValidate.onclick = ()=>{
-  try{
-    const obj = JSON.parse(editor.getValue());
-    if (!("prompt" in obj)) { els.status.textContent = "warning: `prompt` がありません（保存は可能）"; return; }
-    els.status.textContent = "OK";
-  }catch(e){ els.status.textContent = "JSONエラー: " + e.message; flashDanger(); }
-};
-
-// 差分
-els.btnDiff.onclick = ()=> showDiff();
-function showDiff(){
-  els.diffHost.hidden = false;
-  els.editorHost.hidden = true;
-  const modified = editor.getValue();
-  const original = currentTemplateText || "{}";
-  diffEditor.setModel({
-    original: monaco.editor.createModel(original, "json"),
-    modified: monaco.editor.createModel(modified, "json")
-  });
-  els.status.textContent = "テンプレートとの差分表示中（戻るにはもう一度 [差分] を押す）";
-  // トグル
-  els.btnDiff.onclick = ()=>{
-    els.diffHost.hidden = true; els.editorHost.hidden = false;
-    els.btnDiff.onclick = ()=> showDiff();
-  };
-}
-
-// ユーティリティ
-function join(base, path){
-  return (base||"").replace(/\/+$/,"") + "/" + String(path||"").replace(/^\/+/,"");
-}
+/* ==== utils ==== */
+function join(base, path){ return (base||"").replace(/\/+$/,"") + "/" + String(path||"").replace(/^\/+/,""); }
