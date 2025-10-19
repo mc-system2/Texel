@@ -1,8 +1,7 @@
-/* ============== Prompt Studio – prompt-editor 融合UI (整列・溢れ防止) ============== */
+/* ===== Full-screen Prompt Studio (auto layout) ===== */
 const DEV_API  = "https://func-texel-api-dev-jpe-001-b2f6fec8fzcbdrc3.japaneast-01.azurewebsites.net/api/";
 const PROD_API = "https://func-texel-api-prod-jpe-001-dsgfhtafbfbxawdz.japaneast-01.azurewebsites.net/api/";
 
-/* 種別 → 共通ファイル名（Client 側は client/<CLID>/<name>） */
 const KIND_TO_NAME = {
   "suumo-catch":   "texel-suumo-catch.json",
   "suumo-comment": "texel-suumo-comment.json",
@@ -11,14 +10,12 @@ const KIND_TO_NAME = {
   "athome-appeal": "texel-athome-appeal.json",
   "athome-comment":"texel-athome-comment.json",
 };
-/* 行動別ファミリー（TYPE-Sはathome系を除外） */
 const FAMILY = {
   "BASE":   new Set(["suumo-catch","suumo-comment","roomphoto","suggestion","athome-appeal","athome-comment"]),
   "TYPE-R": new Set(["suumo-catch","suumo-comment","roomphoto","suggestion","athome-appeal","athome-comment"]),
   "TYPE-S": new Set(["suumo-catch","suumo-comment","roomphoto","suggestion"])
 };
 
-/* UI refs */
 const els = {
   clientId:  document.getElementById("clientId"),
   behavior:  document.getElementById("behavior"),
@@ -42,26 +39,24 @@ const els = {
 };
 
 let currentKind = null;
-let currentFilenameTarget = null; // 常に client/<CLID>/<name>
+let currentFilenameTarget = null;
 let currentEtag = null;
-let templateText = "";            // diff用
-let loadedParams = {};            // スライダー値
+let templateText = "";
+let loadedParams = {};
 let dirty = false;
 
-/* ---------- タブ切替（クリック領域は折返さない） ---------- */
+/* ---------- タブ ---------- */
 function showTab(which){
-  if (which==="prompt"){
-    els.tabPromptBtn.classList.add("active"); els.tabParamsBtn.classList.remove("active");
-    els.promptTab.classList.add("active");    els.paramsTab.classList.remove("active");
-  }else{
-    els.tabPromptBtn.classList.remove("active"); els.tabParamsBtn.classList.add("active");
-    els.promptTab.classList.remove("active");    els.paramsTab.classList.add("active");
-  }
+  const isPrompt = which === "prompt";
+  els.tabPromptBtn.classList.toggle("active", isPrompt);
+  els.tabParamsBtn.classList.toggle("active", !isPrompt);
+  els.promptTab.classList.toggle("active", isPrompt);
+  els.paramsTab.classList.toggle("active", !isPrompt);
 }
 els.tabPromptBtn.addEventListener("click", ()=>showTab("prompt"));
 els.tabParamsBtn.addEventListener("click", ()=>showTab("params"));
 
-/* ---------- Param スライダー ---------- */
+/* ---------- Param UI ---------- */
 const paramKeys = [
   ["max_tokens",         800],
   ["temperature",       1.00],
@@ -74,11 +69,10 @@ function writeParamUI(params){
   paramKeys.forEach(([k, def])=>{
     const input = document.getElementById("param_"+k);
     const span  = document.getElementById("val_"+k);
-    if (input && span){
-      const v = (params && params[k] !== undefined) ? params[k] : def;
-      input.value = v;
-      span.textContent = (""+v).includes(".") ? Number(v).toFixed(2) : v;
-    }
+    if (!input || !span) return;
+    const v = (params && params[k] !== undefined) ? params[k] : def;
+    input.value = v;
+    span.textContent = (""+v).includes(".") ? Number(v).toFixed(2) : v;
   });
 }
 function readParamUI(){
@@ -93,7 +87,7 @@ paramKeys.forEach(([k])=>{
   const input = document.getElementById("param_"+k);
   const span  = document.getElementById("val_"+k);
   if (input && span){
-    input.addEventListener("input", ()=>{ 
+    input.addEventListener("input", ()=>{
       const v = input.value;
       span.textContent = (""+v).includes(".") ? Number(v).toFixed(2) : v;
       markDirty();
@@ -104,7 +98,6 @@ paramKeys.forEach(([k])=>{
 /* ---------- 起動 ---------- */
 window.addEventListener("DOMContentLoaded", boot);
 function boot(){
-  // クエリ/ハッシュ初期化
   const q = new URLSearchParams(location.hash.replace(/^#\??/, ''));
   els.clientId.value = (q.get("client") || "").toUpperCase();
   els.behavior.value = (q.get("behavior") || "BASE").toUpperCase();
@@ -126,18 +119,14 @@ function boot(){
     });
   });
 
-  // Dirty制御
+  // Dirty
   els.promptEditor.addEventListener("input", markDirty);
-
-  // レイアウトの高さを微調整（ウィンドウ変更時も）
-  window.addEventListener("resize", debounce(syncEditorHeight, 80));
-  syncEditorHeight();
 }
 function markDirty(){ dirty = true; }
 function clearDirty(){ dirty = false; }
 window.addEventListener("beforeunload", (e)=>{ if (!dirty) return; e.preventDefault(); e.returnValue=""; });
 
-/* ---------- ファイルリスト ---------- */
+/* ---------- ファイル一覧 ---------- */
 async function renderFileList(){
   els.fileList.innerHTML = "";
   const clid = els.clientId.value.trim().toUpperCase();
@@ -149,12 +138,9 @@ async function renderFileList(){
     const li = document.createElement("div");
     li.className = "fileitem";
     li.dataset.kind = kind;
-    li.innerHTML = `
-      <div class="name" title="${name}">${name}</div>
-      <div class="meta"><span class="chip">checking…</span></div>`;
+    li.innerHTML = `<div class="name" title="${name}">${name}</div><div class="meta"><span class="chip">checking…</span></div>`;
     els.fileList.appendChild(li);
 
-    // 状態判定（client → legacy → template）
     const clientPath = `client/${clid}/${name}`;
     const legacyPath = `prompt/${clid}/${name}`;
     const template   = behaviorTemplatePath(beh, kind);
@@ -210,7 +196,6 @@ async function openKind(kind){
   currentFilenameTarget = `client/${clid}/${name}`;
   document.getElementById("fileTitle").textContent = currentFilenameTarget;
 
-  // ロード候補
   const candidates = [
     `client/${clid}/${name}`,
     `prompt/${clid}/${name}`,
@@ -222,7 +207,6 @@ async function openKind(kind){
     const r = await tryLoad(f);
     if (r) { loaded = r; used = f; break; }
   }
-  // テンプレも取得（diff用）
   const templ = await tryLoad(behaviorTemplatePath(beh, kind));
   templateText = templ ? JSON.stringify(templ.data, null, 2) : "";
 
@@ -237,7 +221,6 @@ async function openKind(kind){
     return;
   }
 
-  // {prompt, params} 形式・素文字列いずれにも対応
   const d = loaded.data || {};
   let promptText = "";
   if (typeof d.prompt === "string") promptText = d.prompt;
@@ -251,17 +234,12 @@ async function openKind(kind){
 
   currentEtag = (used.startsWith("client/") || used.startsWith("prompt/")) ? loaded.etag : null;
 
-  if (used.startsWith("client/")) {
-    setBadges("Overridden", currentEtag, "ok");
-  } else if (used.startsWith("prompt/")) {
-    setBadges("Overridden (legacy)", currentEtag, "ok");
-  } else {
-    setBadges("Template（未上書き）", loaded.etag || "—", "info");
-  }
+  if (used.startsWith("client/")) setBadges("Overridden", currentEtag, "ok");
+  else if (used.startsWith("prompt/")) setBadges("Overridden (legacy)", currentEtag, "ok");
+  else setBadges("Template（未上書き）", loaded.etag || "—", "info");
 
   setStatus("読み込み完了","green");
   clearDirty();
-  syncEditorHeight();
 }
 
 /* ---------- 保存 ---------- */
@@ -286,7 +264,7 @@ async function saveCurrent(){
     setBadges("Overridden", currentEtag, "ok");
     setStatus("保存完了","green");
     clearDirty();
-    renderFileList(); // 左の状態バッジ更新
+    renderFileList();
   }catch(e){
     setStatus("保存失敗: " + e.message, "red");
     if (String(e).includes("412")) alert("他の人が更新しました。再読み込みしてから保存してください。");
@@ -298,28 +276,13 @@ els.btnDiff.addEventListener("click", ()=>{
   els.diffLeft.value  = templateText || "(テンプレートなし)";
   els.diffRight.value = els.promptEditor.value || "";
   els.diffPanel.hidden = !els.diffPanel.hidden;
-  syncEditorHeight();
 });
 
-/* ---------- ステータス/バッジ ---------- */
+/* ---------- utils ---------- */
 function setStatus(msg, color="#0AA0A6"){ els.status.style.color = color; els.status.textContent = msg; }
 function setBadges(stateText, etag, mode){
   els.badgeState.textContent = stateText;
   els.badgeState.className = "chip " + (mode||"");
   els.badgeEtag.textContent = etag || "—";
 }
-
-/* ---------- utils ---------- */
 function join(base, path){ return (base||"").replace(/\/+$/,"") + "/" + String(path||"").replace(/^\/+/,""); }
-function debounce(fn, ms){ let t; return (...a)=>{ clearTimeout(t); t=setTimeout(()=>fn(...a), ms); }; }
-function syncEditorHeight(){
-  // CSS calc で十分だが、差分パネル開閉時にスクロールが跳ねないように明示再計算
-  const ta = els.promptEditor;
-  if (!ta) return;
-  ta.style.height = ""; // reset
-  const rect = ta.getBoundingClientRect();
-  const viewportH = window.innerHeight;
-  const min = 360;
-  const desired = Math.max(min, viewportH - rect.top - 64); // 64px 余白
-  ta.style.height = desired + "px";
-}
