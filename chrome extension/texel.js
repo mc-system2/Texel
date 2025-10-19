@@ -64,16 +64,61 @@ const COMMITMENT_MASTER_FILE = "texel-commitment-master.json";
 
 /* ------ プロンプトの論理キーとファイル名（texel-* に統一） ------ */
 const P = {
-  floorplan:      "texel-floorplan.json",
-  roomphoto:      "texel-roomphoto.json",
-  pdfImage:       "texel-pdf-image.json",
-  suggestion:     "texel-suggestion.json",
-  summary:        "texel-summary.json",
-  suumoCatch:     "texel-suumo-catch.json",
-  suumoComment:   "texel-suumo-comment.json",
-  athomeComment:  "texel-athome-comment.json",
-  athomeAppeal:   "texel-athome-appeal.json",
+  floorplan: "texel-floorplan.json",
+  roomphoto: "texel-roomphoto.json",
+  suggestion: "texel-suggestion.json",
+  suumoCatch: "texel-suumo-catch.json",
+  suumoComment: "texel-suumo-comment.json",
+  athomeComment: "texel-athome-comment.json",
+  athomeAppeal: "texel-athome-appeal.json",
 };
+
+/* ------ key名 → ファイル名片（texel-*.json の * 部分） ------ */
+const KEY_TO_NAME = {
+  floorplan:       "floorplan",
+  roomphoto:       "roomphoto",
+  pdfImage:        "pdf-image",
+  suggestion:      "suggestion",
+  summary:         "summary",
+  suumoCatch:      "suumo-catch",
+  suumoComment:    "suumo-comment",
+  athomeComment:   "athome-comment",
+  athomeAppeal:    "athome-appeal",
+};
+
+/* 行動別に「テンプレが存在する種別」を定義 */
+const TEMPLATE_FAMILIES = {
+  "TYPE-S": new Set(["suumo-catch","suumo-comment","roomphoto","suggestion"]),
+  "TYPE-R": new Set(["athome-appeal","athome-comment","roomphoto","suggestion","suumo-catch","suumo-comment"]),
+  "BASE"  : new Set(["athome-appeal","athome-comment","roomphoto","suggestion","suumo-catch","suumo-comment"])
+};
+
+/** keyLike から読み込み候補（優先順）を作る
+ *  1) prompt/<CLID>/texel-<name>.json
+ *  2) 挙動別テンプレ（TYPE-R: texel-r-<name>.json / TYPE-S: texel-s-<name>.json / BASE: texel-<name>.json）
+ *  3) 最後の保険として、従来のファイル名（呼出し側が渡してきた P.*）
+ */
+function resolvePromptCandidates(keyLike, fallbackFilename) {
+  const name = KEY_TO_NAME[keyLike];
+  const list = [];
+  if (clientId && name) {
+    list.push(`prompt/${clientId}/texel-${name}.json`);
+  }
+  const beh = (CURRENT_BEHAVIOR || "BASE").toUpperCase();
+  if (name) {
+    if (beh === "TYPE-R" && TEMPLATE_FAMILIES["TYPE-R"].has(name)) {
+      list.push(`prompt/texel-r-${name}.json`);
+    } else if (beh === "TYPE-S" && TEMPLATE_FAMILIES["TYPE-S"].has(name)) {
+      list.push(`prompt/texel-s-${name}.json`);
+    } else if (beh === "BASE" && TEMPLATE_FAMILIES["BASE"].has(name)) {
+      list.push(`prompt/texel-${name}.json`);
+    }
+  }
+  // 従来のファイル名（Blob直下）も試す
+  if (fallbackFilename) list.push(fallbackFilename);
+  // 重複除去
+  return Array.from(new Set(list.filter(Boolean)));
+}
 
 /* ------ localStorage/chrome.storage.local のキー正規化（texel-* に統一） ------ */
 const KEY_ALIAS = {
@@ -152,29 +197,39 @@ async function loadCommitmentMaster() {
 }
 loadCommitmentMaster().catch(() => {});
 
-/* ------ クライアントカタログ（BLOBのマスターを読む） ------ */
+/* ------ クライアントカタログ（LoadClientCatalog API を叩くだけのシンプル版） ------ */
 const CLIENT_CATALOG_FILE = "texel-client-catalog.json";
 
-/** Texel 内で使う形：
- *  {
- *    version: number,
- *    updatedAt: string,
- *    clients: {
- *      B001: { name, behavior:""|"R"|"S", spreadsheetId, createdAt }
- *      ...
- *    }
- *  }
- */
+// Editor と同じ Functions エンドポイント（必要なら置換）
+const DEV_API  = "https://func-texel-api-dev-jpe-001-b2f6fec8fzcbdrc3.japaneast-01.azurewebsites.net/api/";
+const PROD_API = "https://func-texel-api-prod-jpe-001-dsgfhtafbfbxawdz.japaneast-01.azurewebsites.net/api/";
+
+// ENV は既存の判定を利用（なければ dev 扱い）
+const API_BASE = ((typeof ENV !== "undefined" && String(ENV).toLowerCase() === "prod") ? PROD_API : DEV_API).replace(/\/+$/,"") + "/";
+
+// Texel 内で使う形
 let clientCatalog = { version: 1, updatedAt: "", clients: {} };
+
+// ★ CLコードから catalog を引く関数（ないと落ちる）
+function resolveClientConfig(cl) {
+  const code = sanitizeCL(cl);
+  const map = clientCatalog?.clients || {};
+  const hit = map[code];
+  if (!hit) return null;
+  return {
+    name: hit.name || "",
+    behavior: hit.behavior || "",          // "" | "R" | "S"
+    spreadsheetId: hit.spreadsheetId || "",// Google Sheet ID
+    createdAt: hit.createdAt || ""
+  };
+}
 
 /* helpers */
 function extractSheetId(input) {
   const v = String(input || "").trim();
   if (!v) return "";
-  const m = v.match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]{10,})/);
-  if (m) return m[1];
-  const m2 = v.match(/[?&]id=([a-zA-Z0-9-_]{10,})/);
-  if (m2) return m2[1];
+  let m = v.match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]{10,})/); if (m) return m[1];
+  m = v.match(/[?&]id=([a-zA-Z0-9-_]{10,})/);                if (m) return m[1];
   return /^[a-zA-Z0-9-_]{10,}$/.test(v) ? v : v; // URLも許容
 }
 function normBehavior(b) {
@@ -182,28 +237,24 @@ function normBehavior(b) {
   return v === "R" ? "R" : v === "S" ? "S" : ""; // "" | R | S
 }
 
-/** BLOB から texel-client-catalog.json を読み込み、配列→マップへ正規化 */
+// ★ これだけでOK：APIから読んで配列→マップへ正規化
 async function loadClientCatalog() {
   try {
-    // Functions（API.loadPromptText）がURLを返す前提。なければ相対パスでもOK。
-    const url = (typeof API?.loadPromptText === "function")
-      ? API.loadPromptText(CLIENT_CATALOG_FILE)
-      : `${location.origin}/prompts/${CLIENT_CATALOG_FILE}`;
-
+    const url = API_BASE + "LoadClientCatalog?filename=" + encodeURIComponent(CLIENT_CATALOG_FILE);
     const res = await fetch(url, { cache: "no-cache" });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
 
-    const raw = await res.json();
+    const ctype = (res.headers.get("content-type") || "").toLowerCase();
+    const raw = ctype.includes("application/json") ? await res.json() : JSON.parse(await res.text());
 
-    // ★ ここがポイント：clients は配列で来る
     const list = Array.isArray(raw?.clients) ? raw.clients : [];
-    const map = {};
+    const map  = {};
     for (const c of list) {
       const code = String(c?.code || "").trim().toUpperCase();
       if (!code) continue;
       map[code] = {
         name: String(c?.name || ""),
-        behavior: normBehavior(c?.behavior),
+        behavior: normBehavior(c?.behavior), // ← 関数名を統一
         spreadsheetId: extractSheetId(c?.spreadsheetId || c?.sheetId || ""),
         createdAt: String(c?.createdAt || "")
       };
@@ -215,23 +266,15 @@ async function loadClientCatalog() {
       clients: map
     };
 
-    console.info("✅ client catalog loaded:", Object.keys(map).length, "clients");
+    console.info("✅ client catalog loaded:", Object.keys(map).length, "clients (from:", url, ")");
   } catch (e) {
     console.warn("⚠️ client catalog load failed:", e?.message || e);
     clientCatalog = { version: 1, updatedAt: "", clients: {} };
   }
 }
 
-/** CL コードから設定を取得（無ければ null） */
-function resolveClientConfig(clientCode) {
-  const key = String(clientCode || "").trim().toUpperCase();
-  const v = clientCatalog.clients[key];
-  return v ? { code: key, ...v } : null;
-}
-
-// 起動時ローディング（他の初期ロードと併走OK）
+// 起動時ロード
 loadClientCatalog().catch(() => {});
-
 /* ==============================
  * 3) ユーティリティ
  * ============================== */
@@ -345,12 +388,12 @@ function evaluateDialogState() {
   const btn  = document.getElementById("start-button");
   const cl = sanitizeCL(clIn.value);
  // ✅ カタログ未ロード時は待機表示にする
- if (!clientCatalog) {
-   document.getElementById("modal-subtitle").textContent = "クライアント情報を読み込んでいます…";
-   document.getElementById("bk-wrapper").style.display = "none";
-   btn.disabled = true;
-   return;
- }
+  if (!clientCatalog || !Object.keys(clientCatalog.clients || {}).length) {
+    document.getElementById("modal-subtitle").textContent = "クライアント情報を読み込んでいます…";
+    document.getElementById("bk-wrapper").style.display = "none";
+    btn.disabled = true;
+    return;
+  }
  const cfg = resolveClientConfig(cl);
  console.info("[Texel] CL:", cl, "resolved:", cfg);
   // CL形式チェック
@@ -677,13 +720,19 @@ async function fetchPromptTextFile(filename) {
   } catch (e) { console.warn("LoadPromptText 例外:", e); return null; }
 }
 
-async function getPromptObj(keyLike, filename) {
-  const cacheKey = storageKeyFor(keyLike);
-  const local = localStorage.getItem(cacheKey);
-  if (local !== null) {
-    console.info(`[prompt] localStorage 使用: ${cacheKey}`);
-    try { return JSON.parse(local); } catch { return { prompt: local, params: {} }; }
-  }
+async function getPromptObj(keyLike, fallbackFilename) {
+  // ▼ クライアント別キャッシュキー（従来 key を維持しつつ CLID 付きも使う）
+  const baseKey = storageKeyFor(keyLike);
+  const cacheKey = clientId ? `${baseKey}__${clientId}` : baseKey;
+
+  // 1) ローカルキャッシュ（clientId 別）
+  try {
+    const local = localStorage.getItem(cacheKey);
+    if (local !== null) {
+      console.info(`[prompt] localStorage 使用: ${cacheKey}`);
+      try { return JSON.parse(local); } catch { return { prompt: local, params: {} }; }
+    }
+  } catch {}
   try {
     if (chrome?.storage?.local) {
       const got = await new Promise((r) => chrome.storage.local.get([cacheKey], (ret) => r(ret?.[cacheKey] ?? null)));
@@ -693,12 +742,22 @@ async function getPromptObj(keyLike, filename) {
       }
     }
   } catch {}
-  const fetched = await fetchPromptTextFile(filename);
-  if (fetched) console.info(`[prompt] server/BLOB 使用: ${filename}`);
+
+  // 2) サーバ／BLOB：クライアント別 → 挙動テンプレ → 旧ファイル名 の順で試行
+  const candidates = resolvePromptCandidates(keyLike, fallbackFilename);
+  let fetched = null;
+  for (const filename of candidates) {
+    fetched = await fetchPromptTextFile(filename);
+    if (fetched) { console.info(`[prompt] server/BLOB 使用: ${filename}`); break; }
+  }
+
   const obj = fetched || defaultPrompt(keyLike);
+
+  // 3) キャッシュ保存（CL 別）
   const saveStr = JSON.stringify(obj);
   try { localStorage.setItem(cacheKey, saveStr); } catch {}
   try { chrome?.storage?.local?.set({ [cacheKey]: saveStr }); } catch {}
+
   return obj;
 }
 
@@ -839,8 +898,8 @@ function guessFloorplanUrlFromProperty(data) {
 document.addEventListener("DOMContentLoaded", async () => {
   userId = await detectUserId();
   console.info("[Texel] Rehouse API: 直叩き専用モードで起動しました。");
-  // ✅ Client Catalog と commitment-master を両方ロード完了させる
-  try { await Promise.all([loadClientCatalog(), loadCommitmentMaster()]); } catch {}
+  // ✅ 起動時は Client Catalog のみ（commitment-master は TYPE-R のときだけ）
+  try { await loadClientCatalog(); } catch {}
 
   // 歯車：プロンプトエディタ（既存）
   document.body.addEventListener("click", async (e) => {
@@ -939,8 +998,10 @@ if (!behavior) {
   return;
 }
 
-// ✅ TYPE-R：Rehouse API を呼び出す
-if (behavior === "TYPE-R") {
+  // ✅ TYPE-R：Rehouse API を呼び出す
+  if (behavior === "R") {
+  // TYPE-R でだけ必要。失敗しても空マップで続行できる
+  try { await loadCommitmentMaster(); } catch { promptMap = {}; }    
    postLog("type-r.begin", "fetch property begin", { bk: propertyCode });
   try {
     const data = await fetchPropertyData(propertyCode);

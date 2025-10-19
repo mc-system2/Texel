@@ -1,9 +1,7 @@
 /* ===================================================================
- * Texel BG (MV3 / module) — MOCK AUTH EDITION
- * - Side Panel（SnapVoice同等）
- * - 会社アカウント認証はモックで常に許可
- * - Logs（userEmail はモックユーザー）
- * - TYPE-S（Suumo）スクレイプ中継
+ * Texel BG (MV3 / module) — SnapVoice準拠（クリック時のみ開く）
+ * - Side Panel：SnapVoiceと同じ挙動に固定
+ * - モック認証/ログ/TYPE-S中継は残すが、タブ切替で開かない
  * =================================================================== */
 
 /* ===== 設定 ===== */
@@ -53,65 +51,59 @@ async function sendLog(event, detail = {}) {
 }
 
 /* ===================================================================
- * ゲート本体（モック版）
- * - 常に許可し、texel.html を表示
- * - ユーザーは AUTH_MOCK_USER を採用
+ * ゲート（モック版）
+ * - クリック時にだけ呼ぶ。自動では呼ばない。
  * =================================================================== */
 async function gateAndRoute({ interactive = false, tabId } = {}) {
   if (AUTH_MOCK_ENABLED) {
     await setUser(AUTH_MOCK_USER);
-    await setPanelPath("texel.html", tabId);
+    if (tabId) {
+      // ★ SnapVoice同等：クリックされた“そのタブ”に対してだけ開く
+      await setPanelPath("texel.html", tabId); // ← panel.html運用ならここを変更
+    }
     await sendLog("allowed-mock", { email: AUTH_MOCK_USER.email, hd: AUTH_MOCK_USER.hd });
     return { allowed: true, user: AUTH_MOCK_USER };
   }
 
-  // ---- 本実装（将来用）：必要になったら enable して使う ----
-  // const user = await realGate(interactive); // 未実装プレースホルダ
+  // 将来の本実装（必要になったら活性化）
+  // const user = await realGate(interactive);
   // if (!user || !ALLOWED_HDS.includes(user.hd)) {
-  //   await setPanelPath("blocked.html", tabId);
+  //   if (tabId) await setPanelPath("blocked.html", tabId);
   //   await sendLog("blocked", { reason: "domain", email: user?.email, hd: user?.hd });
   //   return { allowed: false, user: user || null };
   // }
-  // await setPanelPath("texel.html", tabId);
+  // if (tabId) await setPanelPath("texel.html", tabId);
   // await setUser(user);
   // await sendLog("allowed", { email: user.email, hd: user.hd });
   // return { allowed: true, user };
 }
 
 /* ===================================================================
- * Side Panel 動線（SnapVoice同等）
+ * Side Panel 動線（SnapVoice準拠）
+ * - インストール時：openPanelOnActionClick を有効化
+ * - クリック時のみ gateAndRoute を実行
+ * - ★ タブ切替/更新で自動オープンしない（リスナー削除）
  * =================================================================== */
+
 // ① インストール時：アクションボタンクリックでサイドパネル起動
 chrome.runtime.onInstalled.addListener(() => {
   chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
-  // 既定（タブ未指定）も一度ルーティング
-  gateAndRoute({ interactive: false }).catch(() => {});
+  // ★ ここで gateAndRoute() を呼ばない（自動オープンの原因になるため）
 });
 
-// ② アクションボタン：このタブ向けに出し分け（モックで常に texel.html）
+// ② アクションボタン：このタブだけ処理（SnapVoice同等）
 chrome.action.onClicked.addListener(async (tab) => {
   if (!tab?.id || !tab.url || isSystemUrl(tab.url)) return;
   await gateAndRoute({ interactive: false, tabId: tab.id });
   // openPanelOnActionClick により、明示 open は不要
 });
 
-// タブ切替 / 読込完了でも都度ルーティング
-chrome.tabs.onActivated.addListener(async ({ tabId }) => {
-  try {
-    const t = await chrome.tabs.get(tabId);
-    if (t?.url && !isSystemUrl(t.url)) await gateAndRoute({ interactive: false, tabId });
-  } catch {}
-});
-chrome.tabs.onUpdated.addListener(async (tabId, info, tab) => {
-  if (info.status === "complete" && tab?.url && !isSystemUrl(tab.url)) {
-    await gateAndRoute({ interactive: false, tabId });
-  }
-});
+// ★ 削除：タブ切替/更新での自動ルーティング（従来Texelの自動起動）
+// chrome.tabs.onActivated.removeListener(...)
+// chrome.tabs.onUpdated.removeListener(...)
 
 /* ===================================================================
- * Runtime メッセージ API
- * - TEXEL_GATE_CHECK / TEXEL_GATE_SIGNIN / TEXEL_GET_USER / TEXEL_LOG
- * - TEXEL_SCRAPE_SUUMO / TEXEL_FETCH_IMAGES_BASE64
+ * Runtime メッセージ API（必要機能は維持）
  * =================================================================== */
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   (async () => {
@@ -176,7 +168,6 @@ async function ensureSuumoCS(tabId) {
     });
   } catch (e) {
     // 既に登録済みなどは無視
-    // console.warn("[BG] ensureSuumoCS:", e?.message || e);
   }
 }
 

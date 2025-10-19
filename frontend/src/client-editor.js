@@ -1,5 +1,5 @@
 /* =========================================================
- * Client Catalog Editor – layout fix + auto-load
+ * Client Catalog Editor – save後にクライアント別プロンプト同期
  * ========================================================= */
 const DEV_API  = "https://func-texel-api-dev-jpe-001-b2f6fec8fzcbdrc3.japaneast-01.azurewebsites.net/api/";
 const PROD_API = "https://func-texel-api-prod-jpe-001-dsgfhtafbfbxawdz.japaneast-01.azurewebsites.net/api/";
@@ -18,14 +18,15 @@ const els = {
   alert:     document.getElementById("alert"),
   dev:       document.getElementById("devPreset"),
   prod:      document.getElementById("prodPreset"),
-  pingBtn:   document.getElementById("pingBtn"),
-  pingState: document.getElementById("pingState"),
   version:   document.getElementById("version"),
   updatedAt: document.getElementById("updatedAt"),
   count:     document.getElementById("count"),
 };
 
 const rowTmpl = document.getElementById("rowTmpl");
+
+// 直前ロード時点のスナップショット（code -> behaviorView）
+let previousCatalogCodes = new Map();
 
 /* ---------- helpers ---------- */
 function updateEnvActive(which){
@@ -61,9 +62,11 @@ function makeRow(item = {code:"",name:"",behavior:"BASE",spreadsheetId:"",create
   tr.querySelector(".created").value = item.createdAt || "";
   return tr;
 }
+
+// behavior 表示 ⇄ 保存ペイロード変換
 const normalizeBehavior = (b)=>{
   const v = String(b||"").toUpperCase();
-  return v==="R" ? "TYPE-R" : v==="S" ? "TYPE-S" : "BASE";
+  return v==="R" ? "TYPE-R" : v==="S" ? "TYPE-S" : v==="TYPE-R" ? "TYPE-R" : v==="TYPE-S" ? "TYPE-S" : "BASE";
 };
 const behaviorToPayload = (v)=> v==="TYPE-R" ? "R" : v==="TYPE-S" ? "S" : "";
 
@@ -94,6 +97,14 @@ async function loadCatalog() {
     els.count.textContent     = String(clients.length);
     els.etag.dataset.etag     = raw?.etag || "";
     els.etag.textContent      = raw?.etag ? `ETag: ${raw.etag}` : "";
+
+    // ▼ スナップショット更新（保存前の比較用）
+    previousCatalogCodes = new Map();
+    for (const c of clients) {
+      const code = String(c.code||"").toUpperCase();
+      if (!code) continue;
+      previousCatalogCodes.set(code, normalizeBehavior(c.behavior||""));
+    }
 
     showAlert("読み込み完了", "ok");
   }catch(e){
@@ -149,6 +160,14 @@ async function saveCatalog(){
     els.count.textContent     = String(clients.length);
     if (json?.etag){ els.etag.dataset.etag = json.etag; els.etag.textContent = `ETag: ${json.etag}`; }
     showAlert("保存完了", "ok");
+
+    // ▼ 保存成功後：クライアント別プロンプトの初期コピー／削除を同期
+    await syncClientPromptsAfterSave(clients);
+
+    // ▼ 同期後、スナップショットを最新に更新
+    previousCatalogCodes = new Map();
+    for (const c of clients) previousCatalogCodes.set(c.code, normalizeBehavior(c.behavior||""));
+
   }catch(e){
     showAlert(`保存に失敗しました： ${e.message||e}`, "error");
   }finally{
@@ -184,7 +203,7 @@ function issueNewCode(){
   return "A001";
 }
 
-/* ---------- presets / ping ---------- */
+/* ---------- presets ---------- */
 els.dev.addEventListener("click", ()=>{
   els.apiBase.value = DEV_API;
   updateEnvActive("dev");
@@ -205,7 +224,53 @@ function join(base, path){
   return (base||"").replace(/\/+$/,"") + "/" + String(path||"").replace(/^\/+/,"");
 }
 
-/* ===== 起動時の自動読込（統合版） ===== */
+/* ===== プロンプト同期（保存後） ===== */
+async function syncClientPromptsAfterSave(currentClients){
+  // nowMap: 現在（保存送信した）catalogの code -> behaviorView
+  const nowMap = new Map(
+    currentClients.map(c => [c.code, normalizeBehavior(c.behavior||"")])
+  );
+
+  // 削除検出：前回にあって今回ないコード
+  const deletes = [];
+  for (const code of previousCatalogCodes.keys()) {
+    if (!nowMap.has(code)) deletes.push(code);
+  }
+
+  // 追加（初期コピー）対象：現在の全クライアント（BASE/TYPE-R/TYPE-Sすべて）
+  const adds = [];
+  for (const [code, behavior] of nowMap.entries()) {
+    adds.push({ code, behavior }); // API側で存在チェックし、初回のみコピー
+  }
+
+  if (adds.length === 0 && deletes.length === 0) return;
+
+  setStatus("プロンプト同期中…");
+  const url = join(els.apiBase.value, "SyncClientPrompts");
+  const payload = { adds, deletes };
+
+  try {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type":"application/json; charset=utf-8" },
+      body: JSON.stringify(payload)
+    });
+    const resultText = await res.text();
+    const result = resultText ? JSON.parse(resultText) : {};
+    if (!res.ok) throw new Error(result?.error || `HTTP ${res.status}`);
+
+    const created = (result.created||[]).length;
+    const skipped = (result.skipped||[]).length;
+    const deleted = (result.deleted||[]).length;
+    showAlert(`プロンプト同期 完了（新規${created} / 既存${skipped} / 削除${deleted}）`, "ok");
+  } catch (err) {
+    showAlert(`プロンプト同期 失敗：${err.message||err}`, "error");
+  } finally {
+    setStatus("");
+  }
+}
+
+/* ===== 起動時の自動読込 ===== */
 window.addEventListener("DOMContentLoaded", async ()=>{
   if (!els.apiBase.value) els.apiBase.value = DEV_API;
   updateEnvActive(els.apiBase.value.includes("-dev-") ? "dev" : "prod");
