@@ -1138,3 +1138,53 @@ function templateFromFilename(filename, behavior){
   }
 })();
 // === End Fix v5 =========================================================================
+
+/* === Fix: Hydrate els after DOM ready & guard nulls (2025-11-09) ======================== */
+(function(){
+  const __EL_IDS = {
+    clientId:"clientId", behavior:"behavior", apiBase:"apiBase", fileList:"fileList",
+    search:"search", fileTitle:"fileTitle", badgeState:"badgeState", badgeEtag:"badgeEtag",
+    tabPromptBtn:"tabPromptBtn", tabParamsBtn:"tabParamsBtn", promptTab:"promptTab", paramsTab:"paramsTab",
+    promptEditor:"promptEditor", btnSave:"btnSave", btnDiff:"btnDiff",
+    diffPanel:"diffPanel", diffLeft:"diffLeft", diffRight:"diffRight", status:"statusMessage"
+  };
+  window.__ps_hydrateEls = function(){
+    try{
+      for (const [k,id] of Object.entries(__EL_IDS)){
+        if (els && Object.prototype.hasOwnProperty.call(els,k)){
+          els[k] = document.getElementById(id);
+        }
+      }
+    }catch(e){ console.warn("hydrateEls failed:", e); }
+  };
+
+  // Patch boot to hydrate before using els
+  if (typeof window.boot === "function" && !window.boot.__ps_hydrated){
+    const orig = window.boot;
+    const wrapped = function(){
+      try{ window.__ps_hydrateEls(); }catch{}
+      return orig.apply(this, arguments);
+    };
+    wrapped.__ps_hydrated = true;
+    window.boot = wrapped;
+  }
+
+  // Guard: if renderFileList uses els.fileList, ensure it's available
+  if (typeof window.renderFileList === "function" && !window.renderFileList.__ps_guarded){
+    const origRender = window.renderFileList;
+    const guarded = async function(){
+      if (!els || !els.fileList){
+        try{ window.__ps_hydrateEls(); }catch{}
+      }
+      if (!els || !els.fileList){
+        console.warn("fileList element not ready; retrying shortly");
+        await new Promise(r=>setTimeout(r, 0));
+        try{ window.__ps_hydrateEls(); }catch{}
+      }
+      return await origRender.apply(this, arguments);
+    };
+    guarded.__ps_guarded = true;
+    window.renderFileList = guarded;
+  }
+})();
+// === End Fix ============================================================================
