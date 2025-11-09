@@ -40,7 +40,7 @@ async function postJSON(url, body){
   if (!r.ok) throw new Error(await r.text()||`HTTP ${r.status}`);
   return r;
 }
-function setStatusfunction setStatus(s){ els.status.textContent = s; }
+function setStatus(s){ els.status.textContent = s; }
 
 let clients = [];           // [{ code, name, behavior }]
 let previousCodes = new Set();
