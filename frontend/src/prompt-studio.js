@@ -147,22 +147,20 @@ async function addIndexItem(fileName, displayName){
   await saveIndex();
 }
 
-/* === Auto filename generator & raw index append (no texel- enforcement) === */
+/* === auto filename generator & raw index append === */
 function generateAutoFilename(){
   const d = new Date();
-  const pad = n => String(n).padStart(2,"0");
-  const fn = `texel-custom-${d.getFullYear()}${pad(d.getMonth()+1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}.json`;
-  return fn;
+  const pad = n => String(n).padStart(2, "0");
+  return `texel-custom-${d.getFullYear()}${pad(d.getMonth()+1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}.json`;
 }
 
-/** filename はそのまま使う（.jsonだけ強制）。displayName は必須 */
 async function addIndexItemRaw(filename, displayName){
   let file = (filename||"").trim();
   if (!file) throw new Error("filename is empty");
   if (!file.endsWith(".json")) file += ".json";
   if (promptIndex.items.some(x=>x.file===file)) throw new Error("同名ファイルが既に存在します。");
   const maxOrder = Math.max(0, ...promptIndex.items.map(x=>x.order||0));
-  promptIndex.items.push({ file, name: (displayName||"").trim() || prettifyNameFromFile(file), order:maxOrder+10, hidden:false });
+  promptIndex.items.push({ file, name: (displayName||'').trim() || prettifyNameFromFile(file), order:maxOrder+10, hidden:false });
   await saveIndex();
 }
 
@@ -242,41 +240,38 @@ function boot(){
   els.promptEditor.addEventListener("input", markDirty);
 
   els.btnAdd.addEventListener("click", async ()=>{
-    (async () => {
-      try{
-        const clid = els.clientId.value.trim().toUpperCase();
-        const beh  = els.behavior.value.toUpperCase();
-        await ensurePromptIndex(clid, beh);
+  try{
+    const clid = els.clientId.value.trim().toUpperCase();
+    const beh  = els.behavior.value.toUpperCase();
+    await ensurePromptIndex(clid, beh);
 
-        // 名称だけを入力（ファイル名はシステムが自動採番）
-        const dname = prompt("新しいプロンプトの名称を入力してください","新規プロンプト");
-        if (dname === null) return;
+    // 名称のみ入力（ファイル名は自動採番）
+    const dname = prompt("新しいプロンプトの名称を入力してください", "新規プロンプト");
+    if (dname === null) return;
 
-        // 衝突しないファイル名を生成
-        let file = generateAutoFilename();
-        const exists = new Set(promptIndex.items.map(x=>x.file));
-        let salt = 0;
-        while (exists.has(file)){
-          salt++;
-          const base = file.replace(/\.json$/,"");
-          file = `${base}-${salt}.json`;
-        }
+    // 重複しないファイル名の生成
+    let file = generateAutoFilename();
+    const existing = new Set(promptIndex.items.map(x=>x.file));
+    let salt = 0;
+    while (existing.has(file)){
+      salt++;
+      file = file.replace(/\.json$/, `-${salt}.json`);
+    }
 
-        // 先に BLOB にプレースホルダを作成（client 配下）
-        const clientPath = `client/${clid}/${file}`;
-        await apiSaveText(clientPath, { prompt: "", params: {} }, null);
+    // client/{clid}/ にプレースホルダを先に作成
+    const clientPath = `client/${clid}/${file}`;
+    await apiSaveText(clientPath, { prompt: "", params: {} }, null);
 
-        // インデックスに追記（再構築しない）
-        await addIndexItemRaw(file, dname);
+    // インデックスに追記（再構築しない）
+    await addIndexItemRaw(file, dname);
 
-        // UI更新＆選択状態で開く
-        await renderFileList();
-        if (typeof openByFilename === "function") await openByFilename(file);
-      }catch(e){
-        alert("追加に失敗: " + (e?.message || e));
-      }
-    })();
+    // リスト更新＆当該ファイルを開く
+    await renderFileList();
+    await openByFilename(file);
+  }catch(e){
+    alert("追加に失敗: " + (e?.message || e));
   }
+});
 }
 function markDirty(){ dirty = true; }
 function clearDirty(){ dirty = false; }
