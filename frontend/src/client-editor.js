@@ -506,3 +506,23 @@ async function saveAll(){
   alert('保存しました');
 }
 if(btnSave){ btnSave.addEventListener('click', ()=>saveAll().catch(e=>alert(e.message||e))); }
+
+// --- UI cleanup (remove JSON buttons & bottom toolbar) ----------------------
+(function cleanupUI() {
+  // 上部の JSON ボタンを除去（ラベル一致で安全に）
+  const killLabels = new Set(['JSON出力','JSON取込','JSON読み込み','JSON読込']);
+  document.querySelectorAll('button, a[role="button"]').forEach(b => {
+    const t = (b.textContent || '').trim();
+    if (killLabels.has(t)) b.remove();
+  });
+
+  // もしフッター側に複製のツールバーがあるなら削除
+  const bottomBars = Array.from(document.querySelectorAll('footer, .actions-bottom, .toolbar-bottom, .page-footer'));
+  bottomBars.forEach(el => {
+    // ボタンを含んでいそうなバーだけを対象に
+    if (el.querySelector('button, a[role="button"]')) el.remove();
+  });
+
+  // 万一テンプレートで複数回生成されても、初回だけ動くようにする
+  cleanupUI = () => {};
+})();
