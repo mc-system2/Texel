@@ -416,8 +416,8 @@ async function openItem(it){
 
   currentEtag = (used.startsWith("client/") || used.startsWith("prompt/")) ? loaded.etag : null;
 
-  if (used.startsWith("client/")) setBadges("Overridden", currentEtag, "ok");
-  else if (used.startsWith("prompt/")) setBadges("Overridden (legacy)", currentEtag, "ok");
+  if (used.startsWith("client/")) setBadges("上書き", currentEtag, "ok");
+  else if (used.startsWith("prompt/")) setBadges("上書き（旧）", currentEtag, "ok");
   else setBadges("Template（未上書き）", loaded.etag || "—", "info");
 
   setStatus("読み込み完了","green");
@@ -476,8 +476,8 @@ async function openKind(kind){
 
   currentEtag = (used.startsWith("client/") || used.startsWith("prompt/")) ? loaded.etag : null;
 
-  if (used.startsWith("client/")) setBadges("Overridden", currentEtag, "ok");
-  else if (used.startsWith("prompt/")) setBadges("Overridden (legacy)", currentEtag, "ok");
+  if (used.startsWith("client/")) setBadges("上書き", currentEtag, "ok");
+  else if (used.startsWith("prompt/")) setBadges("上書き（旧）", currentEtag, "ok");
   else setBadges("Template（未上書き）", loaded.etag || "—", "info");
 
   setStatus("読み込み完了","green");
@@ -503,7 +503,7 @@ async function saveCurrent(){
     if (!r.ok) throw new Error(json?.error || raw || `HTTP ${r.status}`);
 
     currentEtag = json?.etag || currentEtag || null;
-    setBadges("Overridden", currentEtag, "ok");
+    setBadges("上書き", currentEtag, "ok");
     setStatus("保存完了","green");
     clearDirty();
     renderFileList();
@@ -640,3 +640,109 @@ function templateFromFilename(filename, behavior){
   }
 })();
 /* === / Add Prompt handler ================================================ */
+
+
+/* === Patch: Add (+追加) handler & label localization ===================== */
+(function(){
+  if (window.__psAddOnce) return; window.__psAddOnce = true;
+
+  const els = {
+    apiBase: document.getElementById("apiBase"),
+    clientId: document.getElementById("clientId"),
+    behavior: document.getElementById("behavior"),
+    fileList: document.getElementById("fileList"),
+    promptEditor: document.getElementById("promptEditor"),
+  };
+
+  function join(base, path){ return (base||"").replace(/\/+$/,"") + "/" + String(path||"").replace(/^\/+/,""); }
+  function ts(){ const d=new Date(); const p=n=>String(n).padStart(2,'0'); return `${d.getFullYear()}${p(d.getMonth()+1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`; }
+  function slug(s){ return String(s||'').toLowerCase().replace(/[^\w\-]+/g,'-').replace(/\-+/g,'-').replace(/^\-|\-$/g,''); }
+
+  async function createClientFile(client, file, text){
+    const body = { filename: `client/${client}/${file}`, prompt: text ?? '' };
+    const res = await fetch(join(els.apiBase.value, "SavePromptText"), {
+      method:"POST",
+      headers:{ "Content-Type":"application/json; charset=utf-8" },
+      body: JSON.stringify(body)
+    });
+    if (!res.ok){
+      const t = await res.text();
+      throw new Error(t || `HTTP ${res.status}`);
+    }
+  }
+
+  async function onAdd(){
+    const clid = (els.clientId.value||'').trim().toUpperCase();
+    const beh  = (els.behavior.value||'BASE').toUpperCase();
+    if (!clid || !/^[A-Z0-9]{4}$/.test(clid)){ alert("クライアントコードが不正です"); return; }
+
+    // ask display name
+    const display = prompt("新しいプロンプトの表示名", "おすすめ");
+    if (display === null) return;
+
+    // ensure index loaded (reuse existing ensurePromptIndex if present)
+    if (typeof window.ensurePromptIndex === "function"){
+      await window.ensurePromptIndex(clid, beh);
+    }
+    // fallback: if promptIndex still empty, synthesize minimal
+    if (!window.promptIndex || !Array.isArray(window.promptIndex.items)){
+      window.promptIndex = { version:1, clientId: clid, behavior: beh, updatedAt:new Date().toISOString(), items: [] };
+    }
+
+    // generate unique file name
+    const base = slug(display || "prompt");
+    let file = `${base}-${ts()}.json`;
+    const exist = new Set(window.promptIndex.items.map(it=>it.file));
+    let i=2; while(exist.has(file)){ file = `${base}-${ts()}-${i++}.json`; }
+
+    // insert item after roomphoto if present
+    const items = window.promptIndex.items;
+    const rpIdx = items.findIndex(x=>x.file==="texel-roomphoto.json");
+    let insertAt = (rpIdx >= 0) ? rpIdx+1 : items.length;
+    items.splice(insertAt, 0, { file, name: display, order: ((items.length+1)*10), hidden:false });
+
+    // save index
+    window.promptIndex.updatedAt = new Date().toISOString();
+    if (typeof window.saveIndex === "function"){
+      await window.saveIndex(window.promptIndexPath || `client/${clid}/prompt-index.json`, window.promptIndex, window.promptIndexEtag);
+    } else if (typeof window.saveIndex === "undefined") {
+      // if not exported, use internal saveIndex(path, idx, etag)
+      if (typeof saveIndex === "function"){
+        await saveIndex(window.promptIndexPath || `client/${clid}/prompt-index.json`, window.promptIndex, window.promptIndexEtag);
+      }
+    }
+
+    // create actual file
+    const template = [
+      "// Prompt template",
+      "// ここにルールや出力形式を書いてください。"
+    ].join("\n");
+    await createClientFile(clid, file, template);
+
+    // refresh list & open
+    if (typeof window.renderFileList === "function") window.renderFileList();
+    if (typeof window.openItem === "function"){
+      const it = window.promptIndex.items.find(x=>x.file===file);
+      if (it) window.openItem(it);
+    }
+  }
+
+  // wire button
+  const btnAdd = document.getElementById("btnAdd");
+  if (btnAdd && !btnAdd.__wired){
+    btnAdd.__wired = true;
+    btnAdd.addEventListener("click", onAdd);
+  }
+
+  // Localize chips after list render
+  const _renderFileList = window.renderFileList;
+  window.renderFileList = async function(){
+    if (_renderFileList) await _renderFileList();
+    // localize chip labels
+    document.querySelectorAll(".chip").forEach(ch=>{
+      if (/Overridden\s*\(legacy\)/i.test(ch.textContent)) ch.textContent = "上書き（旧）";
+      else if (/Overridden/i.test(ch.textContent)) ch.textContent = "上書き";
+    });
+  };
+})();
+/* === /Patch =============================================================== */
