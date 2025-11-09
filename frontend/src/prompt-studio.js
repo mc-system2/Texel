@@ -151,7 +151,7 @@ async function addIndexItem(fileName, displayName){
 }
 
 /* === auto filename generator & raw index append === */
-v
+
 async function addIndexItemRaw(filename, displayName){
   let file = (filename||"").trim();
   if (!file) throw new Error("filename is empty");
