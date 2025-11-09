@@ -3,13 +3,118 @@
   const $ = (s, el=document) => el.querySelector(s);
   const $$ = (s, el=document) => Array.from(el.querySelectorAll(s));
 
-  let API_BASE = '';
   let currentClient = '';
   let currentBehavior = 'BASE';
   let indexPath = '';
   let promptIndex = null;
   let etagIndex = null;
   let currentItem = null;
+
+  // --- API helpers -----------------------------------------------------------
+  function apiUrl(fn) {
+    let base = $('#apiBase').value.trim();
+    if (!base) throw new Error('API Base 未設定');
+    if (!base.endsWith('/')) base += '/';
+    return base + fn;
+  }
+
+  async function apiPostRaw(fn, body) {
+    const res = await fetch(apiUrl(fn), {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify(body||{})
+    });
+    return res;
+  }
+
+  async function apiPostMulti(fnCandidates, bodyCandidates) {
+    let lastErr = null;
+    for (const fn of fnCandidates) {
+      for (const body of bodyCandidates) {
+        try {
+          const res = await apiPostRaw(fn, body);
+          if (res.status === 404) { lastErr = new Error(`${fn} 404`); continue; }
+          if (!res.ok) {
+            const t = await res.text().catch(()=>'');
+            lastErr = new Error(`${fn} ${res.status}: ${t}`);
+            continue;
+          }
+          const json = await res.json();
+          return { json, fn, body };
+        } catch (e) {
+          lastErr = e;
+        }
+      }
+    }
+    throw lastErr || new Error('API call failed');
+  }
+
+  // candidates for function names
+  const FN = {
+    LOAD: ['LoadPromptText','LoadText','LoadBLOB','LoadFile'],
+    SAVE: ['SavePromptText','SaveText','SaveBLOB','SaveFile'],
+    LIST: ['ListBLOB','ListFiles','ListBlob','List']
+  };
+
+  function getClientFolder() { return `client/${currentClient}/`; }
+  function getIndexPath() { return getClientFolder() + 'prompt-index.json'; }
+
+  // Normalizers for varied API response shapes
+  function normalizeLoad(resp) {
+    // {text,etag} or {content,etag} or {body}
+    if (typeof resp === 'string') return { text: resp, etag: null };
+    const t = resp.text ?? resp.content ?? resp.body ?? '';
+    const e = resp.etag ?? resp.ETag ?? null;
+    return { text: t, etag: e };
+  }
+
+  function normalizeList(resp, folder) {
+    // Possible shapes:
+    // { files:["client/A001/texel-...json", ...] }
+    // { blobs:[{name:"client/A001/.."}, ...] }
+    // [{name:"client/A001/.."}, ...]
+    // ["client/A001/..", ...]
+    let list = [];
+    if (Array.isArray(resp)) list = resp;
+    else if (resp && Array.isArray(resp.files)) list = resp.files;
+    else if (resp && Array.isArray(resp.blobs)) list = resp.blobs;
+    else if (resp && Array.isArray(resp.items)) list = resp.items;
+    // map to strings
+    list = list.map(x => typeof x === 'string' ? x : (x.name ?? x.path ?? x.url ?? ''));
+    // keep only json under folder
+    list = list.filter(x => x && x.endsWith('.json') && x.startsWith(folder));
+    return list;
+  }
+
+  async function loadText(path) {
+    const bodies = [{ path }, { key: path }, { file: path }];
+    const { json } = await apiPostMulti(FN.LOAD, bodies);
+    return normalizeLoad(json);
+  }
+
+  async function saveText(path, text, etag) {
+    const bodies = [
+      { path, text, etag },
+      { file: path, content: text, etag },
+      { key: path, body: text, etag }
+    ];
+    const { json } = await apiPostMulti(FN.SAVE, bodies);
+    return normalizeLoad(json);
+  }
+
+  async function listFiles(prefix) {
+    // try prefix, then {container,folder}
+    const container = 'prompts';
+    const folder = prefix;
+    const bodies = [
+      { prefix },
+      { path: prefix },
+      { container, folder },
+      { container, path: folder },
+    ];
+    const { json } = await apiPostMulti(FN.LIST, bodies);
+    return { files: normalizeList(json, prefix) };
+  }
 
   const REQUIRED_ROOMPHOTO = {
     file: 'texel-roomphoto.json',
@@ -18,38 +123,7 @@
     locked: true
   };
 
-  function apiUrl(fn) {
-    let base = $('#apiBase').value.trim();
-    if (!base) throw new Error('API Base 未設定');
-    if (!base.endsWith('/')) base += '/';
-    return base + fn;
-  }
-  async function apiPost(fn, body) {
-    const res = await fetch(apiUrl(fn), {
-      method: 'POST',
-      headers: {'Content-Type':'application/json'},
-      body: JSON.stringify(body||{})
-    });
-    if (!res.ok) {
-      const t = await res.text();
-      throw new Error(`${fn} ${res.status}: ${t}`);
-    }
-    return res.json();
-  }
-
-  const loadText = (path) => apiPost('LoadText', { path });
-  const saveText = (path, text, etag) => apiPost('SaveText', { path, text, etag });
-  const listFiles = (prefix) => apiPost('ListFiles', { prefix });
-
-  function getClientFolder() {
-    return `client/${currentClient}/`;
-  }
-  function getIndexPath() {
-    return getClientFolder() + 'prompt-index.json';
-  }
-
   function normalizeNameFromFile(file) {
-    // texel-suumo-comment.json → Suumo Comment
     const m = file.replace(/^texel-/, '').replace(/\.json$/,'').split('-');
     return m.map(x => x.charAt(0).toUpperCase() + x.slice(1)).join(' ');
   }
@@ -60,26 +134,25 @@
       const { text, etag } = await loadText(indexPath);
       etagIndex = etag || null;
       promptIndex = JSON.parse(text);
-      // 実装差異に備え
       if (!promptIndex || !Array.isArray(promptIndex.prompts)) throw new Error('invalid index');
     } catch (e) {
-      // 404想定 → 新規作成
       const { files } = await listFiles(getClientFolder());
       const items = files
-        .filter(f => f.endsWith('.json') && f !== 'prompt-index.json')
-        .map((f, i) => ({
-          file: f.split('/').pop(),
-          name: f.includes('roomphoto') ? '画像分析プロンプト' : normalizeNameFromFile(f.split('/').pop()),
-          order: (i+1)*10,
-          hidden: false,
-          locked: f.includes('roomphoto')
-        }));
+        .filter(f => f.endsWith('.json') && !f.endsWith('prompt-index.json'))
+        .map((f, i) => {
+          const file = f.split('/').pop();
+          return {
+            file,
+            name: file.includes('roomphoto') ? '画像分析プロンプト' : normalizeNameFromFile(file),
+            order: (i+1)*10,
+            hidden: false,
+            locked: file.includes('roomphoto')
+          };
+        });
 
-      // 先頭に roomphoto 固定（無ければ追加）
       const hasRoom = items.some(x => x.file.includes('roomphoto'));
       if (!hasRoom) items.unshift(REQUIRED_ROOMPHOTO);
       else {
-        // 確実に最上段へ
         items.sort((a,b) => (a.file.includes('roomphoto')?-1:1));
         items[0].order = 0; items[0].locked = true; items[0].name = '画像分析プロンプト';
       }
@@ -97,7 +170,6 @@
 
     const sorted = [...promptIndex.prompts].sort((a,b)=> (a.order??0)-(b.order??0));
     for (const item of sorted) {
-      // 検索フィルタ対応
       const q = $('#search').value.trim().toLowerCase();
       if (q && !(item.name||'').toLowerCase().includes(q) && !(item.file||'').toLowerCase().includes(q)) continue;
 
@@ -114,7 +186,6 @@
       title.textContent = item.name || normalizeNameFromFile(item.file);
       li.appendChild(title);
 
-      // rename（インライン）
       if (!item.locked) {
         const btnEdit = document.createElement('button');
         btnEdit.className='btn'; btnEdit.textContent='✎';
@@ -123,7 +194,6 @@
         li.appendChild(btnEdit);
       }
 
-      // delete
       if (!item.locked) {
         const btnDel = document.createElement('button');
         btnDel.className='btn'; btnDel.textContent='🗑';
@@ -137,9 +207,7 @@
         li.appendChild(btnDel);
       }
 
-      // select
       li.addEventListener('click', ()=> openItem(item));
-
       ul.appendChild(li);
     }
   }
@@ -164,11 +232,8 @@
     input.className='inline';
     input.value = item.name || normalizeNameFromFile(item.file);
     li.replaceChild(input, titleEl);
-    input.focus();
-    input.select();
-    const cancel = () => {
-      li.replaceChild(titleEl, input);
-    };
+    input.focus(); input.select();
+    const cancel = () => li.replaceChild(titleEl, input);
     const commit = async () => {
       item.name = input.value.trim() || normalizeNameFromFile(item.file);
       titleEl.textContent = item.name;
@@ -189,7 +254,6 @@
   }
 
   async function boot() {
-    // URL パラメータから復元
     const usp = new URLSearchParams(location.hash.replace(/^#\?/,'?'));
     currentClient = usp.get('client') || $('#client').value || 'A001';
     currentBehavior = usp.get('behavior') || $('#behavior').value || 'BASE';
@@ -198,10 +262,8 @@
     $('#behavior').value = currentBehavior;
     if (api) $('#apiBase').value = api;
 
-    // 主要イベント
     $('#search').addEventListener('input', renderFileList);
     $('#btnAdd').addEventListener('click', async () => {
-      // 新規エントリ（空のプレースホルダ）
       const fname = prompt('新しいプロンプトのファイル名（.json）', 'custom-prompt.json');
       if (!fname) return;
       const item = { file: fname, name: normalizeNameFromFile(fname), order: ((promptIndex.prompts?.length||0)+1)*10, hidden:false };
@@ -222,6 +284,5 @@
     renderFileList();
   }
 
-  // init
   window.addEventListener('DOMContentLoaded', boot);
 })();
