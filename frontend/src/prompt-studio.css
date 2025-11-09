@@ -118,3 +118,9 @@ input[type="range"]{width:100%}
   .ps-header{grid-template-columns: 1fr; height:auto; row-gap:8px; padding:8px 14px}
   .ps-main{grid-template-columns: clamp(240px, 22vw, 320px) 1fr}
 }
+
+/* --- Prompt index rename UI --- */
+.fileitem .rename{color:#6b7785; background:transparent; border:none; cursor:pointer; padding:4px 6px; border-radius:8px}
+.fileitem .rename:hover{background:#f1f5f9}
+.fileitem .rename:active{transform: translateY(1px);}
+.fileitem .name.editing input{width:100%; font:inherit; border:1px solid var(--line); border-radius:6px; padding:4px 6px;}

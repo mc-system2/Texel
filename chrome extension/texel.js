@@ -107,11 +107,11 @@ function resolvePromptCandidates(keyLike, fallbackFilename) {
   const beh = (CURRENT_BEHAVIOR || "BASE").toUpperCase();
   if (name) {
     if (beh === "TYPE-R" && TEMPLATE_FAMILIES["TYPE-R"].has(name)) {
-      list.push(`prompt/texel-r-${name}.json`);
+      list.push(`texel-r-${name}.json`);
     } else if (beh === "TYPE-S" && TEMPLATE_FAMILIES["TYPE-S"].has(name)) {
-      list.push(`prompt/texel-s-${name}.json`);
+      list.push(`texel-s-${name}.json`);
     } else if (beh === "BASE" && TEMPLATE_FAMILIES["BASE"].has(name)) {
-      list.push(`prompt/texel-${name}.json`);
+      list.push(`texel-${name}.json`);
     }
   }
   // 従来のファイル名（Blob直下）も試す
@@ -700,64 +700,63 @@ async function startTypeSFlow(bkId) {
 /* ==============================
  * 5) プロンプト取得 + フォールバック
  * ============================== */
-async function fetchPromptTextFile(filename) {
-  try {
-    const url = API.loadPromptText(filename);
-    const res = await fetch(url, { cache: "no-cache" });
-    if (!res.ok) { console.warn(`LoadPromptText 失敗: ${res.status} ${res.statusText}`); return null; }
-    const ctype = res.headers.get("content-type") || "";
-    if (ctype.includes("application/json")) {
-      const data = await res.json().catch(() => ({}));
-      if (typeof data === "string") return { prompt: data, params: {} };
-      let promptText = "";
-      if (typeof data?.prompt === "string") promptText = data.prompt;
-      else if (typeof data?.prompt?.text === "string") promptText = data.prompt.text;
-      else promptText = JSON.stringify(data?.prompt ?? data, null, 2);
-      return { prompt: promptText, params: data?.params || {} };
-    }
-    const text = await res.text();
-    return { prompt: text, params: {} };
-  } catch (e) { console.warn("LoadPromptText 例外:", e); return null; }
+
+
+/* === プロンプトURL解決（API → 拡張内 → same-origin → Blob(SAS)） === */
+function buildPromptUrls(filename) {
+  const urls = [];
+  try { const viaFunc = API.loadPromptText(filename); if (viaFunc) urls.push(viaFunc); } catch {}
+  if (typeof chrome?.runtime?.getURL === "function") {
+    urls.push(chrome.runtime.getURL(`${PROMPTS_CONTAINER}/${filename}`));
+  }
+  urls.push(`${location.origin}/${PROMPTS_CONTAINER}/${filename}`);
+  if (PROMPTS_SAS && PROMPTS_SAS.trim()) {
+    const account = ENV === "prod" ? BLOB_ACCOUNT.prod : BLOB_ACCOUNT.dev;
+    urls.push(`${account}/${PROMPTS_CONTAINER}/${filename}${PROMPTS_SAS}`);
+  }
+  return urls;
 }
 
-async function getPromptObj(keyLike, fallbackFilename) {
-  // ▼ クライアント別キャッシュキー（従来 key を維持しつつ CLID 付きも使う）
-  const baseKey = storageKeyFor(keyLike);
-  const cacheKey = clientId ? `${baseKey}__${clientId}` : baseKey;
-
-  // 1) ローカルキャッシュ（clientId 別）
+async function fetchPromptTextFile(filename) {
+  const tried = [];
   try {
-    const local = localStorage.getItem(cacheKey);
-    if (local !== null) {
-      console.info(`[prompt] localStorage 使用: ${cacheKey}`);
-      try { return JSON.parse(local); } catch { return { prompt: local, params: {} }; }
-    }
-  } catch {}
-  try {
-    if (chrome?.storage?.local) {
-      const got = await new Promise((r) => chrome.storage.local.get([cacheKey], (ret) => r(ret?.[cacheKey] ?? null)));
-      if (got !== null) {
-        console.info(`[prompt] chrome.storage 使用: ${cacheKey}`);
-        try { return JSON.parse(got); } catch { return { prompt: got, params: {} }; }
+    for (const url of buildPromptUrls(filename)) {
+      try {
+        const res = await fetch(url, { cache: "no-cache" });
+        if (!res.ok) { tried.push(`${url} -> ${res.status}`); continue; }
+        const ctype = (res.headers.get("content-type") || "").toLowerCase();
+        if (ctype.includes("application/json")) {
+          const data = await res.json().catch(() => ({}));
+          if (typeof data === "string") return { prompt: data, params: {} };
+          let promptText = "";
+          if (typeof data?.prompt === "string") promptText = data.prompt;
+          else if (typeof data?.prompt?.text === "string") promptText = data.prompt.text;
+          else promptText = JSON.stringify(data?.prompt ?? data, null, 2);
+          return { prompt: promptText, params: data?.params || {} };
+        } else {
+          const text = await res.text();
+          return { prompt: text, params: {} };
+        }
+      } catch (e) {
+        tried.push(`${url} -> ${e?.message || e}`);
+        continue;
       }
     }
-  } catch {}
-
-  // 2) サーバ／BLOB：クライアント別 → 挙動テンプレ → 旧ファイル名 の順で試行
+    console.warn("LoadPromptText すべて失敗:", tried);
+    return null;
+  } catch (e) { console.warn("LoadPromptText 例外:", e); return null; }
+}
+async function getPromptObj(keyLike, fallbackFilename) {
+  // BLOB優先・キャッシュ無効版
   const candidates = resolvePromptCandidates(keyLike, fallbackFilename);
   let fetched = null;
   for (const filename of candidates) {
     fetched = await fetchPromptTextFile(filename);
-    if (fetched) { console.info(`[prompt] server/BLOB 使用: ${filename}`); break; }
+    if (fetched) { console.info(`[prompt] BLOB使用: ${filename}`); break; }
   }
-
+  // すべて失敗 → 安全なデフォルト
   const obj = fetched || defaultPrompt(keyLike);
-
-  // 3) キャッシュ保存（CL 別）
-  const saveStr = JSON.stringify(obj);
-  try { localStorage.setItem(cacheKey, saveStr); } catch {}
-  try { chrome?.storage?.local?.set({ [cacheKey]: saveStr }); } catch {}
-
+  // ローカル保存はしない（Texel方針）
   return obj;
 }
 
@@ -1074,7 +1073,7 @@ if (!behavior) {
 }
 
 // ✅ TYPE-S：S-NETプレビューのDOMを読む
-if (behavior === "TYPE-S") {
+if (behavior === "S" || CURRENT_BEHAVIOR === "TYPE-S") {
   postLog("type-s.begin", "scrape begin", { bk: propertyCode });
   await startTypeSFlow(propertyCode);
 }
@@ -1317,84 +1316,224 @@ async function processRoomFile(file) {
 /* ==============================
  * 15) PDF処理
  * ============================== */
+/* === Multipage PDF additions: thumbnails + sequential processing === */
+// Globals for multipage PDF
+let pdfDocRef = null;           // PDFDocumentProxy
+let pdfPageCount = 0;
+let pdfCurrentIndex = 0;        // 0-based
+let pdfPageSummaries = [];      // [{text, summary, imageBase64}]
+
+// Inject thumbnail styles once
+(function injectPdfThumbStyleOnce() {
+  if (document.getElementById("texel-pdf-thumb-style")) return;
+  const style = document.createElement("style");
+  style.id = "texel-pdf-thumb-style";
+  style.textContent = `
+    #pdf-thumbs { display:flex; gap:8px; overflow-x:auto; padding:6px 2px; margin-top:6px; }
+#pdf-thumbs .pdf-thumb-wrap { height:118px; min-width:84px; border:2px solid transparent; border-radius:6px; cursor:pointer; flex:0 0 auto; box-shadow:0 1px 3px rgba(0,0,0,.15); background:#fff; display:flex; align-items:center; justify-content:center; }
+#pdf-thumbs .pdf-thumb-wrap.active { border-color:#e53935; }
+#pdf-thumbs .pdf-thumb { max-width:100%; max-height:100%; width:auto; height:auto; object-fit:contain; display:block; } /* 処理中/選択中を赤枠表示 */
+  `;
+  document.head.appendChild(style);
+})();
+
+function ensurePdfThumbsUI() {
+  let thumbs = document.getElementById("pdf-thumbs");
+  if (!thumbs) {
+    thumbs = document.createElement("div");
+    thumbs.id = "pdf-thumbs";
+    const host = document.getElementById("pdf-drop") || document.body;
+    host.insertAdjacentElement("afterend", thumbs);
+  }
+  return thumbs;
+}
+
+function setActivePdfThumb(index) {
+  const thumbs = document.getElementById("pdf-thumbs");
+  if (!thumbs) return;
+  [...thumbs.querySelectorAll(".pdf-thumb-wrap")].forEach((wrap, i) => {
+    wrap.classList.toggle("active", i === index);
+  });
+}
+
+function clearActivePdfThumb() {
+  const thumbs = document.getElementById("pdf-thumbs");
+  if (!thumbs) return;
+  [...thumbs.querySelectorAll(".pdf-thumb-wrap")].forEach((wrap) => wrap.classList.remove("active"));
+}
+
+// Render large page preview into #pdf-image-preview; returns base64
+async function renderMainPdfPage(index) {
+  if (!window.pdfjsLib || !pdfDocRef) return "";
+  const page = await pdfDocRef.getPage(index + 1);
+  const viewport = page.getViewport({ scale: 3 });
+  const canvas = document.createElement("canvas");
+  canvas.width = viewport.width;
+  canvas.height = viewport.height;
+  await page.render({ canvasContext: canvas.getContext("2d"), viewport }).promise;
+  const base64 = canvas.toDataURL("image/png");
+  const pdfImagePreview = document.getElementById("pdf-image-preview");
+  if (pdfImagePreview) {
+    pdfImagePreview.src = base64;
+    pdfImagePreview.style.display = "block";
+    pdfImagePreview.style.cursor = "pointer";
+  }
+  latestPdfThumbnailBase64 = base64;
+  return base64;
+}
+
+// Build page thumbnails for all pages
+async function renderPdfThumbnails() {
+  if (!window.pdfjsLib || !pdfDocRef) return;
+  const thumbs = ensurePdfThumbsUI();
+  thumbs.innerHTML = "";
+  for (let i = 0; i < pdfPageCount; i++) {
+    const page = await pdfDocRef.getPage(i + 1);
+    const viewport = page.getViewport({ scale: 0.5 });
+    const c = document.createElement("canvas");
+    c.width = viewport.width; c.height = viewport.height;
+    await page.render({ canvasContext: c.getContext("2d"), viewport }).promise;
+
+    const wrap = document.createElement("div");
+    wrap.className = "pdf-thumb-wrap";
+    wrap.dataset.index = String(i);
+
+    const img = document.createElement("img");
+    img.src = c.toDataURL("image/png");
+    img.className = "pdf-thumb";
+    img.alt = `Page ${i+1}`;
+
+    wrap.appendChild(img);
+
+    wrap.addEventListener("click", async () => {
+      const idx = Number(wrap.dataset.index);
+      pdfCurrentIndex = idx;
+      setActivePdfThumb(idx);
+      showLoadingSpinner("pdf");
+      try { await renderMainPdfPage(idx); }
+      finally { hideLoadingSpinner("pdf"); }
+    });
+
+    thumbs.appendChild(wrap);
+  }
+  setActivePdfThumb(pdfCurrentIndex);
+}
+async function extractAndSummarizePage(index, mainImageBase64) {
+  if (!window.pdfjsLib || !pdfDocRef) return;
+  const page = await pdfDocRef.getPage(index + 1);
+
+  let hasTextLayer = false, hasImageLayer = true;
+  try {
+    const ops = await page.getOperatorList();
+    hasTextLayer = ops.fnArray.includes(pdfjsLib.OPS.showText);
+    hasImageLayer =
+      ops.fnArray.includes(pdfjsLib.OPS.paintImageXObject) ||
+      ops.fnArray.includes(pdfjsLib.OPS.paintJpegXObject);
+  } catch {}
+
+  let extractedText = "";
+  if (hasTextLayer) {
+    try {
+      const textContent = await page.getTextContent();
+      extractedText = textContent.items.map(i => i.str).join("\\n").trim();
+    } catch {}
+  }
+
+  const promptObj = await getPromptObj("pdfImage", P.pdfImage);
+  const summaryPrompt = promptObj.prompt || "";
+  const params = promptObj.params || {};
+
+  const messages = [{ role: "system", content: summaryPrompt }];
+  if (extractedText) messages.push({ role: "user", content: extractedText });
+  if (hasImageLayer && mainImageBase64) {
+    messages.push({ role: "user", content: [{ type: "image_url", image_url: { url: mainImageBase64 } }] });
+  }
+
+  const body = {
+    messages,
+    temperature: params.temperature ?? 0.3,
+    max_tokens: params.max_tokens ?? 4000,
+    top_p: params.top_p,
+    frequency_penalty: params.frequency_penalty,
+    presence_penalty: params.presence_penalty,
+    purpose: "pdf"
+  };
+
+  const result = await callGPT(body);
+  const summarized = result?.choices?.[0]?.message?.content || "(要約なし)";
+
+  pdfPageSummaries[index] = {
+    text: extractedText,
+    summary: summarized,
+    imageBase64: mainImageBase64
+  };
+
+  const parts = pdfPageSummaries.map((p, i) => {
+    if (!p) return null;
+    const header = `【Page ${i + 1}】`;
+    const tex = p.text ? `\\n【テキスト抽出】\\n${p.text}\\n` : "";
+    const sum = `\\n【GPT要約】\\n${p.summary}\\n`;
+    return header + tex + sum;
+  }).filter(Boolean);
+
+  const combined = parts.join("\\n");
+  const outBox = document.getElementById("pdf-preview");
+  if (outBox) {
+    if ("value" in outBox) { outBox.value = combined; autoGrow(outBox); }
+    else { outBox.textContent = combined; }
+  }
+  latestPdfExtractedText = combined;
+
+  const memoArea = document.getElementById("property-info");
+  if (memoArea) { memoArea.value += `\\n${summarized}`; autoGrow(memoArea); }
+
+  await saveExportJson();
+}
+/* === End of multipage additions === */
+
+
 async function handlePdfFile(file) {
   showLoadingSpinner("pdf");
   const reader = new FileReader();
   reader.onload = async () => {
     try {
       const typedarray = new Uint8Array(reader.result);
-      const pdf = await pdfjsLib.getDocument({ data: typedarray }).promise;
-      const page = await pdf.getPage(1);
+      if (!window.pdfjsLib) throw new Error("pdfjsLib not loaded");
+      // 1) Open PDF
+      pdfDocRef = await pdfjsLib.getDocument({ data: typedarray }).promise;
+      pdfPageCount = pdfDocRef.numPages;
+      pdfCurrentIndex = 0;
+      pdfPageSummaries = new Array(pdfPageCount).fill(null);
 
-      const viewport = page.getViewport({ scale: 3 });
-      const canvas = document.createElement("canvas");
-      const context = canvas.getContext("2d");
-      canvas.width = viewport.width;
-      canvas.height = viewport.height;
-      await page.render({ canvasContext: context, viewport }).promise;
+      // 2) Render thumbnails
+      await renderPdfThumbnails();
 
-      const base64Image = canvas.toDataURL("image/png");
-      const pdfImagePreview = document.getElementById("pdf-image-preview");
-      if (pdfImagePreview) { pdfImagePreview.src = base64Image; pdfImagePreview.style.display = "block"; pdfImagePreview.style.cursor = "pointer"; }
-      latestPdfThumbnailBase64 = base64Image;
-
-      const ops = await page.getOperatorList();
-      const hasTextLayer = ops.fnArray.includes(pdfjsLib.OPS.showText);
-      const hasImageLayer =
-        ops.fnArray.includes(pdfjsLib.OPS.paintImageXObject) ||
-        ops.fnArray.includes(pdfjsLib.OPS.paintJpegXObject);
-
-      let extractedText = "";
-      if (hasTextLayer) {
-        const textContent = await page.getTextContent();
-        extractedText = textContent.items.map((i) => i.str).join("\n").trim();
-      }
-
-      const promptObj = await getPromptObj("pdfImage", P.pdfImage);
-      const summaryPrompt = promptObj.prompt || "";
-      const params = promptObj.params || {};
-
-      const messages = [{ role: "system", content: summaryPrompt }];
-      if (extractedText) messages.push({ role: "user", content: extractedText });
-      if (hasImageLayer && base64Image) {
-        messages.push({ role: "user", content: [{ type: "image_url", image_url: { url: base64Image } }] });
-      }
-
-      const body = {
-        messages,
-        temperature: params.temperature ?? 0.3,
-        max_tokens: params.max_tokens ?? 4000,
-        top_p: params.top_p,
-        frequency_penalty: params.frequency_penalty,
-        presence_penalty: params.presence_penalty,
-        purpose: "pdf"
-      };
-
-      const result = await callGPT(body);
-      const summarized = result.choices?.[0]?.message?.content || "(GPT応答なし)";
-
-      let combinedOutput = "";
-      if (extractedText) combinedOutput += "【テキスト抽出内容】\n" + extractedText.trim() + "\n\n";
-      combinedOutput += "【GPT要約】\n" + summarized;
-
-      pdfPreview.textContent = combinedOutput;
-      const memoArea = document.getElementById("property-info");
-      if (memoArea) { memoArea.value += `\n${summarized}`; autoGrow(memoArea); }
-      latestPdfExtractedText = combinedOutput;
-      await saveExportJson();
-      postLog("pdf", "summarized", {
-        hasText: !!extractedText,
-        hasImage: !!base64Image
-      });
-
+      // 3) Reset analysis accordion (if exists)
       const pdfAnalysis = document.getElementById("pdf-analysis");
       const pdfToggle = document.getElementById("pdf-toggle");
       if (pdfAnalysis) pdfAnalysis.style.display = "none";
       if (pdfToggle) pdfToggle.textContent = "▶ 抽出結果を表示";
+
+      // 4) Process sequentially page by page
+      for (let i = 0; i < pdfPageCount; i++) {
+        pdfCurrentIndex = i;
+        setActivePdfThumb(i);
+        const mainB64 = await renderMainPdfPage(i);
+        await extractAndSummarizePage(i, mainB64);
+      }
+
+      clearActivePdfThumb();
+        postLog("pdf", "summarized-multipage", { pages: pdfPageCount });
     } catch (err) {
       console.error("PDF読み込みエラー:", err);
-      if (pdfPreview) pdfPreview.textContent = "PDF読み取り中にエラーが発生しました。";
-    } finally { hideLoadingSpinner("pdf"); }
+      const outBox = document.getElementById("pdf-preview");
+      if (outBox) {
+        if ("value" in outBox) { outBox.value = "PDF読み取り中にエラーが発生しました。"; autoGrow(outBox); }
+        else { outBox.textContent = "PDF読み取り中にエラーが発生しました。"; }
+      }
+    } finally {
+      hideLoadingSpinner("pdf");
+    }
   };
   reader.readAsArrayBuffer(file);
 }
@@ -1615,8 +1754,38 @@ async function addToHistory(imageSrc, commentText, roomType = "", description = 
   };
 
   wrapper.append(closeBtn, img, toggle, commentArea);
+  // ---- Drag & Drop reordering for history cards ----
+  wrapper.draggable = true;
+  wrapper.addEventListener("dragstart", (e) => {
+    wrapper.classList.add("dragging");
+    e.dataTransfer.effectAllowed = "move";
+  });
+  wrapper.addEventListener("dragend", async () => {
+    wrapper.classList.remove("dragging");
+    updateRoomAnalysisStatus();
+    await saveExportJson().catch(()=>{});
+  });
+  historyContainer.addEventListener("dragover", (e) => {
+    e.preventDefault();
+    const afterEl = (() => {
+      const siblings = [...historyContainer.querySelectorAll(".drop-zone:not(.dragging)")];
+      const y = e.clientY;
+      let candidate = null;
+      for (const sib of siblings) {
+        const box = sib.getBoundingClientRect();
+        const offset = y - (box.top + box.height / 2);
+        if (offset > 0) candidate = sib;
+      }
+      return candidate;
+    })();
+    const dragging = historyContainer.querySelector(".drop-zone.dragging");
+    if (!dragging) return;
+    if (afterEl) afterEl.after(dragging);
+    else historyContainer.prepend(dragging);
+  });
+
   if (insertAfter) insertAfter.after(wrapper);
-  else historyContainer.prepend(wrapper);
+  else historyContainer.appendChild(wrapper);
 
   requestAnimationFrame(() => autoGrow(textarea));
 
@@ -1721,7 +1890,34 @@ function hideNorthSelector() {
 async function onConfirmNorth() {
   const sel = document.getElementById("northVectorSelect");
   const north = (sel?.value || "up").trim();
-  if (!currentFloorplanBase64) { alert("間取り図画像がありません。"); return; }
+
+  // ---- Fallbacks: try to recover a base64 image if currentFloorplanBase64 is empty ----
+  if (!currentFloorplanBase64) {
+    const hidden = document.getElementById("floorplan-base64");
+    const preview = document.getElementById("floorplan-preview");
+    const pdfImg = document.getElementById("pdf-image-preview");
+    // 1) hidden input
+    if (hidden && /^data:image\//.test(hidden.value || "")) currentFloorplanBase64 = hidden.value;
+    // 2) preview <img>
+    if (!currentFloorplanBase64 && preview && /^data:image\//.test(preview.src || "")) currentFloorplanBase64 = preview.src;
+    // 3) PDFセクションの大きいプレビュー
+    if (!currentFloorplanBase64 && pdfImg && /^data:image\//.test(pdfImg.src || "")) currentFloorplanBase64 = pdfImg.src;
+    // 4) PDFのサマリ配列（最初のページでもOK）
+    try {
+      if (!currentFloorplanBase64 && Array.isArray(pdfPageSummaries)) {
+        const first = pdfPageSummaries.find(p => p && /^data:image\//.test(p.imageBase64 || ""));
+        if (first) currentFloorplanBase64 = first.imageBase64;
+      }
+    } catch {}
+    // 5) サムネDOMから拾う（pdf-thumbsの先頭）
+    try {
+      if (!currentFloorplanBase64) {
+        const firstThumb = document.querySelector("#pdf-thumbs .pdf-thumb");
+        if (firstThumb && /^data:image\//.test(firstThumb.src || "")) currentFloorplanBase64 = firstThumb.src;
+      }
+    } catch {}
+  }
+if (!currentFloorplanBase64) { alert("間取り図画像がありません。"); return; }
 
   // 1) 間取り解析（この結果が textarea に入り、写真プロンプトで参照される）
   await analyzeFloorplanWithGPT(currentFloorplanBase64, north);
@@ -2301,3 +2497,250 @@ function onClickResetSuggestion() {
 /* ==============================
  * 24) END
  * ============================== */
+
+
+/* ===== PDF floorplan multi-page + room PDF all-pages — merged on build ===== */
+
+/* =====================================================================
+ *  texel_pdf_floorplan_plus.js  — Add-on for Texel
+ *  Feature:
+ *    1) Floorplan area now accepts PDFs. If multi-page, show thumbnails
+ *       to let the user pick ONE page, *then* choose North and analyze.
+ *    2) Room Images area now also accepts PDFs. When a PDF is provided,
+ *       ALL pages are rendered and analyzed sequentially as images.
+ *  Integration:
+ *    - Load this file AFTER your base texel.js.
+ *    - Requires pdf.js (the base texel.js already loads libs/pdfjs/pdf.js).
+ *  Safe: No changes to base file; only augments UI and event handlers.
+ * ===================================================================== */
+(function () {
+  'use strict';
+
+  // ---------- Helpers ----------
+  function $(id) { return document.getElementById(id); }
+  function ensurePdfJs() {
+    return new Promise((resolve, reject) => {
+      if (window.pdfjsLib) return resolve();
+      const s = document.createElement("script");
+      s.src = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.7.76/pdf.min.js";
+      s.onload = () => resolve();
+      s.onerror = () => reject(new Error("pdf.js load failed"));
+      document.head.appendChild(s);
+    });
+  }
+  function showSpinner(key){ try{ if (typeof showLoadingSpinner === "function") showLoadingSpinner(key); }catch{} }
+  function hideSpinner(key){ try{ if (typeof hideLoadingSpinner === "function") hideLoadingSpinner(key); }catch{} }
+  function dataURLFromCanvas(canvas, type="image/png"){ try{ return canvas.toDataURL(type); } catch { return ""; } }
+
+  async function renderPdfPageToDataURL(pdfDoc, pageIndex0, scale=2.0){
+    const page = await pdfDoc.getPage(pageIndex0 + 1);
+    const viewport = page.getViewport({ scale });
+    const canvas = document.createElement("canvas");
+    canvas.width = viewport.width;
+    canvas.height = viewport.height;
+    await page.render({ canvasContext: canvas.getContext("2d"), viewport }).promise;
+    return dataURLFromCanvas(canvas);
+  }
+
+  async function readFileAsArrayBuffer(file){
+    const buf = await file.arrayBuffer();
+    return new Uint8Array(buf);
+  }
+
+  // ---------- Floorplan: PDF thumbnails selection ----------
+  function ensureFloorplanThumbsUI() {
+    let host = $("floorplan-drop");
+    if (!host) host = document.body;
+    let thumbs = document.getElementById("floorplan-pdf-thumbs");
+    if (!thumbs) {
+      const wrap = document.createElement("div");
+      wrap.id = "floorplan-pdf-thumbs";
+      wrap.style.cssText = "display:flex;gap:8px;overflow-x:auto;margin:8px 0;";
+      host.insertAdjacentElement("afterend", wrap);
+
+      // style per-thumb
+      const style = document.createElement("style");
+      style.textContent = `
+        #floorplan-pdf-thumbs .fp-thumb{min-width:92px;height:128px;border:2px solid transparent;border-radius:8px;box-shadow:0 1px 3px rgba(0,0,0,.2);cursor:pointer;background:#fff;display:flex;align-items:center;justify-content:center;}
+        #floorplan-pdf-thumbs .fp-thumb.active{border-color:#1e88e5;}
+        #floorplan-pdf-thumbs img{max-width:100%;max-height:100%;display:block;object-fit:contain;}
+      `;
+      document.head.appendChild(style);
+      thumbs = wrap;
+    }
+    return thumbs;
+  }
+
+  function setActiveFloorplanThumb(index){
+    const t = $("floorplan-pdf-thumbs");
+    if (!t) return;
+    [...t.querySelectorAll(".fp-thumb")].forEach((el,i)=>{
+      el.classList.toggle("active", i===index);
+    });
+  }
+
+  async function handleFloorplanPdf(file){
+    try{
+      await ensurePdfJs();
+      showSpinner("floorplan");
+      const bytes = await readFileAsArrayBuffer(file);
+      const pdfDoc = await pdfjsLib.getDocument({ data: bytes }).promise;
+      const pageCount = pdfDoc.numPages;
+
+      const thumbs = ensureFloorplanThumbsUI();
+      thumbs.innerHTML = "";
+      const previews = [];
+      for (let i=0;i<pageCount;i++){
+        const thumbURL = await renderPdfPageToDataURL(pdfDoc, i, 0.8);
+        previews.push(thumbURL);
+        const cell = document.createElement("div");
+        cell.className = "fp-thumb";
+        cell.dataset.index = String(i);
+        const img = document.createElement("img");
+        img.src = thumbURL;
+        img.alt = "Page " + (i+1);
+        cell.appendChild(img);
+        cell.addEventListener("click", async () => {
+          const idx = Number(cell.dataset.index);
+          setActiveFloorplanThumb(idx);
+          // render selected page at higher scale as floorplan image
+          showSpinner("floorplan");
+          try{
+            const mainURL = await renderPdfPageToDataURL(pdfDoc, idx, 2.5);
+            const imgEl = $("floorplan-preview");
+            if (imgEl){
+              imgEl.src = mainURL;
+              imgEl.style.display = "block";
+              imgEl.style.cursor = "pointer";
+            }
+            // set global
+            try{ window.currentFloorplanBase64 = mainURL; }catch{}
+            // show north selector after selection
+            if (typeof showNorthSelector === "function") showNorthSelector();
+          } finally {
+            hideSpinner("floorplan");
+          }
+        });
+        thumbs.appendChild(cell);
+      }
+
+      // auto-select first page for convenience
+      if (pageCount > 0) {
+        setActiveFloorplanThumb(0);
+        const firstURL = await renderPdfPageToDataURL(pdfDoc, 0, 2.5);
+        const imgEl = $("floorplan-preview");
+        if (imgEl){
+          imgEl.src = firstURL;
+          imgEl.style.display = "block";
+          imgEl.style.cursor = "pointer";
+        }
+        try{ window.currentFloorplanBase64 = firstURL; }catch{}
+        if (typeof showNorthSelector === "function") showNorthSelector();
+      }
+    } catch (err){
+      console.error("Floorplan PDF handling failed:", err);
+      alert("PDFの読み込みに失敗しました。");
+    } finally {
+      hideSpinner("floorplan");
+    }
+  }
+
+  // Extend floorplan drop/file inputs to accept PDFs
+  function extendFloorplanInputs(){
+    const drop = $("floorplan-drop");
+    const file = $("floorplan-file");
+
+    if (drop && !drop.dataset.pdfExtended){
+      drop.dataset.pdfExtended = "1";
+      drop.addEventListener("drop", async (e) => {
+        try{
+          const items = [...(e.dataTransfer?.files || [])];
+          const pdf = items.find(f => f.type === "application/pdf" || /\.pdf$/i.test(f.name));
+          if (!pdf) return; // let base handler manage images/urls
+          e.preventDefault();
+          await handleFloorplanPdf(pdf);
+        }catch{}
+      }, true); // capture to preempt base
+    }
+    if (file && !file.dataset.pdfExtended){
+      file.dataset.pdfExtended = "1";
+      file.setAttribute("accept", ".pdf,image/*");
+      file.addEventListener("change", async (e) => {
+        const f = e.target.files && e.target.files[0];
+        if (f && (f.type === "application/pdf" || /\.pdf$/i.test(f.name))) {
+          e.stopPropagation();
+          await handleFloorplanPdf(f);
+          // clear selection so re-choosing the same file works
+          //e.target.value = "";
+        }
+      }, true);
+    }
+  }
+
+  // ---------- Room images: accept PDF and analyze all pages ----------
+  async function analyzePdfAsRoomImages(file){
+    try{
+      await ensurePdfJs();
+      showSpinner("room");
+      const bytes = await readFileAsArrayBuffer(file);
+      const pdfDoc = await pdfjsLib.getDocument({ data: bytes }).promise;
+      const pageCount = pdfDoc.numPages;
+      for (let i=0;i<pageCount;i++){
+        const pageURL = await renderPdfPageToDataURL(pdfDoc, i, 2.0);
+        // roomType/desc hint
+        const title = (file.name || "PDF") + " p." + (i+1);
+        if (typeof analyzeRoomPhotoWithGPT === "function") {
+          await analyzeRoomPhotoWithGPT(pageURL, null, title, "PDFページ");
+        }
+      }
+    } catch (err){
+      console.error("Room PDF handling failed:", err);
+      alert("PDFの画像解析でエラーが発生しました。");
+    } finally {
+      hideSpinner("room");
+    }
+  }
+
+  function extendRoomInputs(){
+    const drop = $("room-drop");
+    const file = $("room-file");
+    if (drop && !drop.dataset.pdfExtended){
+      drop.dataset.pdfExtended = "1";
+      drop.addEventListener("drop", async (e) => {
+        const files = [...(e.dataTransfer?.files || [])];
+        const pdfs = files.filter(f => f.type === "application/pdf" || /\.pdf$/i.test(f.name));
+        if (!pdfs.length) return; // let base handle images
+        e.preventDefault();
+        for (const p of pdfs){ await analyzePdfAsRoomImages(p); }
+      }, true);
+    }
+    if (file && !file.dataset.pdfExtended){
+      file.dataset.pdfExtended = "1";
+      file.setAttribute("accept", ".pdf,image/*");
+      file.addEventListener("change", async (e) => {
+        const fs = [...(e.target.files || [])];
+        const pdfs = fs.filter(f => f.type === "application/pdf" || /\.pdf$/i.test(f.name));
+        if (!pdfs.length) return; // base handles images
+        for (const p of pdfs){ await analyzePdfAsRoomImages(p); }
+        //e.target.value = "";
+      }, true);
+    }
+  }
+
+  // ---------- Boot ----------
+  document.addEventListener("DOMContentLoaded", () => {
+    try { extendFloorplanInputs(); } catch {}
+    try { extendRoomInputs(); } catch {}
+  });
+
+})();
+
+
+
+/* === File input label helper ================================= */
+function setFloorplanPicked(name, extra){
+  var el = document.getElementById('floorplan-file-picked');
+  if (!el) return;
+  el.textContent = name ? (extra ? (name + '（' + extra + '）') : name) : '';
+}
+

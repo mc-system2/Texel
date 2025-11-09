@@ -1,12 +1,14 @@
 /* ===================================================================
- * Texel BG (MV3 / module) — SnapVoice準拠（クリック時のみ開く）
- * - Side Panel：SnapVoiceと同じ挙動に固定
- * - モック認証/ログ/TYPE-S中継は残すが、タブ切替で開かない
+ * Texel BG (MV3 / module) — SnapVoice準拠 + Safe Logging
+ * - サイドパネルは「拡張アイコンクリック時」のタブでのみ有効化
+ * - sendLog は URL 未設定/不正時は NO-OP、設定されても fire-and-forget（例外を投げない）
+ * - TYPE-S（Suumo）スクレイプ中継はそのまま
  * =================================================================== */
 
 /* ===== 設定 ===== */
 const ALLOWED_HDS = ["your-company.co.jp"]; // 例: "mf-realty.jp"（モック中は未使用）
-const LOG_ENDPOINT = "https://your-func-app.azurewebsites.net/api/log";
+// ★ ここが未設定/空だと sendLog は NO-OP になります（開発時の赤エラー回避）
+const LOG_ENDPOINT = ""; // ex. "https://your-func-app.azurewebsites.net/api/log"
 
 /* ★★★ モック設定：本実装に切り替える際は false に変更 ★★★ */
 const AUTH_MOCK_ENABLED = true;
@@ -28,82 +30,81 @@ const isSystemUrl = (u = "") => {
   );
 };
 async function setPanelPath(path, tabId) {
+  if (!tabId) return; // クリックされたタブにだけパス設定
   await chrome.sidePanel.setOptions({ tabId, path, enabled: true });
 }
 async function setUser(u) { await chrome.storage.local.set({ texelUser: u }); }
 async function getUser() { return (await chrome.storage.local.get("texelUser")).texelUser || null; }
-async function sendLog(event, detail = {}) {
-  const u = await getUser();
+
+/**
+ * 安全なログ送信（NO-OP許容）
+ * - URL 未設定/不正なら NO-OP
+ * - 例外は絶対に投げず、console にもエラーを出さない
+ * - fire-and-forget（await しない）
+ */
+function sendLog(event, detail = {}) {
   try {
-    await fetch(LOG_ENDPOINT, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        timestamp: new Date().toISOString(),
-        userEmail: u?.email || "",
-        event,
-        detail
-      })
+    if (!LOG_ENDPOINT || !/^https?:\/\//i.test(LOG_ENDPOINT)) return; // NO-OP
+    const body = JSON.stringify({
+      timestamp: new Date().toISOString(),
+      userEmail: "", // 後で u?.email を入れるが、getUser() は async のため省略
+      event,
+      detail
     });
-  } catch (e) {
-    console.warn("[Texel] log failed:", e);
-  }
+    // fire-and-forget
+    fetch(LOG_ENDPOINT, {
+      method: "POST",
+      mode: "no-cors",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body
+    }).catch(() => {});
+  } catch {}
 }
 
 /* ===================================================================
- * ゲート（モック版）
- * - クリック時にだけ呼ぶ。自動では呼ばない。
+ * ゲート（モック版）— クリック時のみ呼ぶ
  * =================================================================== */
 async function gateAndRoute({ interactive = false, tabId } = {}) {
   if (AUTH_MOCK_ENABLED) {
     await setUser(AUTH_MOCK_USER);
-    if (tabId) {
-      // ★ SnapVoice同等：クリックされた“そのタブ”に対してだけ開く
-      await setPanelPath("texel.html", tabId); // ← panel.html運用ならここを変更
-    }
-    await sendLog("allowed-mock", { email: AUTH_MOCK_USER.email, hd: AUTH_MOCK_USER.hd });
+    await setPanelPath("texel.html", tabId);
+    sendLog("allowed-mock", { email: AUTH_MOCK_USER.email, hd: AUTH_MOCK_USER.hd });
     return { allowed: true, user: AUTH_MOCK_USER };
   }
 
   // 将来の本実装（必要になったら活性化）
   // const user = await realGate(interactive);
   // if (!user || !ALLOWED_HDS.includes(user.hd)) {
-  //   if (tabId) await setPanelPath("blocked.html", tabId);
-  //   await sendLog("blocked", { reason: "domain", email: user?.email, hd: user?.hd });
+  //   await setPanelPath("blocked.html", tabId);
+  //   sendLog("blocked", { reason: "domain", email: user?.email, hd: user?.hd });
   //   return { allowed: false, user: user || null };
   // }
-  // if (tabId) await setPanelPath("texel.html", tabId);
+  // await setPanelPath("texel.html", tabId);
   // await setUser(user);
-  // await sendLog("allowed", { email: user.email, hd: user.hd });
+  // sendLog("allowed", { email: user.email, hd: user.hd });
   // return { allowed: true, user };
 }
 
 /* ===================================================================
  * Side Panel 動線（SnapVoice準拠）
- * - インストール時：openPanelOnActionClick を有効化
- * - クリック時のみ gateAndRoute を実行
- * - ★ タブ切替/更新で自動オープンしない（リスナー削除）
  * =================================================================== */
-
-// ① インストール時：アクションボタンクリックでサイドパネル起動
 chrome.runtime.onInstalled.addListener(() => {
   chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
-  // ★ ここで gateAndRoute() を呼ばない（自動オープンの原因になるため）
+  // ここでは setPanelPath/gateAndRoute を呼ばない（自動起動なし）
 });
 
-// ② アクションボタン：このタブだけ処理（SnapVoice同等）
 chrome.action.onClicked.addListener(async (tab) => {
   if (!tab?.id || !tab.url || isSystemUrl(tab.url)) return;
   await gateAndRoute({ interactive: false, tabId: tab.id });
-  // openPanelOnActionClick により、明示 open は不要
+  // openPanelOnActionClick により明示 open は不要
 });
 
-// ★ 削除：タブ切替/更新での自動ルーティング（従来Texelの自動起動）
-// chrome.tabs.onActivated.removeListener(...)
-// chrome.tabs.onUpdated.removeListener(...)
+// 自動ルーティングは一切登録しない（タブ更新/切替で起動しない）
+// chrome.tabs.onActivated.addListener(...)
+// chrome.tabs.onUpdated.addListener(...)
 
 /* ===================================================================
- * Runtime メッセージ API（必要機能は維持）
+ * Runtime メッセージ API
  * =================================================================== */
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   (async () => {
@@ -120,7 +121,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         return sendResponse({ user: await getUser() });
       }
       if (msg?.type === "TEXEL_LOG") {
-        await sendLog(msg.event || "custom", msg.detail || {});
+        sendLog(msg.event || "custom", msg.detail || {});
         return sendResponse({ ok: true });
       }
 
