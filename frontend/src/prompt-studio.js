@@ -1,288 +1,433 @@
+/* ===== Prompt Studio – logic (with index & add/remove) ===== */
+const DEV_API  = "https://func-texel-api-dev-jpe-001-b2f6fec8fzcbdrc3.japaneast-01.azurewebsites.net/api/";
+const PROD_API = "https://func-texel-api-prod-jpe-001-dsgfhtafbfbxawdz.japaneast-01.azurewebsites.net/api/";
 
-(() => {
-  const $ = (s, el=document) => el.querySelector(s);
-  const $$ = (s, el=document) => Array.from(el.querySelectorAll(s));
+/* kind ⇔ filename */
+const KIND_TO_NAME = {
+  "suumo-catch":   "texel-suumo-catch.json",
+  "suumo-comment": "texel-suumo-comment.json",
+  "roomphoto":     "texel-roomphoto.json",
+  "suggestion":    "texel-suggestion.json",
+  "athome-appeal": "texel-athome-appeal.json",
+  "athome-comment":"texel-athome-comment.json",
+};
+const FAMILY = {
+  "BASE":   new Set(["roomphoto","suumo-catch","suumo-comment","suggestion","athome-appeal","athome-comment"]),
+  "TYPE-R": new Set(["roomphoto","suumo-catch","suumo-comment","suggestion","athome-appeal","athome-comment"]),
+  "TYPE-S": new Set(["roomphoto","suumo-catch","suumo-comment","suggestion"])
+};
 
-  let currentClient = '';
-  let currentBehavior = 'BASE';
-  let indexPath = '';
-  let promptIndex = null;
-  let etagIndex = null;
-  let currentItem = null;
+const els = {
+  clientId:  document.getElementById("clientId"),
+  behavior:  document.getElementById("behavior"),
+  apiBase:   document.getElementById("apiBase"),
+  fileList:  document.getElementById("fileList"),
+  search:    document.getElementById("search"),
+  fileTitle: document.getElementById("fileTitle"),
+  badgeState:document.getElementById("badgeState"),
+  badgeEtag: document.getElementById("badgeEtag"),
+  tabPromptBtn: document.getElementById("tabPromptBtn"),
+  tabParamsBtn: document.getElementById("tabParamsBtn"),
+  promptTab:    document.getElementById("promptTab"),
+  paramsTab:    document.getElementById("paramsTab"),
+  promptEditor: document.getElementById("promptEditor"),
+  btnSave:   document.getElementById("btnSave"),
+  btnDiff:   document.getElementById("btnDiff"),
+  diffPanel: document.getElementById("diffPanel"),
+  diffLeft:  document.getElementById("diffLeft"),
+  diffRight: document.getElementById("diffRight"),
+  status:    document.getElementById("statusMessage"),
+  btnAdd:    document.getElementById("btnAdd"),
+};
 
-  // --- API helpers -----------------------------------------------------------
-  function apiUrl(fn) {
-    let base = $('#apiBase').value.trim();
-    if (!base) throw new Error('API Base 未設定');
-    if (!base.endsWith('/')) base += '/';
-    return base + fn;
+let currentEtag = null;
+let templateText = "";
+let dirty = false;
+
+/* ---------- Prompt Index (order & display name) ---------- */
+let promptIndex = null;      // {version, clientId, behavior, updatedAt, items:[{file,name,order,hidden,lock?}]}
+let promptIndexPath = null;
+let promptIndexEtag = null;
+
+function indexClientPath(clientId){ return `client/${clientId}/prompt-index.json`; }
+function prettifyNameFromFile(filename){
+  return filename.replace(/\.json$/i,'').replace(/^texel[-_]?/i,'').replace(/[-_]+/g,' ').replace(/\b\w/g, s=>s.toUpperCase());
+}
+function join(base, path){ return (base||"").replace(/\/+$/,"") + "/" + String(path||"").replace(/^\/+/, ""); }
+
+async function apiLoadText(filename){
+  const r = await fetch(join(els.apiBase.value,"LoadPromptText"),{
+    method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify({ filename })
+  }).catch(()=>null);
+  if (!r || !r.ok) return null;
+  const j = await r.json().catch(()=>null);
+  let data = null;
+  const t = j?.text ?? j?.prompt ?? null;
+  if (typeof t === "string"){ try{ data = JSON.parse(t) }catch{ data = t } }
+  else if (j?.prompt) data = j;
+  return { etag: j?.etag ?? null, data };
+}
+async function apiSaveText(filename, payload, etag){
+  const body = { filename, prompt: typeof payload==="string"? payload : JSON.stringify(payload,null,2) };
+  if (etag) body.etag = etag;
+  const r = await fetch(join(els.apiBase.value,"SavePromptText"),{
+    method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify(body)
+  });
+  const raw = await r.text(); let j={}; try{ j = raw?JSON.parse(raw):{} }catch{}
+  if (!r.ok) throw new Error(j?.error || raw || `HTTP ${r.status}`);
+  return j;
+}
+
+function normalizeIndex(x){
+  try{
+    if (!x) return null;
+    if (x.items) return x;
+    if (x.prompt?.items) return x.prompt;
+    if (typeof x === "string"){ const p=JSON.parse(x); return p.items? p : (p.prompt?.items? p.prompt : null); }
+  }catch{}
+  return null;
+}
+
+async function ensurePromptIndex(clientId, behavior){
+  const path = indexClientPath(clientId);
+  const r = await apiLoadText(path);
+  if (r){
+    const idx = normalizeIndex(r.data);
+    if (idx){ promptIndex=idx; promptIndexPath=path; promptIndexEtag=r.etag||null; return promptIndex; }
   }
-
-  async function apiPostRaw(fn, body) {
-    const res = await fetch(apiUrl(fn), {
-      method: 'POST',
-      headers: {'Content-Type':'application/json'},
-      body: JSON.stringify(body||{})
+  // auto-generate: roomphoto locked at top
+  const kinds = [...FAMILY[behavior]];
+  const items = [];
+  let order = 10;
+  for (const k of kinds){
+    const file = KIND_TO_NAME[k];
+    const isRoom = (k==="roomphoto");
+    items.push({
+      file,
+      name: isRoom ? "画像分析プロンプト" : prettifyNameFromFile(file),
+      order: order, hidden:false, lock: isRoom
     });
-    return res;
+    order += 10;
   }
+  promptIndex = { version:1, clientId, behavior, updatedAt:new Date().toISOString(), items };
+  promptIndexPath = path; promptIndexEtag=null;
+  await apiSaveText(promptIndexPath, promptIndex, null);
+  return promptIndex;
+}
 
-  async function apiPostMulti(fnCandidates, bodyCandidates) {
-    let lastErr = null;
-    for (const fn of fnCandidates) {
-      for (const body of bodyCandidates) {
-        try {
-          const res = await apiPostRaw(fn, body);
-          if (res.status === 404) { lastErr = new Error(`${fn} 404`); continue; }
-          if (!res.ok) {
-            const t = await res.text().catch(()=>'');
-            lastErr = new Error(`${fn} ${res.status}: ${t}`);
-            continue;
-          }
-          const json = await res.json();
-          return { json, fn, body };
-        } catch (e) {
-          lastErr = e;
-        }
-      }
-    }
-    throw lastErr || new Error('API call failed');
+async function saveIndex(){
+  if (!promptIndex) return;
+  promptIndex.updatedAt = new Date().toISOString();
+  const res = await apiSaveText(promptIndexPath, promptIndex, promptIndexEtag);
+  promptIndexEtag = res?.etag || promptIndexEtag || null;
+}
+
+async function renameIndexItem(file, newName){
+  const it = promptIndex.items.find(x=>x.file===file);
+  if (!it || it.lock) return;
+  it.name = newName || it.name;
+  await saveIndex();
+}
+async function deleteIndexItem(file){
+  const i = promptIndex.items.findIndex(x=>x.file===file);
+  if (i<0 || promptIndex.items[i].lock) return;
+  promptIndex.items.splice(i,1);
+  // 再採番
+  promptIndex.items.sort((a,b)=>(a.order??0)-(b.order??0)).forEach((x,i)=>x.order=(i+1)*10);
+  await saveIndex();
+}
+async function addIndexItem(fileName, displayName){
+  // sanitize
+  let file = fileName.trim();
+  if (!file.endsWith(".json")) file = file + ".json";
+  if (!file.startsWith("texel-")) file = "texel-" + file;
+  if (promptIndex.items.some(x=>x.file===file)) throw new Error("同名ファイルが既に存在します。");
+  const maxOrder = Math.max(0, ...promptIndex.items.map(x=>x.order||0));
+  promptIndex.items.push({ file, name: displayName?.trim()||prettifyNameFromFile(file), order:maxOrder+10, hidden:false });
+  await saveIndex();
+}
+
+/* ---------- Tabs ---------- */
+function showTab(which){
+  const isPrompt = which === "prompt";
+  els.tabPromptBtn.classList.toggle("active", isPrompt);
+  els.tabParamsBtn.classList.toggle("active", !isPrompt);
+  els.promptTab.classList.toggle("active", isPrompt);
+  els.paramsTab.classList.toggle("active", !isPrompt);
+}
+els.tabPromptBtn.addEventListener("click", ()=>showTab("prompt"));
+els.tabParamsBtn.addEventListener("click", ()=>showTab("params"));
+
+/* ---------- Params ---------- */
+const paramKeys = [
+  ["max_tokens",         800],
+  ["temperature",       1.00],
+  ["top_p",             1.00],
+  ["frequency_penalty", 0.00],
+  ["presence_penalty",  0.00],
+  ["n",                 1   ],
+];
+function writeParamUI(params){
+  paramKeys.forEach(([k, def])=>{
+    const input = document.getElementById("param_"+k);
+    const span  = document.getElementById("val_"+k);
+    if (!input || !span) return;
+    const v = (params && params[k] !== undefined) ? params[k] : def;
+    input.value = v;
+    span.textContent = (""+v).includes(".") ? Number(v).toFixed(2) : v;
+  });
+}
+function readParamUI(){
+  const o = {};
+  paramKeys.forEach(([k])=>{
+    const v = document.getElementById("param_"+k).value;
+    o[k] = (""+v).includes(".") ? parseFloat(v) : parseInt(v,10);
+  });
+  return o;
+}
+paramKeys.forEach(([k])=>{
+  const input = document.getElementById("param_"+k);
+  const span  = document.getElementById("val_"+k);
+  if (input && span){
+    input.addEventListener("input", ()=>{
+      const v = input.value;
+      span.textContent = (""+v).includes(".") ? Number(v).toFixed(2) : v;
+      markDirty();
+    });
   }
+});
 
-  // candidates for function names
-  const FN = {
-    LOAD: ['LoadPromptText','LoadText','LoadBLOB','LoadFile'],
-    SAVE: ['SavePromptText','SaveText','SaveBLOB','SaveFile'],
-    LIST: ['ListBLOB','ListFiles','ListBlob','List']
-  };
+/* ---------- Boot ---------- */
+window.addEventListener("DOMContentLoaded", boot);
+function boot(){
+  const q = new URLSearchParams(location.hash.replace(/^#\??/, ''));
+  els.clientId.value = (q.get("client") || "").toUpperCase();
+  els.behavior.value = (q.get("behavior") || "BASE").toUpperCase();
+  els.apiBase.value  = q.get("api") || DEV_API;
 
-  function getClientFolder() { return `client/${currentClient}/`; }
-  function getIndexPath() { return getClientFolder() + 'prompt-index.json'; }
+  renderFileList();
 
-  // Normalizers for varied API response shapes
-  function normalizeLoad(resp) {
-    // {text,etag} or {content,etag} or {body}
-    if (typeof resp === 'string') return { text: resp, etag: null };
-    const t = resp.text ?? resp.content ?? resp.body ?? '';
-    const e = resp.etag ?? resp.ETag ?? null;
-    return { text: t, etag: e };
-  }
+  window.addEventListener("keydown", (e)=>{
+    if ((e.ctrlKey||e.metaKey) && e.key.toLowerCase()==="s"){ e.preventDefault(); saveCurrent(); }
+  });
 
-  function normalizeList(resp, folder) {
-    // Possible shapes:
-    // { files:["client/A001/texel-...json", ...] }
-    // { blobs:[{name:"client/A001/.."}, ...] }
-    // [{name:"client/A001/.."}, ...]
-    // ["client/A001/..", ...]
-    let list = [];
-    if (Array.isArray(resp)) list = resp;
-    else if (resp && Array.isArray(resp.files)) list = resp.files;
-    else if (resp && Array.isArray(resp.blobs)) list = resp.blobs;
-    else if (resp && Array.isArray(resp.items)) list = resp.items;
-    // map to strings
-    list = list.map(x => typeof x === 'string' ? x : (x.name ?? x.path ?? x.url ?? ''));
-    // keep only json under folder
-    list = list.filter(x => x && x.endsWith('.json') && x.startsWith(folder));
-    return list;
-  }
+  els.search.addEventListener("input", ()=>{
+    const kw = els.search.value.toLowerCase();
+    [...els.fileList.children].forEach(it=>{
+      const t = it.querySelector(".name").textContent.toLowerCase();
+      it.style.display = t.includes(kw) ? "" : "none";
+    });
+  });
 
-  async function loadText(path) {
-    const bodies = [{ path }, { key: path }, { file: path }];
-    const { json } = await apiPostMulti(FN.LOAD, bodies);
-    return normalizeLoad(json);
-  }
+  els.promptEditor.addEventListener("input", markDirty);
 
-  async function saveText(path, text, etag) {
-    const bodies = [
-      { path, text, etag },
-      { file: path, content: text, etag },
-      { key: path, body: text, etag }
-    ];
-    const { json } = await apiPostMulti(FN.SAVE, bodies);
-    return normalizeLoad(json);
-  }
+  els.btnAdd.addEventListener("click", async ()=>{
+    const fname = prompt("新しいプロンプトのファイル名（texel-*.jsonの*部分。拡張子不要）","custom");
+    if (!fname) return;
+    const dname = prompt("表示名（未入力なら自動生成）","");
+    try{
+      await ensurePromptIndex(els.clientId.value.trim().toUpperCase(), els.behavior.value.toUpperCase());
+      await addIndexItem(fname, dname);
+      await renderFileList();
+    }catch(e){ alert("追加に失敗: "+e.message); }
+  });
+}
+function markDirty(){ dirty = true; }
+function clearDirty(){ dirty = false; }
+window.addEventListener("beforeunload", (e)=>{ if (!dirty) return; e.preventDefault(); e.returnValue=""; });
 
-  async function listFiles(prefix) {
-    // try prefix, then {container,folder}
-    const container = 'prompts';
-    const folder = prefix;
-    const bodies = [
-      { prefix },
-      { path: prefix },
-      { container, folder },
-      { container, path: folder },
-    ];
-    const { json } = await apiPostMulti(FN.LIST, bodies);
-    return { files: normalizeList(json, prefix) };
-  }
+/* ---------- File List ---------- */
+function templateFromFilename(filename, behavior){
+  if (behavior === "TYPE-R") return filename.replace(/^texel-/, "texel-r-");
+  if (behavior === "TYPE-S") return filename.replace(/^texel-/, "texel-s-");
+  return filename;
+}
 
-  const REQUIRED_ROOMPHOTO = {
-    file: 'texel-roomphoto.json',
-    name: '画像分析プロンプト',
-    order: 0,
-    locked: true
-  };
+async function tryLoad(filename){
+  const url = join(els.apiBase.value, "LoadPromptText") + `?filename=${encodeURIComponent(filename)}`;
+  const res = await fetch(url, { cache: "no-store" }).catch(()=>null);
+  if (!res || !res.ok) return null;
+  const etag = res.headers.get("etag") || null;
+  let data = {};
+  try { data = await res.json(); } catch { data = {}; }
+  return { data, etag };
+}
 
-  function normalizeNameFromFile(file) {
-    const m = file.replace(/^texel-/, '').replace(/\.json$/,'').split('-');
-    return m.map(x => x.charAt(0).toUpperCase() + x.slice(1)).join(' ');
-  }
+async function renderFileList(){
+  els.fileList.innerHTML = "";
+  const clid = els.clientId.value.trim().toUpperCase();
+  const beh  = els.behavior.value.toUpperCase();
 
-  async function ensurePromptIndex() {
-    indexPath = getIndexPath();
-    try {
-      const { text, etag } = await loadText(indexPath);
-      etagIndex = etag || null;
-      promptIndex = JSON.parse(text);
-      if (!promptIndex || !Array.isArray(promptIndex.prompts)) throw new Error('invalid index');
-    } catch (e) {
-      const { files } = await listFiles(getClientFolder());
-      const items = files
-        .filter(f => f.endsWith('.json') && !f.endsWith('prompt-index.json'))
-        .map((f, i) => {
-          const file = f.split('/').pop();
-          return {
-            file,
-            name: file.includes('roomphoto') ? '画像分析プロンプト' : normalizeNameFromFile(file),
-            order: (i+1)*10,
-            hidden: false,
-            locked: file.includes('roomphoto')
-          };
+  await ensurePromptIndex(clid, beh);
+
+  const rows = [...promptIndex.items]
+    .filter(it => !it.hidden)
+    .sort((a,b)=>(a.order??0)-(b.order??0));
+
+  // drag sort
+  els.fileList.addEventListener('dragover', (e)=>{
+    e.preventDefault();
+    const dragging = document.querySelector('.fileitem.dragging');
+    const after = getDragAfterElement(els.fileList, e.clientY);
+    if (!after) els.fileList.appendChild(dragging);
+    else els.fileList.insertBefore(dragging, after);
+  });
+  els.fileList.addEventListener('drop', async ()=>{
+    const lis = [...els.fileList.querySelectorAll('.fileitem')];
+    lis.forEach((el, i) => {
+      const f = el.dataset.file;
+      const it = promptIndex.items.find(x=>x.file===f);
+      if (it) it.order = (i+1)*10;
+    });
+    await saveIndex();
+  });
+
+  for (const it of rows){
+    const name = it.name || prettifyNameFromFile(it.file);
+    const li = document.createElement("div");
+    li.className = "fileitem" + (it.lock? " locked": "");
+    li.dataset.file = it.file;
+    li.draggable = !it.lock;
+
+    const lockIcon = it.lock ? `<span class="lock">🔒</span>` : "";
+
+    li.innerHTML = `<span class="drag">≡</span>
+                    <div class="name" title="${it.file}">${lockIcon}${name}</div>
+                    <div class="meta">
+                      ${it.lock? "" : '<button class="rename" title="名称を変更">✎</button>'}
+                      ${it.lock? "" : '<button class="delete" title="削除">🗑</button>'}
+                    </div>`;
+    els.fileList.appendChild(li);
+
+    if (!it.lock){
+      li.addEventListener('dragstart', ()=> li.classList.add('dragging'));
+      li.addEventListener('dragend', async ()=>{
+        li.classList.remove('dragging');
+        const lis = [...els.fileList.querySelectorAll('.fileitem')];
+        lis.forEach((el, i) => {
+          const f = el.dataset.file;
+          const it2 = promptIndex.items.find(x=>x.file===f);
+          if (it2) it2.order = (i+1)*10;
         });
+        await saveIndex();
+      });
+    }
 
-      const hasRoom = items.some(x => x.file.includes('roomphoto'));
-      if (!hasRoom) items.unshift(REQUIRED_ROOMPHOTO);
-      else {
-        items.sort((a,b) => (a.file.includes('roomphoto')?-1:1));
-        items[0].order = 0; items[0].locked = true; items[0].name = '画像分析プロンプト';
-      }
+    li.addEventListener("click", async (e)=>{
+      if (e.target.closest("button")) return; // handled by buttons
+      await openByFilename(it.file);
+    });
 
-      promptIndex = { version: 1, client: currentClient, behavior: currentBehavior, prompts: items, params:{} };
-      const { etag } = await saveText(indexPath, JSON.stringify(promptIndex, null, 2), null);
-      etagIndex = etag || null;
+    if (!it.lock){
+      li.querySelector(".rename").addEventListener("click", async (e)=>{
+        e.preventDefault(); e.stopPropagation();
+        const nv = prompt("表示名の変更", name);
+        if (nv!=null){ await renameIndexItem(it.file, nv.trim()); await renderFileList(); }
+      });
+      li.querySelector(".delete").addEventListener("click", async (e)=>{
+        e.preventDefault(); e.stopPropagation();
+        if (!confirm(`「${name}」を一覧から削除します。ファイル自体は削除されません。よろしいですか？`)) return;
+        await deleteIndexItem(it.file);
+        await renderFileList();
+      });
     }
   }
+}
 
-  function renderFileList() {
-    const ul = $('#fileList');
-    ul.innerHTML = '';
-    if (!promptIndex || !Array.isArray(promptIndex.prompts)) return;
+function getDragAfterElement(container, y){
+  const els = [...container.querySelectorAll('.fileitem:not(.dragging)')];
+  return els.reduce((closest, child)=>{
+    const box = child.getBoundingClientRect();
+    const offset = y - box.top - box.height/2;
+    return (offset < 0 && offset > closest.offset) ? { offset, element: child } : closest;
+  }, { offset: Number.NEGATIVE_INFINITY }).element;
+}
 
-    const sorted = [...promptIndex.prompts].sort((a,b)=> (a.order??0)-(b.order??0));
-    for (const item of sorted) {
-      const q = $('#search').value.trim().toLowerCase();
-      if (q && !(item.name||'').toLowerCase().includes(q) && !(item.file||'').toLowerCase().includes(q)) continue;
+/* ---------- Open / Save ---------- */
+async function openByFilename(filename){
+  if (dirty && !confirm("未保存の変更があります。破棄して読み込みますか？")) return;
 
-      const li = document.createElement('li');
-      li.className = 'fileItem'+(item.locked?' locked':'');
-      li.dataset.file = item.file;
+  els.diffPanel.hidden = true;
+  [...els.fileList.children].forEach(n=>n.classList.toggle("active", n.dataset.file===filename));
+  setStatus("読込中…","orange");
 
-      const drag = document.createElement('span');
-      drag.className = 'drag'; drag.textContent = '≡';
-      li.appendChild(drag);
+  const clid = els.clientId.value.trim().toUpperCase();
+  const beh  = els.behavior.value.toUpperCase();
 
-      const title = document.createElement('div');
-      title.className = 'title';
-      title.textContent = item.name || normalizeNameFromFile(item.file);
-      li.appendChild(title);
+  const clientTarget = `client/${clid}/${filename}`;
+  document.getElementById("fileTitle").textContent = clientTarget;
 
-      if (!item.locked) {
-        const btnEdit = document.createElement('button');
-        btnEdit.className='btn'; btnEdit.textContent='✎';
-        btnEdit.title='名称変更';
-        btnEdit.addEventListener('click', ()=> inlineRename(li, item, title));
-        li.appendChild(btnEdit);
-      }
+  const candidates = [ clientTarget, `prompt/${clid}/${filename}`, templateFromFilename(filename, beh) ];
 
-      if (!item.locked) {
-        const btnDel = document.createElement('button');
-        btnDel.className='btn'; btnDel.textContent='🗑';
-        btnDel.title='削除';
-        btnDel.addEventListener('click', async ()=> {
-          if (!confirm(`「${item.name}」を一覧から削除しますか？（ファイルは削除しません）`)) return;
-          promptIndex.prompts = promptIndex.prompts.filter(x=>x!==item);
-          await saveIndex();
-          renderFileList();
-        });
-        li.appendChild(btnDel);
-      }
+  let loaded = null, used = null;
+  for (const f of candidates){
+    const r = await tryLoad(f);
+    if (r) { loaded = r; used = f; break; }
+  }
+  const templ = await tryLoad(templateFromFilename(filename, beh));
+  templateText = templ ? JSON.stringify(templ.data, null, 2) : "";
 
-      li.addEventListener('click', ()=> openItem(item));
-      ul.appendChild(li);
-    }
+  if (!loaded){
+    currentEtag = null;
+    els.promptEditor.value = "";
+    writeParamUI({});
+    setBadges("Missing（新規）", null);
+    setStatus("新規作成できます。右上の保存で client 配下に作成します。");
+    clearDirty();
+    return;
   }
 
-  async function openItem(item) {
-    currentItem = item;
-    $('#currentFile').textContent = getClientFolder()+item.file;
-    $('#status').textContent = item.locked ? 'Locked' : '—';
-    $('#etag').textContent = '—';
-    $('#editor').value = '読み込み中…';
-    try {
-      const { text, etag } = await loadText(getClientFolder()+item.file);
-      $('#editor').value = text;
-      $('#etag').textContent = etag || '—';
-    } catch(e) {
-      $('#editor').value = `// 読み込み失敗: ${e.message}`;
-    }
+  const d = loaded.data || {};
+  let promptText = "";
+  if (typeof d.prompt === "string") promptText = d.prompt;
+  else if (d.prompt && typeof d.prompt.text === "string") promptText = d.prompt.text;
+  else if (typeof d === "string") promptText = d;
+  else promptText = JSON.stringify(d, null, 2);
+
+  els.promptEditor.value = promptText;
+  writeParamUI(d.params || {});
+
+  currentEtag = (used.startsWith("client/") || used.startsWith("prompt/")) ? loaded.etag : null;
+
+  if (used.startsWith("client/")) setBadges("Overridden", currentEtag, "ok");
+  else if (used.startsWith("prompt/")) setBadges("Overridden (legacy)", currentEtag, "ok");
+  else setBadges("Template（未上書き）", loaded.etag || "—", "info");
+
+  setStatus("読み込み完了","green");
+  clearDirty();
+}
+
+els.btnSave.addEventListener("click", saveCurrent);
+async function saveCurrent(){
+  const title = document.getElementById("fileTitle").textContent;
+  if (!title || title==="未選択") return;
+  const filename = title;
+  const prompt = els.promptEditor.value;
+  const params = readParamUI();
+  setStatus("保存中…","orange");
+  try{
+    const res = await apiSaveText(filename, { prompt, params }, currentEtag || undefined);
+    currentEtag = res?.etag || currentEtag || null;
+    setBadges("Overridden", currentEtag, "ok");
+    setStatus("保存完了","green");
+    clearDirty();
+  }catch(e){
+    setStatus("保存失敗: " + e.message, "red");
+    if (String(e).includes("412")) alert("他の人が更新しました。再読み込みしてから保存してください。");
   }
+}
 
-  function inlineRename(li, item, titleEl) {
-    const input = document.createElement('input');
-    input.className='inline';
-    input.value = item.name || normalizeNameFromFile(item.file);
-    li.replaceChild(input, titleEl);
-    input.focus(); input.select();
-    const cancel = () => li.replaceChild(titleEl, input);
-    const commit = async () => {
-      item.name = input.value.trim() || normalizeNameFromFile(item.file);
-      titleEl.textContent = item.name;
-      li.replaceChild(titleEl, input);
-      await saveIndex();
-      renderFileList();
-    };
-    input.addEventListener('keydown',(ev)=>{
-      if (ev.key==='Enter') commit();
-      if (ev.key==='Escape') cancel();
-    });
-    input.addEventListener('blur', commit);
-  }
+/* ---------- Diff ---------- */
+els.btnDiff.addEventListener("click", ()=>{
+  els.diffLeft.value  = templateText || "(テンプレートなし)";
+  els.diffRight.value = els.promptEditor.value || "";
+  els.diffPanel.hidden = !els.diffPanel.hidden;
+});
 
-  async function saveIndex() {
-    const { etag } = await saveText(indexPath, JSON.stringify(promptIndex, null, 2), etagIndex);
-    etagIndex = etag || null;
-  }
-
-  async function boot() {
-    const usp = new URLSearchParams(location.hash.replace(/^#\?/,'?'));
-    currentClient = usp.get('client') || $('#client').value || 'A001';
-    currentBehavior = usp.get('behavior') || $('#behavior').value || 'BASE';
-    const api = usp.get('api') || $('#apiBase').value;
-    $('#client').value = currentClient;
-    $('#behavior').value = currentBehavior;
-    if (api) $('#apiBase').value = api;
-
-    $('#search').addEventListener('input', renderFileList);
-    $('#btnAdd').addEventListener('click', async () => {
-      const fname = prompt('新しいプロンプトのファイル名（.json）', 'custom-prompt.json');
-      if (!fname) return;
-      const item = { file: fname, name: normalizeNameFromFile(fname), order: ((promptIndex.prompts?.length||0)+1)*10, hidden:false };
-      promptIndex.prompts.push(item);
-      await saveIndex();
-      renderFileList();
-    });
-    $('#btnSave').addEventListener('click', async ()=>{
-      if (!currentItem) return;
-      await saveText(getClientFolder()+currentItem.file, $('#editor').value, null);
-      alert('保存しました');
-    });
-    window.addEventListener('keydown', (e)=>{
-      if (e.ctrlKey && e.key.toLowerCase()==='s') { e.preventDefault(); $('#btnSave').click(); }
-    });
-
-    await ensurePromptIndex();
-    renderFileList();
-  }
-
-  window.addEventListener('DOMContentLoaded', boot);
-})();
+/* ---------- Utils ---------- */
+function setStatus(msg, color="#0AA0A6"){ els.status.style.color = color; els.status.textContent = msg; }
+function setBadges(stateText, etag, mode){
+  els.badgeState.textContent = stateText;
+  els.badgeState.className = "chip " + (mode||"");
+  els.badgeEtag.textContent = etag || "—";
+}
