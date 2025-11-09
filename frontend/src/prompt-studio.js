@@ -107,7 +107,7 @@ function normalizeIndex(obj){
   }catch{}
   return null;
 }
-function ensurePromptIndex(clientId, behavior){
+async function ensurePromptIndex(clientId, behavior){
   const tryPaths = [ indexClientPath(clientId), indexBehaviorPath(clientId, behavior) ];
   let usedPath = null, idx = null, etag = null;
 
@@ -115,6 +115,16 @@ function ensurePromptIndex(clientId, behavior){
     const s = await tryLoad(p);
     if (s && s.data){ const n = normalizeIndex(s.data); if (n){ usedPath = p; idx = n; etag = s.etag; break; } }
   }
+  // MIGRATION: If behavior-level exists but client-root is missing, copy once.
+  try {
+    const rBeh = await tryLoad(indexBehaviorPath(clientId, behavior));
+    const rCli = await tryLoad(indexClientPath(clientId));
+    if (rBeh && rBeh.data && !rCli){
+      const n = normalizeIndex(rBeh.data);
+      if (n){ await saveIndex(indexClientPath(clientId), n, null); }
+    }
+  } catch(e){ console.warn('index migration failed', e); }
+
 
   if (!idx){
     // generate from known kinds allowed for this behavior
