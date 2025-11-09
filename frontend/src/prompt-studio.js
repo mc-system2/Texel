@@ -39,6 +39,9 @@ const els = {
   status:    document.getElementById("statusMessage"),
   btnAdd:    document.getElementById("btnAdd"),
 };
+// /*hideSearch*/ remove/disable search UI
+try{ if (els.search){ els.search.style.display='none'; } }catch{}
+
 
 let currentEtag = null;
 let templateText = "";
