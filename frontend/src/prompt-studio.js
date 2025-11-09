@@ -85,7 +85,7 @@ async function saveIndex(path, idx, etag){
     headers:{ "Content-Type":"application/json; charset=utf-8" },
     body: JSON.stringify(payload)
   });
-  const raw = await r.text(); let j={}; try{ j = raw?JSON.parse(raw):{} }catch{}
+  const raw = await r.text(); let j={}; try{ j = raw?JSON.parse(raw):{} }catch(e){}
   if (!r.ok) throw new Error(j?.error || raw || `HTTP ${r.status}`);
   promptIndexEtag = j?.etag || promptIndexEtag || null;
   return j;
@@ -103,7 +103,7 @@ function normalizeIndex(obj){
       if (parsed.items) return parsed;
       if (parsed.prompt && parsed.prompt.items) return parsed.prompt;
     }
-  }catch{}
+  }catch(e){}
   return null;
 }
 
@@ -248,9 +248,9 @@ function boot(){
   // Hydrate els and delay parts until DOM is ready
   if (!document.getElementById("fileList")){
     document.addEventListener("DOMContentLoaded", ()=>{
-      try{ if (typeof __ps_hydrateEls==="function") __ps_hydrateEls(); }catch{}
-      try{ __ps_wireSearch(); }catch{}
-      try{ if (typeof renderFileList==="function") renderFileList(); }catch{}
+      try{ if (typeof __ps_hydrateEls==="function") __ps_hydrateEls(); }catch(e){}
+      try{ __ps_wireSearch(); }catch(e){}
+      try{ if (typeof renderFileList==="function") renderFileList(); }catch(e){}
     }, { once:true });
   }
 
@@ -260,13 +260,7 @@ function boot(){
       if (!els || !els.search) els.search = document.getElementById("search");
       if (els && els.search && !els.search.__wired){
         els.search.__wired = true;
-        els.search.addEventListener("input", ()=>{
-          const kw = (els.search.value||"").toLowerCase();
-          [...(els.fileList?.children||[])].forEach(it=>{
-            const t = it.querySelector(".name")?.textContent?.toLowerCase() || "";
-            it.style.display = t.includes(kw) ? "" : "none";
-          });
-        });
+        try { __ps_wireSearch(); } catch (e) {}});
       }
     }catch(e){ console.warn("wireSearch failed:", e); }
   }
@@ -564,7 +558,7 @@ async function saveCurrent(){
       headers:{ "Content-Type":"application/json; charset=utf-8" },
       body: JSON.stringify(body)
     });
-    const raw = await r.text(); let json={}; try{ json = raw?JSON.parse(raw):{} }catch{}
+    const raw = await r.text(); let json={}; try{ json = raw?JSON.parse(raw):{} }catch(e){}
     if (!r.ok) throw new Error(json?.error || raw || `HTTP ${r.status}`);
 
     currentEtag = json?.etag || currentEtag || null;
@@ -959,7 +953,7 @@ function templateFromFilename(filename, behavior){
     const wrapped = async function(){
       const r = await __origAdd.apply(this, arguments);
       window.__ps_useLocalIndexOnce = true;  // next render uses local
-      try{ if (typeof renderFileList === "function") renderFileList(); }catch{}
+      try{ if (typeof renderFileList === "function") renderFileList(); }catch(e){}
       return r;
     };
     wrapped.__ps_hooked = true;
@@ -977,7 +971,7 @@ function templateFromFilename(filename, behavior){
   function __ps_prettify(filename){
     try{
       if (typeof prettifyNameFromFile === "function") return prettifyNameFromFile(filename);
-    }catch{}
+    }catch(e){}
     return filename.replace(/\.json$/i,'').replace(/[-_]/g,' ').trim();
   }
 
@@ -1139,7 +1133,7 @@ function templateFromFilename(filename, behavior){
             setStatus(okDel?"削除しました（BLOBも削除）":"インデックスのみ削除しました（BLOB削除失敗）","green");
             // Update DOM
             li.remove();
-            try{ await window.renderFileList({local:true}); }catch{}
+            try{ await window.renderFileList({local:true}); }catch(e){}
           });
         }
       }catch(e){
@@ -1157,7 +1151,7 @@ function templateFromFilename(filename, behavior){
     const wrapped = async function(){
       const r = await __origAddForRender.apply(this, arguments);
       window.__ps_forceLocalRender = true;
-      try{ await window.renderFileList({local:true}); }catch{}
+      try{ await window.renderFileList({local:true}); }catch(e){}
       return r;
     };
     wrapped.__ps_forceLocal = true;
@@ -1190,7 +1184,7 @@ function templateFromFilename(filename, behavior){
   if (typeof window.boot === "function" && !window.boot.__ps_hydrated){
     const orig = window.boot;
     const wrapped = function(){
-      try{ window.__ps_hydrateEls(); }catch{}
+      try{ window.__ps_hydrateEls(); }catch(e){}
       return orig.apply(this, arguments);
     };
     wrapped.__ps_hydrated = true;
@@ -1202,12 +1196,12 @@ function templateFromFilename(filename, behavior){
     const origRender = window.renderFileList;
     const guarded = async function(){
       if (!els || !els.fileList){
-        try{ window.__ps_hydrateEls(); }catch{}
+        try{ window.__ps_hydrateEls(); }catch(e){}
       }
       if (!els || !els.fileList){
         console.warn("fileList element not ready; retrying shortly");
         await new Promise(r=>setTimeout(r, 0));
-        try{ window.__ps_hydrateEls(); }catch{}
+        try{ window.__ps_hydrateEls(); }catch(e){}
       }
       return await origRender.apply(this, arguments);
     };
