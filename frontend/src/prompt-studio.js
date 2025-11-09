@@ -883,3 +883,44 @@ function templateFromFilename(filename, behavior){
   }
 })();
 // === End Minimal Stable Add Patch ========================================================
+
+/* === Hotfix: markDirty fallback & auto-create index on 404 (2025-11-09) ================= */
+(function(){
+  // 1) markDirty polyfill (no-op if original exists)
+  if (typeof window.markDirty !== "function"){
+    window.markDirty = function(){ try{ window.__ps_dirty = true; }catch(e){} };
+  }
+
+  // 2) ensurePromptIndex wrapper: create empty index when not found (404)
+  if (typeof window.ensurePromptIndex === "function" && !window.ensurePromptIndex.__ps_wrap404){
+    const __origEnsure = window.ensurePromptIndex;
+    window.ensurePromptIndex = async function(clientId, behavior){
+      try{
+        const r = await __origEnsure(clientId, behavior);
+        // If it returned falsy, normalize
+        if (!window.promptIndex || !Array.isArray(window.promptIndex.items)){
+          window.promptIndex = { items:[], updatedAt: new Date().toISOString() };
+        }
+        return r;
+      }catch(e){
+        // Heuristic for 404: create blank index and persist
+        try{
+          if (!window.promptIndex || !Array.isArray(window.promptIndex.items)){
+            window.promptIndex = { items:[], updatedAt: new Date().toISOString() };
+          }
+          const clid = (els.clientId && els.clientId.value || "").trim().toUpperCase();
+          const idxPath = (typeof promptIndexPath!=="undefined" && promptIndexPath) ? promptIndexPath : ("client/"+clid+"/prompt-index.json");
+          if (typeof saveIndex === "function"){
+            await saveIndex(idxPath, window.promptIndex, (typeof promptIndexEtag!=="undefined"?promptIndexEtag:null));
+          }
+          return window.promptIndex;
+        }catch(e2){
+          console.warn("auto-create index failed:", e2);
+          throw e;
+        }
+      }
+    };
+    window.ensurePromptIndex.__ps_wrap404 = true;
+  }
+})();
+// === End Hotfix ==========================================================================
