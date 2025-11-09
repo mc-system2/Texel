@@ -363,6 +363,66 @@ async function resolveState(clientCandidates, templatePath){
   return "missing";
 }
 
+
+async function openItem(it){
+  if (dirty && !confirm("未保存の変更があります。破棄して読み込みますか？")) return;
+
+  els.diffPanel.hidden = true;
+  [...els.fileList.children].forEach(n=>n.classList.toggle("active", n.dataset.file===it.file));
+  setStatus("読込中…","orange");
+
+  const clid = els.clientId.value.trim().toUpperCase();
+  const beh  = els.behavior.value.toUpperCase();
+  const name = it.file;
+
+  currentFilenameTarget = `client/${clid}/${name}`;
+  document.getElementById("fileTitle").textContent = currentFilenameTarget;
+
+  const candidates = [
+    `client/${clid}/${name}`,
+    `prompt/${clid}/${name}`,
+    templateFromFilename(name, beh)
+  ];
+
+  let loaded = null, used = null;
+  for (const f of candidates){
+    const r = await tryLoad(f);
+    if (r) { loaded = r; used = f; break; }
+  }
+  const templ = await tryLoad(templateFromFilename(name, beh));
+  templateText = templ ? JSON.stringify(templ.data, null, 2) : "";
+
+  if (!loaded){
+    currentEtag = null;
+    els.promptEditor.value = "";
+    loadedParams = {};
+    writeParamUI(loadedParams);
+    setBadges("Missing（新規）", null);
+    setStatus("新規作成できます。右上の保存で client 配下に作成します。");
+    clearDirty();
+    return;
+  }
+
+  const d = loaded.data || {};
+  let promptText = "";
+  if (typeof d.prompt === "string") promptText = d.prompt;
+  else if (d.prompt && typeof d.prompt.text === "string") promptText = d.prompt.text;
+  else if (typeof d === "string") promptText = d;
+  else promptText = JSON.stringify(d, null, 2);
+
+  els.promptEditor.value = promptText;
+  loadedParams = d.params || {};
+  writeParamUI(loadedParams);
+
+  currentEtag = (used.startsWith("client/") || used.startsWith("prompt/")) ? loaded.etag : null;
+
+  if (used.startsWith("client/")) setBadges("Overridden", currentEtag, "ok");
+  else if (used.startsWith("prompt/")) setBadges("Overridden (legacy)", currentEtag, "ok");
+  else setBadges("Template（未上書き）", loaded.etag || "—", "info");
+
+  setStatus("読み込み完了","green");
+  clearDirty();
+}
 async function openKind(kind){
   if (dirty && !confirm("未保存の変更があります。破棄して読み込みますか？")) return;
 
