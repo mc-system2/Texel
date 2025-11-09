@@ -241,7 +241,7 @@ async function renderFileList(){
   const allowedFiles = new Set(kinds.map(k=>KIND_TO_NAME[k]));
 
   const rows = [...(promptIndex.items||[])]
-    .filter(it => !it.hidden && allowedFiles.has(it.file))
+    .filter(it => !it.hidden)
     .sort((a,b)=>(a.order??0)-(b.order??0));
 
   // enable drag sort events on container
