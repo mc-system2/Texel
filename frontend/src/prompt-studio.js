@@ -151,6 +151,12 @@ async function addIndexItem(fileName, displayName){
 }
 
 /* === auto filename generator & raw index append === */
+function generateAutoFilename(){
+  const d = new Date();
+  const pad = n => String(n).padStart(2,"0");
+  return `texel-custom-${d.getFullYear()}${pad(d.getMonth()+1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}.json`;
+}${pad(d.getMonth()+1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}.json`;
+}
 
 async function addIndexItemRaw(filename, displayName){
   let file = (filename||"").trim();
@@ -473,3 +479,99 @@ function setBadges(stateText, etag, mode){
   els.badgeState.className = "chip " + (mode||"");
   els.badgeEtag.textContent = etag || "—";
 }
+
+/* ===== Prompt Studio: Safe Add Button Wrapper (no breaking changes) ===== */
+(function(){
+  const g = (typeof window !== 'undefined') ? window : globalThis;
+  const els = {};
+  function $q(sel){ return document.querySelector(sel); }
+
+  function cacheEls(){
+    els.btnAdd   = $q('#btnAdd, [data-role="btn-add"]');
+    els.clientId = $q('#client, #Client, select[name="client"], [data-role="client"]');
+    els.behavior = $q('#behavior, #Behavior, select[name="behavior"], [data-role="behavior"]');
+  }
+
+  function pad2(n){ return String(n).padStart(2,'0'); }
+  function generateAutoFilename(){
+    const d = new Date();
+    return `texel-custom-${d.getFullYear()}${pad2(d.getMonth()+1)}${pad2(d.getDate())}-${pad2(d.getHours())}${pad2(d.getMinutes())}${pad2(d.getSeconds())}.json`;
+  }
+
+  async function addIndexItemRaw(filename, displayName){
+    if (!g.promptIndex) g.promptIndex = { items: [], params: {}, updatedAt: new Date().toISOString() };
+    let file = (filename||'').trim();
+    if (!file) throw new Error('filename is empty');
+    if (!file.endsWith('.json')) file += '.json';
+    if (!/^texel-/.test(file)) file = 'texel-' + file;
+    const items = g.promptIndex.items || (g.promptIndex.items = []);
+    if (items.some(x => x.file === file)) throw new Error('同名ファイルが既に存在します。');
+    const maxOrder = Math.max(0, ...items.map(x => x.order || 0));
+    const name = (displayName||'').trim() || file.replace(/\.json$/,'').replace(/^texel-/, '').replace(/[-_]/g, ' ');
+    items.push({ file, name, order: maxOrder + 10, hidden: false });
+    g.promptIndex.updatedAt = new Date().toISOString();
+    if (typeof g.saveIndex === 'function') {
+      await g.saveIndex();
+    }
+  }
+
+  async function onClickAdd(){
+    try{
+      cacheEls();
+      const clid = (els.clientId && els.clientId.value || '').trim().toUpperCase();
+      const beh  = (els.behavior && els.behavior.value || '').trim().toUpperCase();
+      if (typeof g.ensurePromptIndex === 'function') {
+        await g.ensurePromptIndex(clid, beh);
+      }
+      const dname = prompt('新しいプロンプトの名称を入力してください', '新規プロンプト');
+      if (dname === null) return;
+
+      let file = generateAutoFilename();
+      const existing = new Set(((g.promptIndex && g.promptIndex.items) || []).map(x=>x.file));
+      let salt = 0;
+      while (existing.has(file)){
+        salt++;
+        file = file.replace(/\.json$/, `-${salt}.json`);
+      }
+
+      const clientPath = `client/${clid}/${file}`;
+      if (typeof g.apiSaveText === 'function'){
+        await g.apiSaveText(clientPath, { prompt: '', params: {} }, null);
+      } else {
+        console.warn('[PromptStudio] apiSaveText is not defined; skipping blob create.');
+      }
+
+      await addIndexItemRaw(file, dname);
+
+      if (typeof g.renderFileList === 'function') await g.renderFileList();
+      if (typeof g.openByFilename === 'function') await g.openByFilename(file);
+    }catch(e){
+      alert('追加に失敗: ' + (e && e.message ? e.message : e));
+      console.error(e);
+    }
+  }
+
+  function bind(){
+    cacheEls();
+    if (els.btnAdd){
+      els.btnAdd.addEventListener('click', onClickAdd, { once: false });
+    } else {
+      console.warn('[PromptStudio] #btnAdd not found. Waiting for DOM...');
+      const mo = new MutationObserver(() => {
+        cacheEls();
+        if (els.btnAdd){
+          els.btnAdd.addEventListener('click', onClickAdd, { once: false });
+          mo.disconnect();
+        }
+      });
+      mo.observe(document.documentElement, { childList:true, subtree:true });
+    }
+  }
+
+  if (document.readyState === 'loading'){
+    document.addEventListener('DOMContentLoaded', bind);
+  } else {
+    bind();
+  }
+})();
+/* ===== End of Safe Wrapper ===== */
