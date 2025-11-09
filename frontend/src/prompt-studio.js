@@ -24,13 +24,19 @@ function join(base, path){ return base.replace(/\/+$/,'') + '/' + path.replace(/
 
 // ---- API compatibility helper ----
 async function callApiCompat(name, variants){
+  return callApiCompatEx([name], variants);
+}
+
+async function callApiCompatEx(names, variants){
   let lastErr=null;
-  for (const body of variants){
+  for (const nm of names){
+    for (const body of variants){
     try{
-      const r = await postJSON(join(els.apiBase.value, name), body);
+      const r = await postJSON(join(els.apiBase.value, nm), body);
       const j = await r.json().catch(()=>null);
       if (j!=null) return j;
     }catch(e){ lastErr=e; }
+    }
   }
   if (lastErr) throw lastErr; else throw new Error('API response empty');
 }
@@ -51,7 +57,9 @@ async function postJSON(url, body){
 }
 async function tryLoadasync function tryLoad(filename){
   try{
-    const j = await callApiCompat("LoadPromptText", [
+    const j = await callApiCompatEx([
+      "LoadPromptText","loadprompttext","LoadPrompt","LoadText","LoadFile","LoadBlobText","LoadBLOBText"
+    ], [
       { filename }, { path: filename }
     ]);
     return { etag: j.etag||null, data: parsePromptText(j) };
