@@ -1034,3 +1034,107 @@ function templateFromFilename(filename, behavior){
   }
 })();
 // === End Fix v4 ==========================================================================
+
+/* === Fix v5: renderFileList local-render path (2025-11-09) ==============================
+   - Override renderFileList to support a "local only" render without network reload.
+   - After add, set __ps_forceLocalRender so the next render uses in-memory promptIndex.
+========================================================================================== */
+(function(){
+  if (!window.__ps_render_override && typeof window.renderFileList === "function"){
+    const __origRender = window.renderFileList;
+    window.renderFileList = async function(options){
+      options = options || {};
+      const useLocal = options.local || window.__ps_forceLocalRender;
+      window.__ps_forceLocalRender = false;
+      if (!useLocal){
+        return await __origRender.apply(this, arguments);
+      }
+      // --- Local render branch: duplicate key parts of original, but skip ensurePromptIndex ---
+      try{
+        els.fileList.innerHTML = "";
+        const clid = (els.clientId.value||"").trim().toUpperCase();
+        const beh  = (els.behavior.value||"BASE").trim().toUpperCase();
+
+        const kinds = Object.keys(KIND_TO_NAME).filter(k=>FAMILY[beh].has(k));
+        const allowedFiles = new Set(kinds.map(k=>KIND_TO_NAME[k]));
+
+        const rows = [...((window.promptIndex && Array.isArray(window.promptIndex.items) ? window.promptIndex.items : []))]
+          .filter(it => !it.hidden)
+          .sort((a,b)=>(a.order??0)-(b.order??0));
+
+        // Build list items (subset of original)
+        for (const it of rows){
+          const name = it.name || (typeof prettifyNameFromFile==="function" ? prettifyNameFromFile(it.file) : it.file);
+          const li = document.createElement('div');
+          li.className = 'fileitem';
+          li.dataset.file = it.file;
+          li.draggable = true;
+          li.innerHTML = `<span class="drag">≡</span>
+                          <div class="name" title="${it.file}">${name}</div>
+                          <div class="meta">
+                            <button class="rename" title="名称を変更">✎</button>
+                            <button class="trash" title="削除">🗑</button>
+                          </div>`;
+          els.fileList.appendChild(li);
+
+          li.addEventListener('dragstart', ()=> li.classList.add('dragging'));
+          li.addEventListener('dragend', async ()=>{
+            li.classList.remove('dragging');
+            try{ await saveOrderFromDOM(); }catch(e){ console.warn(e); }
+          });
+
+          li.addEventListener('click', async (e)=>{
+            if (e.target.closest('.rename') || e.target.closest('.trash')) return;
+            if (typeof openItem === "function"){
+              const item = (window.promptIndex?.items||[]).find(x=>x.file===it.file) || it;
+              openItem(item);
+            }
+          });
+
+          li.querySelector('.rename').addEventListener('click', async (e)=>{
+            e.stopPropagation();
+            const newName = prompt("表示名を入力", name);
+            if (newName === null) return;
+            const item = (window.promptIndex?.items||[]).find(x=>x.file===it.file);
+            if (item){ item.name = newName; }
+            li.querySelector('.name').textContent = newName;
+            try{ await saveIndex(promptIndexPath, promptIndex, promptIndexEtag); }catch(err){ console.error(err); }
+          });
+
+          li.querySelector('.trash').addEventListener('click', async (e)=>{
+            e.stopPropagation();
+            const ok = confirm(`「${name}」を一覧から削除します。\n※ BLOB 上のファイル自体は消えません。`);
+            if (!ok) return;
+            const blobPath = `client/${clid}/${it.file}`;
+            const okDel = await tryDelete(blobPath);
+            await deleteIndexItem(it.file);
+            setStatus(okDel?"削除しました（BLOBも削除）":"インデックスのみ削除しました（BLOB削除失敗）","green");
+            // Update DOM
+            li.remove();
+            try{ await window.renderFileList({local:true}); }catch{}
+          });
+        }
+      }catch(e){
+        console.warn("renderFileList(local) failed:", e);
+        // fallback to original
+        return await __origRender.apply(this, arguments);
+      }
+    };
+    window.__ps_render_override = true;
+  }
+
+  // After add, force local render
+  const __origAddForRender = window.addPromptUnified || window.onAdd;
+  if (__origAddForRender && !__origAddForRender.__ps_forceLocal){
+    const wrapped = async function(){
+      const r = await __origAddForRender.apply(this, arguments);
+      window.__ps_forceLocalRender = true;
+      try{ await window.renderFileList({local:true}); }catch{}
+      return r;
+    };
+    wrapped.__ps_forceLocal = true;
+    if (window.addPromptUnified) window.addPromptUnified = wrapped;
+    else window.onAdd = wrapped;
+  }
+})();
+// === End Fix v5 =========================================================================
