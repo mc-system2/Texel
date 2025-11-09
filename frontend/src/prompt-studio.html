@@ -10,8 +10,7 @@
   <div class="app">
     <!-- ヘッダー -->
     <header class="ps-header">
-      <div class="left"><h1 class="app-title">Prompt Studio</h1>
-      </div>
+      <div class="left"><h1 class="app-title">Prompt Studio</h1></div>
       <div class="middle">
         <label class="label">Client</label>
         <input id="clientId" class="input sm" placeholder="A001" autocomplete="off" />
@@ -33,7 +32,10 @@
       <!-- サイドバー -->
       <aside class="ps-side panel" id="sidebar">
         <div class="tips">クライアント別の編集対象を選択してください。</div>
-        <input id="search" class="input" placeholder="ファイル検索…" />
+        <div class="side-actions">
+          <input id="search" class="input" placeholder="ファイル検索…" />
+          <button id="btnAdd" class="btn tiny">＋ 追加</button>
+        </div>
         <div id="fileList" class="filelist" aria-label="ファイル一覧"></div>
       </aside>
 
