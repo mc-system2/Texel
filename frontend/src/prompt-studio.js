@@ -367,42 +367,6 @@ async function openItem(item){
   setStatus("読み込み完了","green");
   clearDirty();
 }
-  }
-  const templ = await tryLoad(behaviorTemplatePath(beh, kind));
-  templateText = templ ? JSON.stringify(templ.data, null, 2) : "";
-
-  if (!loaded){
-    currentEtag = null;
-    els.promptEditor.value = "";
-    loadedParams = {};
-    writeParamUI(loadedParams);
-    setBadges("Missing（新規）", null);
-    setStatus("新規作成できます。右上の保存で client 配下に作成します。");
-    clearDirty();
-    return;
-  }
-
-  const d = loaded.data || {};
-  let promptText = "";
-  if (typeof d.prompt === "string") promptText = d.prompt;
-  else if (d.prompt && typeof d.prompt.text === "string") promptText = d.prompt.text;
-  else if (typeof d === "string") promptText = d;
-  else promptText = JSON.stringify(d, null, 2);
-
-  els.promptEditor.value = promptText;
-  loadedParams = d.params || {};
-  writeParamUI(loadedParams);
-
-  currentEtag = (used.startsWith("client/") || used.startsWith("prompt/")) ? loaded.etag : null;
-
-  if (used.startsWith("client/")) setBadges("Overridden", currentEtag, "ok");
-  else if (used.startsWith("prompt/")) setBadges("Overridden (legacy)", currentEtag, "ok");
-  else setBadges("Template（未上書き）", loaded.etag || "—", "info");
-
-  setStatus("読み込み完了","green");
-  clearDirty();
-}
-
 /* ---------- Save ---------- */
 els.btnSave.addEventListener("click", saveCurrent);
 async function saveCurrent(){
