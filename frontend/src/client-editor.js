@@ -1,4 +1,4 @@
-// Client Catalog Editor v2025-11-09
+// Client Catalog Editor v2025-11-09-2
 // 保存後：新規クライアントに限り roomphoto 固定の index とテンプレを自動作成。
 
 const els = {
@@ -6,12 +6,27 @@ const els = {
   btnRead: document.getElementById("btnRead"),
   btnSave: document.getElementById("btnSave"),
   btnAdd: document.getElementById("btnAddClientRow"),
+  btnNew: document.getElementById("btnNew"),
   list: document.getElementById("list"),
   status: document.getElementById("status"),
 };
 
 function join(base, path){ return base.replace(/\/+$/,'') + '/' + path.replace(/^\/+/,''); }
+
+// ===== API Base guard =====
+function resolveApiBase(){
+  const u = new URL(location.href);
+  const q = u.searchParams.get("api");
+  if (q){ els.apiBase.value = q; localStorage.setItem("apiBase", q); }
+  else if (localStorage.getItem("apiBase")) els.apiBase.value = localStorage.getItem("apiBase");
+  els.apiBase.addEventListener("input", ()=> localStorage.setItem("apiBase", els.apiBase.value.trim()));
+}
+function apiBaseOk(){
+  const v = (els.apiBase.value||"").trim();
+  return v && !v.includes("...");
+}
 async function postJSON(url, body){
+  if (!apiBaseOk()) throw new Error("API Base 未設定");
   const r = await fetch(url, { method:"POST", headers:{ "Content-Type":"application/json; charset=utf-8" }, body: JSON.stringify(body||{}) });
   if (!r.ok) throw new Error(await r.text()||`HTTP ${r.status}`);
   return r;
@@ -42,40 +57,8 @@ function renderClientList(){
 }
 
 // ==== 読込/保存 ====
-// カタログの読み書きは prompts/client/catalog.json を仮定（既存環境に合わせて修正可）
-
-// ---- fallback: enumerate client folders when catalog.json is missing ----
-async function listClientFoldersFallback(){
-  try{
-    // Expect Azure Function: ListBLOB.js 仕様（container:'prompts', folder:'client'）
-    const r = await postJSON(join(els.apiBase.value, "ListBLOB"), { container: "prompts", folder: "client" });
-    const j = await r.json().catch(()=>null);
-    // 返却想定: { prefixes: ["client/A001/","client/J594/",...], files:[...] } または items[]
-    let codes = [];
-    if (j?.prefixes?.length){
-      codes = j.prefixes.map(x => String(x).split("/")[1]).filter(Boolean);
-    } else if (Array.isArray(j?.items)){
-      // items がフルパスのとき "client/<code>/" を抽出
-      const set = new Set();
-      j.items.forEach(it=>{
-        const m = String(it.name||it.path||"").match(/^client\/([A-Za-z0-9]{1,10})\//);
-        if (m) set.add(m[1]);
-      });
-      codes = [...set];
-    }
-    // prompt-index.json を持つフォルダを優先的に並べる（任意）
-    codes.sort();
-    clients = codes.map(c=>({ code: (c||"").toUpperCase(), name: "", behavior:"BASE" }));
-    previousCodes = new Set(clients.map(x=>x.code));
-    renderClientList();
-    setStatus(clients.length ? "フォルダ一覧から読込" : "クライアントなし");
-  }catch(e){
-    console.warn("ListBLOB fallback failed:", e);
-    setStatus("読込エラー");
-  }
-}
-
 async function loadCatalog(){
+  resolveApiBase();
   setStatus("読込中…");
   try{
     const r = await postJSON(join(els.apiBase.value,"LoadPromptText"), { filename: "client/catalog.json" });
@@ -86,12 +69,12 @@ async function loadCatalog(){
     renderClientList();
     setStatus("読込完了");
   }catch(e){
-    // catalog.json が無ければフォルダ列挙にフォールバック
-    await listClientFoldersFallback();
+    await listClientFoldersFallback(); // catalog.json が無ければフォルダ列挙にフォールバック
   }
 }
 
 async function saveCatalog(){
+  if (!apiBaseOk()){ setStatus("API Base を設定してください"); return; }
   setStatus("保存中…");
   const payload = { clients };
   const text = JSON.stringify(payload, null, 2);
@@ -99,6 +82,35 @@ async function saveCatalog(){
   await initPromptsForNewClients(clients);
   previousCodes = new Set(clients.map(x=>x.code));
   setStatus("保存完了");
+}
+
+// ---- fallback: enumerate client folders when catalog.json is missing ----
+async function listClientFoldersFallback(){
+  try{
+    const r = await postJSON(join(els.apiBase.value, "ListBLOB"), { container: "prompts", folder: "client" });
+    const j = await r.json().catch(()=>null);
+    let codes = [];
+    if (j?.prefixes?.length){
+      codes = j.prefixes.map(x => String(x).split("/")[1]).filter(Boolean);
+    } else if (Array.isArray(j?.items)){
+      const set = new Set();
+      j.items.forEach(it=>{
+        const m = String(it.name||it.path||"").match(/^client\/([A-Za-z0-9]{1,10})\//);
+        if (m) set.add(m[1]);
+      });
+      codes = [...set];
+    }
+    codes.sort();
+    clients = codes.map(c=>({ code: (c||"").toUpperCase(), name: "", behavior:"BASE" }));
+    previousCodes = new Set(clients.map(x=>x.code));
+    renderClientList();
+    setStatus(clients.length ? "フォルダ一覧から読込" : "クライアントなし");
+  }catch(e){
+    console.warn("ListBLOB fallback failed:", e);
+    clients = []; previousCodes = new Set();
+    renderClientList();
+    setStatus("読込エラー");
+  }
 }
 
 // ==== 新規クライアントの初期化 ====
@@ -129,7 +141,6 @@ async function initPromptsForNewClients(currentClients){
   if (adds.length===0) return;
 
   for (const {code, behavior} of adds){
-    // 1) index（roomphoto固定のみ）
     const index = {
       version: 1,
       clientId: code,
@@ -139,7 +150,6 @@ async function initPromptsForNewClients(currentClients){
       params: {}
     };
     await savePromptText(`client/${code}/prompt-index.json`, JSON.stringify(index, null, 2));
-    // 2) roomphoto テンプレコピー
     const templFile = templateFromFilename("texel-roomphoto.json", behavior);
     const t = await loadPromptText(templFile);
     const content = t || JSON.stringify({ prompt:"", params:{} }, null, 2);
@@ -151,4 +161,5 @@ async function initPromptsForNewClients(currentClients){
 els.btnRead.addEventListener("click", loadCatalog);
 els.btnSave.addEventListener("click", saveCatalog);
 els.btnAdd.addEventListener("click", ()=>{ clients.push({ code:"", name:"", behavior:"BASE" }); renderClientList(); });
+els.btnNew.addEventListener("click", ()=>{ clients = []; renderClientList(); setStatus("新規作成（未保存）"); });
 loadCatalog();

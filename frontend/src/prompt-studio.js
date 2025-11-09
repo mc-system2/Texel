@@ -1,12 +1,11 @@
-// Prompt Studio v2025-11-09
-// 仕様: roomphoto(画像分析プロンプト)は先頭固定/変更不可。その他は追加・複製・削除可。
-// 依存: SavePromptText / LoadPromptText API (POST)
+// Prompt Studio v2025-11-09-2
+// roomphoto(画像分析プロンプト)は先頭固定/変更不可。他は追加・複製・削除可。
 
-// ===== DOM =====
 const els = {
   clientId: document.getElementById("clientId"),
   behavior: document.getElementById("behavior"),
   apiBase:  document.getElementById("apiBase"),
+  apiWarn:  document.getElementById("apiWarn"),
   btnAddPrompt: document.getElementById("btnAddPrompt"),
   btnAddPromptLeft: document.getElementById("btnAddPromptLeft"),
   btnSave: document.getElementById("btnSave"),
@@ -22,15 +21,36 @@ const els = {
 };
 
 function join(base, path){ return base.replace(/\/+$/,'') + '/' + path.replace(/^\/+/,''); }
+
+// ===== API Base guard =====
+function resolveApiBase(){
+  const u = new URL(location.href);
+  const q = u.searchParams.get("api");
+  if (q){ els.apiBase.value = q; localStorage.setItem("apiBase", q); }
+  else if (localStorage.getItem("apiBase")) els.apiBase.value = localStorage.getItem("apiBase");
+  els.apiBase.addEventListener("input", ()=>{
+    localStorage.setItem("apiBase", els.apiBase.value.trim());
+    updateApiWarn();
+  });
+  updateApiWarn();
+}
+function apiBaseOk(){
+  const v = (els.apiBase.value||"").trim();
+  return v && !v.includes("...");
+}
+function updateApiWarn(){
+  els.apiWarn.style.display = apiBaseOk() ? "none" : "inline-block";
+}
 async function postJSON(url, body){
+  if (!apiBaseOk()) throw new Error("API Base 未設定");
   const r = await fetch(url, {
-    method:"POST",
-    headers:{ "Content-Type":"application/json; charset=utf-8" },
+    method:"POST", headers:{ "Content-Type":"application/json; charset=utf-8" },
     body: JSON.stringify(body||{})
   });
   if (!r.ok) throw new Error(await r.text()||`HTTP ${r.status}`);
   return r;
 }
+
 async function tryLoad(filename){
   try{
     const r = await postJSON(join(els.apiBase.value, "LoadPromptText"), { filename });
@@ -41,7 +61,7 @@ async function tryLoad(filename){
 }
 function parsePromptText(j){
   if (!j) return null;
-  if (typeof j.text === "string") { // raw text case
+  if (typeof j.text === "string") {
     try{ return JSON.parse(j.text); }catch{ return { prompt: j.text, params:{} }; }
   }
   if (typeof j.prompt === "string") return { prompt: j.prompt, params: j.params||{} };
@@ -54,7 +74,7 @@ async function savePromptText(filename, promptText, etag){
   return j.etag||null;
 }
 
-function setStatus(s, tone){ els.status.textContent = `状態: ${s}`; }
+function setStatus(s){ els.status.textContent = `状態: ${s}`; }
 function setETag(t){ els.etag.textContent = `ETag: ${t??"―"}`; }
 function setFilename(f){ els.filename.textContent = `ファイル: ${f??"未選択"}`; }
 
@@ -64,7 +84,7 @@ function templateFromFilename(filename, behavior){
   return filename;
 }
 
-// ===== index（client/<CODE>/prompt-index.json） =====
+// ===== index =====
 let promptIndex = null;
 let promptIndexPath = null;
 let promptIndexEtag = null;
@@ -111,7 +131,6 @@ function ensureRoomphotoFixed(){
     promptIndex.items[idx].name = "画像分析プロンプト";
     promptIndex.items[idx].fixed = true;
     promptIndex.items[idx].order = 10;
-    // roomphoto を先頭に
     const it = promptIndex.items.splice(idx,1)[0];
     promptIndex.items.unshift(it);
   }
@@ -157,7 +176,6 @@ async function renderFileList(){
         <span class="chip">checking…</span>
       </div>`;
 
-    // drag
     li.draggable = !fixed;
     if (!fixed){
       li.addEventListener("dragstart", ()=> li.classList.add("dragging"));
@@ -166,7 +184,6 @@ async function renderFileList(){
         await saveOrderFromDOM();
       });
     }
-    // click / actions
     li.addEventListener("click", (e)=>{
       const t = e.target;
       if (t.classList.contains("dup") || t.classList.contains("del") || t.classList.contains("rename") || t.classList.contains("drag")) return;
@@ -186,7 +203,6 @@ async function renderFileList(){
     els.fileList.appendChild(li);
   }
 
-  // DnD container
   els.fileList.addEventListener("dragover", (e)=>{
     e.preventDefault();
     const dragging = els.fileList.querySelector(".dragging");
@@ -203,7 +219,6 @@ async function renderFileList(){
     else els.fileList.appendChild(dragging);
   });
 
-  // chip 更新
   for (const it of items){
     const chip = els.fileList.querySelector(`.fileitem[data-file="${CSS.escape(it.file)}"] .chip`);
     updateChip(it, chip);
@@ -288,8 +303,6 @@ async function saveCurrent(){
 
 // ===== add / duplicate / delete =====
 async function addPromptItem(){
-  const clid = els.clientId.value.trim().toUpperCase();
-  const beh = els.behavior.value.toUpperCase();
   let filename = prompt("内部ファイル名（*.json）", "texel-custom.json");
   if (!filename) return;
   filename = filename.trim();
@@ -302,7 +315,8 @@ async function addPromptItem(){
   promptIndex.updatedAt = new Date().toISOString();
   await saveIndex(promptIndexPath, promptIndex, promptIndexEtag);
 
-  // テンプレ → なければ空雛形
+  const clid = els.clientId.value.trim().toUpperCase();
+  const beh = els.behavior.value.toUpperCase();
   const templ = await tryLoad(templateFromFilename(filename, beh));
   let text = "";
   if (templ && templ.data){
@@ -352,7 +366,7 @@ async function deletePromptItem(file){
   const it = (promptIndex.items||[]).find(x=>x.file===file);
   if (!it) return;
   if (it.fixed){ alert("roomphoto は削除できません。"); return; }
-  if (!confirm(`「${it.name||file}」をリストから削除します。\\n（注）ファイル自体の削除は行いません）`)) return;
+  if (!confirm(`「${it.name||file}」をリストから削除します。\n（注）ファイル自体の削除は行いません）`)) return;
   promptIndex.items = (promptIndex.items||[]).filter(x=>x.file!==file);
   promptIndex.updatedAt = new Date().toISOString();
   await saveIndex(promptIndexPath, promptIndex, promptIndexEtag);
@@ -361,6 +375,7 @@ async function deletePromptItem(file){
 
 // ===== boot =====
 async function boot(){
+  resolveApiBase();
   els.clientId.addEventListener("input", ()=> els.clientId.value = els.clientId.value.toUpperCase().replace(/[^A-Z0-9]/g,"").slice(0,4));
   els.btnAddPrompt.addEventListener("click", addPromptItem);
   els.btnAddPromptLeft.addEventListener("click", addPromptItem);
@@ -371,6 +386,7 @@ async function boot(){
 
   const clid = els.clientId.value.trim().toUpperCase();
   const beh  = els.behavior.value.toUpperCase();
+  if (!apiBaseOk()){ setStatus("API Base を設定してください"); return; }
   await ensurePromptIndex(clid, beh);
   await renderFileList();
   setStatus("準備完了");

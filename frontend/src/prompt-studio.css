@@ -1,40 +1,120 @@
 :root{
-  --bg:#f6f7fb; --panel:#ffffff; --panel2:#ffffff; --text:#1f2a37; --muted:#6b7280;
-  --primary:#0ea5e9; --ok:#10b981; --warn:#f59e0b; --danger:#ef4444;
-  --chip:#f1f5f9; --border:#e5e7eb;
+  --tx-primary:#0AA0A6;
+  --line:#d7e7f7;
+  --chip-bg:#eef6fa; --chip-ink:#247;
+  --muted:#5e6b7a; --panel:#fff; --bg:#f6fafc;
+  --radius:12px;
 }
-*{box-sizing:border-box} body{margin:0;background:var(--bg);color:var(--text);font:14px/1.6 system-ui, -apple-system, Segoe UI, Noto Sans JP, sans-serif}
-h1{font-size:16px;margin:0 12px 0 0}
-.mono{font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace}
-.wide{width:420px}
-.bar{position:sticky;top:0;z-index:10;background:#ffffffea;border-bottom:1px solid var(--border)}
-.bar .row{display:flex;gap:10px;align-items:center;padding:10px 12px}
-label{display:flex;gap:6px;align-items:center;background:#fff;padding:6px 8px;border-radius:10px;border:1px solid var(--border)}
-input,select,textarea{background:#fff;color:var(--text);border:1px solid var(--border);border-radius:8px;padding:6px 8px;outline:none}
-input:focus,select:focus,textarea:focus{border-color:#93c5fd;box-shadow:0 0 0 3px #93c5fd40}
-.btn{background:#fff;border:1px solid var(--border);color:var(--text);padding:8px 12px;border-radius:10px;cursor:pointer}
-.btn:hover{background:#f8fafc}
-.btn-primary{background:var(--primary);color:#fff;border-color:var(--primary)}
-.btn-secondary{background:#f1f5f9}
 
-.grid{display:grid;grid-template-columns:320px 1fr;gap:14px;padding:14px}
-.panel{background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:10px}
-.left .panel-head{display:flex;gap:8px}
-.file-list{display:flex;flex-direction:column;gap:8px;margin-top:10px}
-.fileitem{display:flex;align-items:center;gap:10px;border:1px solid var(--border);background:var(--panel2);border-radius:10px;padding:8px 10px;cursor:pointer}
-.fileitem.active{outline:2px solid var(--primary)}
-.fileitem .drag{opacity:.45;cursor:grab}
-.fileitem .name{flex:1}
-.fileitem .meta{display:flex;align-items:center;gap:8px}
-.fileitem .chip{background:var(--chip);padding:3px 8px;border-radius:999px;color:var(--muted);border:1px solid var(--border)}
-.fileitem .lock{opacity:.7}
-.fileitem .dup,.fileitem .del,.fileitem .rename{margin-left:6px}
+html,body{height:100%; margin:0;}
+body{
+  font:14px/1.6 "Noto Sans JP", system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial;
+  color:#123; background:var(--bg);
+}
+.app{height:100dvh; display:flex; flex-direction:column; min-width:960px}
 
-.muted{color:var(--muted)}
-.hint{margin:8px 12px;display:none}
-.status-row{display:flex;gap:8px;margin-bottom:8px}
-.badge{background:var(--chip);padding:6px 10px;border-radius:999px;border:1px solid var(--border)}
-.editor-head{display:grid;grid-template-columns:1fr 360px;gap:8px;margin:6px 0 4px 0;color:var(--muted)}
-.split{display:grid;grid-template-columns:1fr 360px;gap:8px;min-height:60vh}
-textarea#promptEditor{width:100%;height:100%;resize:vertical;border-radius:10px}
-.param-area{border:1px dashed var(--border);border-radius:10px;padding:8px;background:var(--panel2)}
+/* ---------- Header ---------- */
+.ps-header{
+  flex:0 0 auto; height:64px; display:grid;
+  grid-template-columns: 1fr minmax(520px, 1.2fr) auto;
+  align-items:center; gap:12px; padding:10px 14px;
+  background:#fff; border-bottom:1px solid var(--line);
+}
+.ps-header .left{display:flex; align-items:center; gap:12px; min-width:0;}
+.app-title{margin:0; font-size:18px; white-space:nowrap;}
+.ps-header .middle{
+  display:grid; grid-template-columns: auto 110px auto 110px auto minmax(280px,1fr);
+  align-items:center; gap:8px; min-width:520px;
+}
+.label{font-size:12px; color:var(--muted); white-space:nowrap;}
+.ps-header .right{display:flex; gap:8px}
+
+.input{background:#fff; border:1px solid var(--line); border-radius:8px; padding:8px 10px; min-width:0; outline:none}
+.input.sm{padding:6px 8px}
+.input.wide{width:100%}
+.btn{background:var(--tx-primary); color:#fff; border:none; border-radius:10px; padding:9px 14px; cursor:pointer; font-weight:700}
+.btn.secondary{background:#0d2330; color:#fff}
+.btn.ghost{background:#fff; color:#0d2330; border:1px solid var(--line)}
+
+/* ---------- Main ---------- */
+.ps-main{
+  flex:1 1 auto; min-height:0;
+  display:grid; grid-template-columns: clamp(260px, 18vw, 340px) 1fr; gap:16px;
+  padding:16px; overflow:hidden;
+}
+.panel{background:var(--panel); border:1px solid var(--line); border-radius:var(--radius); min-height:0}
+
+/* Sidebar */
+.ps-side{display:flex; flex-direction:column; min-width:0; resize:horizontal; overflow:auto}
+.tips{color:var(--muted); padding:12px 12px 4px}
+.ps-side .input{margin:0 12px 10px}
+.filelist{padding:0 12px 12px; display:flex; flex-direction:column; gap:8px}
+.fileitem{display:flex; align-items:center; justify-content:space-between; gap:8px; padding:10px; border:1px solid var(--line); border-radius:10px; background:#fff; cursor:pointer}
+.fileitem.active{outline:2px solid #0aa0a633}
+.fileitem .name{font-weight:700; color:#134; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+.fileitem .meta{display:flex; gap:6px; align-items:center}
+.chip{background:var(--chip-bg); color:var(--chip-ink); padding:2px 8px; border-radius:999px; font-size:12px; border:1px solid var(--line); white-space:nowrap}
+.chip.ok{color:#066; background:#e7faf8; border-color:#b8efe9}
+.chip.warn{color:#764f00; background:#fff5d6; border-color:#f4e1a4}
+.chip.info{color:#124a7a; background:#e8f2ff; border-color:#cfe2ff}
+
+/* Editor */
+.ps-editor{display:flex; flex-direction:column; min-width:0; min-height:0; overflow:hidden}
+.bar.meta{
+  flex:0 0 auto; display:grid; grid-template-columns: repeat(2, auto) repeat(2, auto) auto 1fr;
+  align-items:center; gap:8px; padding:12px; border-bottom:1px solid var(--line)
+}
+.file-caption{color:var(--muted)}
+.filename{font-weight:700; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+
+/* === Segmented tabs (50% / 50%) === */
+.seg-tabs{
+  flex:0 0 auto; padding:12px 12px 0;
+  display:grid; grid-template-columns: 1fr 1fr; gap:0;
+}
+.seg-btn{
+  height:40px; border:1px solid var(--line); background:#f6fbff; color:#134;
+  font-weight:700; cursor:pointer;
+}
+.seg-btn.left { border-right:none; border-top-left-radius:10px;  border-bottom-left-radius:10px; }
+.seg-btn.right{                 border-top-right-radius:10px; border-bottom-right-radius:10px; }
+.seg-btn.active{ background:#fff; position:relative; z-index:1; }
+
+/* タブ本体 */
+.tab-wrap{flex:1 1 auto; min-height:0; display:flex; flex-direction:column; overflow:hidden}
+.tab-panel{display:none; flex:1 1 auto; min-height:0; overflow:auto}
+.tab-panel.active{display:block}
+#promptTab{padding:12px; height:100%}
+#promptEditor{
+  width:100%; height:100%; min-height:0;
+  border:1px solid var(--line); border-top:none;
+  border-radius:0 0 10px 10px; padding:12px;
+  resize:none; box-sizing:border-box; background:#fbfeff;
+  font:13px/1.7 ui-monospace, Menlo, Consolas, "Noto Sans JP";
+  white-space:pre-wrap; overflow:auto
+}
+
+/* パラメータ：常に 1 列（6×1） */
+#paramsTab{padding:12px}
+.param-grid{display:grid; grid-template-columns: 1fr; gap:16px}
+.slider-group{background:#fcfeff; border:1px solid var(--line); border-radius:10px; padding:10px 12px}
+.slider-label{display:flex; align-items:center; justify-content:space-between; gap:12px; white-space:nowrap}
+.slider-value{color:#134; font-weight:700}
+input[type="range"]{width:100%}
+
+#statusMessage{flex:0 0 auto; padding:8px 12px; color:#0AA0A6}
+
+/* Diff */
+.diff{flex:0 0 auto; border-top:1px dashed var(--line); padding:12px}
+.diff-head{font-weight:700; color:#345; margin:.5em 0 10px}
+.diff-cols{display:grid; grid-template-columns:1fr 1fr; gap:12px}
+.diff textarea{
+  width:100%; height:240px; font:12px/1.6 ui-monospace, "Noto Sans JP";
+  background:#f9fcff; border:1px dashed var(--line); border-radius:8px; padding:10px; resize:none
+}
+
+/* Responsive（列固定なので不要だが、ヘッダーの折返し対策のみ） */
+@media (max-width: 1100px){
+  .ps-header{grid-template-columns: 1fr; height:auto; row-gap:8px; padding:8px 14px}
+  .ps-main{grid-template-columns: clamp(240px, 22vw, 320px) 1fr}
+}
