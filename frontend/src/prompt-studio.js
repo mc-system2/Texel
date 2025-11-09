@@ -1746,3 +1746,144 @@ function templateFromFilename(filename, behavior){
   else { installAddFlow(); }
 })();
 // === End Ultra-Compat Adapter ============================================================
+
+/* =============================================================================
+   Prompt Studio - Refactor Core v1 (2025-11-09)
+   - Single, deterministic backend adapter (BlobApi)
+   - Path resolver (always prompts/client/{CLID}/{file})
+   - Safe add flow (index append → file create → list render → open)
+   - openItem guard (ensure file exists before load)
+   This block is self-contained and can coexist with existing code.
+============================================================================= */
+(function(){
+  const ROOT = "prompts";
+  const $ = (sel)=>document.querySelector(sel);
+  const els = {
+    client: $('#clientId') || document.getElementById('clientId') || (window.els && window.els.clientId),
+    behavior: $('#behavior') || document.getElementById('behavior') || (window.els && window.els.behavior),
+    apiBase: $('#apiBase') || document.getElementById('apiBase') || (window.els && window.els.apiBase),
+    btnAdd: document.getElementById('btnAdd')
+  };
+
+  const pad = n => String(n).padStart(2,'0');
+  const ts  = () => { const d=new Date(); return d.getFullYear()+pad(d.getMonth()+1)+pad(d.getDate())+"-"+pad(d.getHours())+pad(d.getMinutes())+pad(d.getSeconds()); };
+  const asciiName = () => `prompt-${ts()}.json`;
+  const clid = () => (els.client?.value || '').trim().toUpperCase();
+  const idxPath = () => `${ROOT}/client/${clid()}/prompt-index.json`;
+  const key = (file) => `client/${clid()}/${file}`;              // container key
+  const full = (file)=> `${ROOT}/${key(file)}`;                   // prompts/...
+
+  function base(){ return (els.apiBase?.value || '').replace(/\/+$/,''); }
+
+  // ---------- Backend Adapter ----------
+  const BlobApi = {
+    async saveText(pathOrKey, text){
+      const container = ROOT;
+      const k = String(pathOrKey).replace(/^prompts\//,'').replace(/^client\//,'client/');
+      const tries = [
+        { url: `${base()}/api/SaveBLOB`, method: 'POST', headers:{'Content-Type':'application/json;charset=UTF-8'}, body: JSON.stringify({container, filename:k, text:text||''}) },
+        { url: `${base()}/api/SaveBLOBText?container=${encodeURIComponent(container)}&filename=${encodeURIComponent(k)}`, method:'POST', headers:{'Content-Type':'text/plain;charset=UTF-8'}, body: text||'' },
+        { url: `${base()}/api/SavePromptText?filename=${encodeURIComponent(container+'/'+k)}`, method:'POST', headers:{'Content-Type':'text/plain;charset=UTF-8'}, body: text||'' },
+        { url: `${base()}/api/SaveText?filename=${encodeURIComponent(container+'/'+k)}`, method:'POST', headers:{'Content-Type':'text/plain;charset=UTF-8'}, body: text||'' },
+      ];
+      let last;
+      for (const t of tries){
+        try{
+          const res = await fetch(t.url, t);
+          if (res.ok) return true;
+          last = new Error(`${t.method} ${t.url} -> ${res.status}`);
+        }catch(e){ last = e; }
+      }
+      throw last || new Error('Save failed');
+    },
+    async loadText(pathOrKey){
+      const container = ROOT;
+      const k = String(pathOrKey).replace(/^prompts\//,'').replace(/^client\//,'client/');
+      const tries = [
+        `${base()}/api/LoadBLOB?container=${encodeURIComponent(container)}&filename=${encodeURIComponent(k)}`,
+        `${base()}/api/LoadPromptText?filename=${encodeURIComponent(container+'/'+k)}`,
+        `${base()}/api/LoadText?filename=${encodeURIComponent(container+'/'+k)}`,
+      ];
+      let last;
+      for (const url of tries){
+        try{
+          const res = await fetch(url);
+          if (res.ok) return await res.text();
+          last = new Error(`GET ${url} -> ${res.status}`);
+        }catch(e){ last = e; }
+      }
+      throw last || new Error('Load failed');
+    }
+  };
+  window.BlobApi = BlobApi;
+
+  // ---------- Index Repository ----------
+  async function loadIndex(){
+    try{
+      const txt = await BlobApi.loadText(idxPath().replace(/^prompts\//,'')); // key形式
+      const json = JSON.parse(txt || '{}');
+      window.promptIndex = json.prompt ? json.prompt : json; // 互換
+      if (!window.promptIndex.items) window.promptIndex.items = [];
+    }catch(_){
+      window.promptIndex = { items:[], updatedAt: new Date().toISOString(), params:{} };
+    }
+    window.promptIndexPath = idxPath();
+    return window.promptIndex;
+  }
+
+  async function saveIndex(){
+    const body = { prompt: { items: window.promptIndex.items || [] }, updatedAt: new Date().toISOString(), params: window.promptIndex.params||{} };
+    await BlobApi.saveText(idxPath().replace(/^prompts\//,''), JSON.stringify(body, null, 2));
+  }
+
+  // ---------- Ensure file existence ----------
+  async function ensureFile(file){
+    const k = key(file);
+    try{ await BlobApi.loadText(k); return; }catch(_){}
+    await BlobApi.saveText(k, '// Prompt template\n');
+  }
+  window.__ensurePromptFile = ensureFile;
+
+  // ---------- UI helpers (non破壊) ----------
+  async function addPromptRefactored(){
+    await loadIndex();
+    const name = window.prompt('新しいプロンプトの表示名','新規プロンプト');
+    if (name === null) return;
+    const items = window.promptIndex.items || [];
+    const maxOrder = items.length ? Math.max.apply(null, items.map(it=>it.order||0)) : 0;
+    const file = asciiName();
+    const item = { file, name: (name||'').trim()||'新規プロンプト', order: maxOrder+10, hidden:false };
+    items.push(item);
+    await saveIndex();
+    await ensureFile(file);
+    if (typeof window.renderFileList === 'function'){
+      try{ await window.renderFileList({local:true}); }catch(_){}
+    }
+    if (typeof window.openItem === 'function'){
+      try{ await window.openItem(item); }catch(_){}
+    }
+  }
+  window.addPromptRefactored = addPromptRefactored;
+
+  // install button once
+  if (els.btnAdd && !els.btnAdd.__rf){
+    els.btnAdd.__rf = true;
+    els.btnAdd.addEventListener('click', (ev)=>{
+      ev.preventDefault(); ev.stopPropagation(); ev.stopImmediatePropagation();
+      addPromptRefactored().catch(e=>alert('追加に失敗: '+e.message));
+    }, true); // captureで既存を止める
+  }
+
+  // wrap openItem 一度だけ
+  if (typeof window.openItem === 'function' && !window.openItem.__rf){
+    const orig = window.openItem;
+    window.openItem = async function(item){
+      try{
+        if (item && item.file){ await ensureFile(item.file); }
+      }catch(e){ console.warn('ensure before open:', e); }
+      return await orig.apply(this, arguments);
+    };
+    window.openItem.__rf = true;
+  }
+})();
+/* ===== End Refactor Core v1 ============================================================ */
