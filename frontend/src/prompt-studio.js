@@ -1093,3 +1093,139 @@ function templateFromFilename(filename, behavior){
   }
 })();
 // === End Consolidated Shim ===============================================================
+
+/* === Strong Shim v2 (2025-11-09) ========================================================
+   Goals:
+   - Force all paths under prompts/client/{clid}/...
+   - Ensure ASCII filename on add
+   - Hijack #btnAdd click (capture) to run reliable add flow
+   - Force promptIndexPath on every render/open
+========================================================================================== */
+(function(){
+  const BLOB_ROOT = "prompts";
+  function pad(n){ return String(n).padStart(2,"0"); }
+  function ts(){ const d=new Date(); return d.getFullYear()+pad(d.getMonth()+1)+pad(d.getDate())+"-"+pad(d.getHours())+pad(d.getMinutes())+pad(d.getSeconds()); }
+  function asciiName(){ return `prompt-${ts()}.json`; }
+  function clid(){ try{return (els.clientId?.value||"").trim().toUpperCase();}catch(_){return "";} }
+  function beh(){ try{return (els.behavior?.value||"BASE").trim().toUpperCase();}catch(_){return "BASE";} }
+  function idxPath(){ return `${BLOB_ROOT}/client/${clid()}/prompt-index.json`; }
+  function filePath(file){ return `${BLOB_ROOT}/client/${clid()}/${file}`; }
+
+  // Always set promptIndexPath when rendering or booting
+  function ensurePaths(){
+    const c = clid();
+    if (c){
+      window.promptIndexPath = idxPath();
+    }
+  }
+  ensurePaths();
+
+  // Wrap renderFileList to enforce path each time
+  if (typeof window.renderFileList === "function" && !window.renderFileList.__ps_paths){
+    const orig = window.renderFileList;
+    window.renderFileList = async function(){
+      ensurePaths();
+      return await orig.apply(this, arguments);
+    };
+    window.renderFileList.__ps_paths = true;
+  }
+
+  // Wrap ensurePromptIndex to enforce path + auto-create
+  if (typeof window.ensurePromptIndex === "function" && !window.ensurePromptIndex.__ps_paths2){
+    const orig = window.ensurePromptIndex;
+    window.ensurePromptIndex = async function(clientId, behavior){
+      ensurePaths();
+      try{
+        const r = await orig(clientId||clid(), behavior||beh());
+        if (!window.promptIndex || !Array.isArray(window.promptIndex.items)){
+          window.promptIndex = { items:[], updatedAt:new Date().toISOString() };
+          if (typeof saveIndex==="function"){ await saveIndex(idxPath(), window.promptIndex, (typeof promptIndexEtag!=="undefined"?promptIndexEtag:null)); }
+        }
+        return r;
+      }catch(e){
+        window.promptIndex = { items:[], updatedAt:new Date().toISOString() };
+        if (typeof saveIndex==="function"){ await saveIndex(idxPath(), window.promptIndex, (typeof promptIndexEtag!=="undefined"?promptIndexEtag:null)); }
+        return window.promptIndex;
+      }
+    };
+    window.ensurePromptIndex.__ps_paths2 = true;
+  }
+
+  // Wrap createClientFile to prepend prompts/ if missing
+  if (typeof window.createClientFile === "function" && !window.createClientFile.__ps_pathfix2){
+    const orig = window.createClientFile;
+    window.createClientFile = async function(clientId, file, text){
+      const p = String(file||"");
+      const full = p.startsWith(`${BLOB_ROOT}/`) ? p : filePath(p);
+      return await orig(clientId||clid(), full, text);
+    };
+    window.createClientFile.__ps_pathfix2 = true;
+  }
+
+  // Hijack #btnAdd (capture) to avoid other listeners
+  function installAddHijack(){
+    const btn = document.getElementById("btnAdd");
+    if (!btn || btn.__ps_hijacked) return;
+    btn.__ps_hijacked = true;
+    btn.addEventListener("click", async function(ev){
+      try{
+        ev.preventDefault(); ev.stopPropagation(); ev.stopImmediatePropagation();
+        ensurePaths();
+        await window.ensurePromptIndex(clid(), beh());
+
+        const disp = window.prompt("新しいプロンプトの表示名", "おすすめ");
+        if (disp === null) return;
+
+        // decide filename (ASCII)
+        const file = asciiName();
+        // push into index
+        const items = (window.promptIndex?.items)||[];
+        const maxOrder = items.length ? Math.max.apply(null, items.map(it=>it.order||0)) : 0;
+        const item = { file, name: (disp||"").trim() || "新規プロンプト", order: maxOrder+10, hidden:false };
+        if (!window.promptIndex) window.promptIndex = { items:[] };
+        window.promptIndex.items.push(item);
+        window.promptIndex.updatedAt = new Date().toISOString();
+        await saveIndex(idxPath(), window.promptIndex, (typeof promptIndexEtag!=="undefined"?promptIndexEtag:null));
+
+        // create file BEFORE open
+        if (typeof window.createClientFile === "function"){
+          await window.createClientFile(clid(), file, "// Prompt template\n");
+        }
+
+        // local render and open
+        try{ await (window.renderFileList ? window.renderFileList({local:true}) : null); }catch{}
+        try{ if (typeof openItem==="function") openItem(item); }catch{}
+      }catch(e){
+        console.warn("Add hijack failed:", e);
+        alert("追加に失敗しました: " + (e && e.message ? e.message : e));
+      }
+    }, true); // capture
+  }
+  if (document.readyState === "loading"){
+    document.addEventListener("DOMContentLoaded", installAddHijack, { once:true });
+  } else {
+    installAddHijack();
+  }
+
+  // Guard openItem: ensure paths each time
+  if (typeof window.openItem === "function" && !window.openItem.__ps_paths2){
+    const orig = window.openItem;
+    window.openItem = async function(item){
+      ensurePaths();
+      try{ return await orig.apply(this, arguments); }
+      catch(e){
+        // try create then show empty without killing list
+        try{
+          if (typeof window.createClientFile === "function" && item && item.file){
+            await window.createClientFile(clid(), item.file, "// auto-created\n");
+          }
+        }catch(_){}
+        if (els && els.promptEditor) els.promptEditor.value = "";
+        if (els && els.fileTitle) els.fileTitle.textContent = `client/${clid()}/${item?.file||"(new)"}`;
+        if (els && els.badgeState) els.badgeState.textContent = "Missing（新規）";
+      }
+    };
+    window.openItem.__ps_paths2 = true;
+  }
+})();
+// === End Strong Shim v2 ==================================================================
