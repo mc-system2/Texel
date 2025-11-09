@@ -852,3 +852,58 @@ function templateFromFilename(filename, behavior){
   }
 })();
 // === End Fix ============================================================================
+
+/* === Fix v2: Strong interceptor & index sync (2025-11-09) ===============================
+   - Capture-phase click interceptor for #btnAdd to prevent legacy handlers firing.
+   - Reentrancy guard to avoid double prompts.
+   - Sync window.state.promptIndex (legacy 'prompts' schema) from promptIndex.items.
+========================================================================================== */
+(function(){
+  let ADD_LOCK = false;
+
+  function syncLegacyIndex(){
+    try{
+      if (!window.promptIndex || !Array.isArray(window.promptIndex.items)) return;
+      if (!window.state) window.state = {};
+      if (!window.state.promptIndex) window.state.promptIndex = {version:1, prompts:[]};
+      const prompts = window.promptIndex.items.map((it,i)=>({
+        file: it.file, name: it.name, order: it.order ?? (i+1)*10, hidden: !!it.hidden
+      }));
+      window.state.promptIndex.prompts = prompts;
+      window.state.promptIndex.updatedAt = window.promptIndex.updatedAt || new Date().toISOString();
+    }catch(e){ console.warn("syncLegacyIndex failed:", e); }
+  }
+
+  async function addFromInterceptor(ev){
+    if (ADD_LOCK) { ev.preventDefault(); ev.stopImmediatePropagation(); return; }
+    ADD_LOCK = true;
+    try{
+      ev.preventDefault(); ev.stopImmediatePropagation();
+
+      // Defer to the unified add
+      if (typeof window.addPromptUnified === "function"){
+        await window.addPromptUnified();
+      }else if (typeof window.onAdd === "function"){
+        await window.onAdd();
+      }
+
+      // Sync legacy structure for any code that still reads it
+      syncLegacyIndex();
+    } finally {
+      setTimeout(()=>{ ADD_LOCK = false; }, 800);
+    }
+  }
+
+  // Install capture-phase interceptor once
+  if (!document.__ps_add_interceptor_installed){
+    document.addEventListener("click", (e)=>{
+      const target = e.target && (e.target.closest ? e.target.closest("#btnAdd") : null);
+      if (target) addFromInterceptor(e);
+    }, true); // capture
+    document.__ps_add_interceptor_installed = true;
+  }
+
+  // Expose for other patches
+  window.__ps_syncLegacyIndex = syncLegacyIndex;
+})();
+// === End Fix v2 =========================================================================
