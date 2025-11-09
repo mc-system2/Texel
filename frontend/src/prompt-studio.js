@@ -41,7 +41,8 @@ const els = {
 
 /* ---------- Prompt Index (order & display name) ---------- */
 let promptIndex = null;      // {version, clientId, behavior, updatedAt, items:[{file,name,order,hidden}]}
-let promptIndexPath = null;  // BLOB pathlet promptIndexEtag = null;  // ETag for concurrency
+let promptIndexPath = null;  // BLOB path
+let promptIndexEtag = null;  // ETag for concurrency
 
 function indexBehaviorPath(clientId, behavior){
   return `client/${clientId}/${behavior}/prompt-index.json`;
