@@ -38,90 +38,6 @@ const els = {
   status:    document.getElementById("statusMessage"),
 };
 
-
-/* ---------- Prompt Index (order & display name) ---------- */
-let promptIndex = null;      // {version, clientId, behavior, updatedAt, items:[{file,name,order,hidden}]}
-let promptIndexPath = null;  // BLOB path
-let promptIndexEtag = null;  // ETag for concurrency
-
-function indexBehaviorPath(clientId, behavior){
-  return `client/${clientId}/${behavior}/prompt-index.json`;
-}
-function indexClientPath(clientId){
-  return `client/${clientId}/prompt-index.json`;
-}
-function prettifyNameFromFile(filename){
-  return filename.replace(/\.json$/i,'')
-                 .replace(/^texel[-_]?/i,'')
-                 .replace(/[-_]+/g,' ')
-                 .replace(/\b\w/g, s=>s.toUpperCase());
-}
-
-// Load/ensure index. If not found, auto-generate from KIND_TO_NAME+FAMILY and save to behavior-level path.
-async function ensurePromptIndex(clientId, behavior){
-  const tryPaths = [ indexBehaviorPath(clientId, behavior), indexClientPath(clientId) ];
-  let usedPath = null, idx = null, etag = null;
-
-  for (const p of tryPaths){
-    const r = await tryLoad(p);
-    if (r && r.data){
-      idx = r.data; usedPath = p; etag = r.etag || null;
-      break;
-    }
-  }
-  if (!idx){
-    // auto-generate
-    const kinds = Object.keys(KIND_TO_NAME).filter(k=>FAMILY[behavior].has(k));
-    const items = kinds.map((k,i)=>{
-      const file = KIND_TO_NAME[k];
-      return { file, name: prettifyNameFromFile(file), order: (i+1)*10, hidden:false };
-    });
-    idx = {
-      version:1, clientId, behavior, updatedAt:new Date().toISOString(), items
-    };
-    usedPath = indexBehaviorPath(clientId, behavior);
-    await saveIndex(usedPath, idx, null);
-    // reload to get etag
-    const r = await tryLoad(usedPath);
-    etag = r ? r.etag : null;
-  }
-
-  promptIndex = idx;
-  promptIndexPath = usedPath;
-  promptIndexEtag = etag;
-  return idx;
-}
-
-// Save index JSON (as text body via SavePromptText)
-async function saveIndex(path, idx, etag){
-  const body = { filename: path, prompt: JSON.stringify(idx, null, 2), etag: etag || undefined };
-  const r = await fetch(join(els.apiBase.value, "SavePromptText"), {
-    method:"POST",
-    headers:{ "Content-Type":"application/json; charset=utf-8" },
-    body: JSON.stringify(body)
-  });
-  const raw = await r.text(); let json={}; try{ json = raw?JSON.parse(raw):{} }catch{}
-  if (!r.ok) throw new Error(json?.error || raw || `HTTP ${r.status}`);
-  promptIndexEtag = json?.etag || promptIndexEtag || null;
-  return json;
-}
-
-// Update name in index and persist
-async function renameIndexItem(file, newName){
-  if (!promptIndex) return;
-  const it = promptIndex.items.find(x=>x.file===file);
-  if (!it) return;
-  it.name = newName || it.name;
-  promptIndex.updatedAt = new Date().toISOString();
-  await saveIndex(promptIndexPath, promptIndex, promptIndexEtag);
-}
-
-// Helper: compute template filename for behavior from actual file name
-function templateFromFilename(filename, behavior){
-  if (behavior === "TYPE-R") return filename.replace(/^texel-/, "texel-r-");
-  if (behavior === "TYPE-S") return filename.replace(/^texel-/, "texel-s-");
-  return filename;
-}
 let currentKind = null;
 let currentFilenameTarget = null;
 let currentEtag = null;
@@ -214,12 +130,16 @@ async function renderFileList(){
   const clid = els.clientId.value.trim().toUpperCase();
   const beh  = els.behavior.value.toUpperCase();
 
-  // Load/ensure index
+  // ensure/load index (client-root preferred)
   await ensurePromptIndex(clid, beh);
 
-  // Build rows from index (visible only)
+  // allowed file set for this behavior
+  const kinds = Object.keys(KIND_TO_NAME).filter(k=>FAMILY[beh].has(k));
+  const allowedFiles = new Set(kinds.map(k=>KIND_TO_NAME[k]));
+
+  // build rows from index
   const rows = [...(promptIndex.items||[])]
-    .filter(it => !it.hidden)
+    .filter(it => !it.hidden && (allowedFiles.size===0 || allowedFiles.has(it.file)))
     .sort((a,b)=>(a.order??0)-(b.order??0));
 
   for (const it of rows){
@@ -228,13 +148,13 @@ async function renderFileList(){
     li.className = "fileitem";
     li.dataset.file = it.file;
     li.innerHTML = `<div class="name" title="${it.file}">${name}</div>
-                     <div class="meta">
-                       <button class="rename" title="名称を変更">✎</button>
-                       <span class="chip">checking…</span>
-                     </div>`;
+                    <div class="meta">
+                      <button class="rename" title="名称を変更">✎</button>
+                      <span class="chip">checking…</span>
+                    </div>`;
     els.fileList.appendChild(li);
 
-    // State check (client/legacy/template)
+    // check where the file is coming from
     const clientPath = `client/${clid}/${it.file}`;
     const legacyPath = `prompt/${clid}/${it.file}`;
     const template   = templateFromFilename(it.file, beh);
@@ -246,17 +166,15 @@ async function renderFileList(){
     else if (state === "template"){ chip.textContent = "Template"; chip.classList.add("info"); }
     else { chip.textContent = "Missing"; chip.classList.add("warn"); }
 
-    // open
+    // open handler
     li.addEventListener("click", (e)=>{
-      // avoid triggering when clicking rename button
       if (e.target && e.target.classList.contains("rename")) return;
       openItem(it);
     });
 
-    // rename (inline)
+    // rename handler
     li.querySelector(".rename").addEventListener("click", (e)=>{
-      e.preventDefault();
-      e.stopPropagation();
+      e.preventDefault(); e.stopPropagation();
       const nameDiv = li.querySelector(".name");
       const current = nameDiv.textContent;
       nameDiv.classList.add("editing");
@@ -268,7 +186,7 @@ async function renderFileList(){
           const nv = input.value.trim() || current;
           nameDiv.textContent = nv;
           await renameIndexItem(it.file, nv);
-        }else{
+        } else {
           nameDiv.textContent = current;
         }
       };
@@ -308,25 +226,25 @@ async function resolveState(clientCandidates, templatePath){
   return "missing";
 }
 
-
-async function openItem(item){
+async function openKind(kind){
   if (dirty && !confirm("未保存の変更があります。破棄して読み込みますか？")) return;
 
+  currentKind = kind;
   els.diffPanel.hidden = true;
-  [...els.fileList.children].forEach(n=>n.classList.toggle("active", n.dataset.file===item.file));
+  [...els.fileList.children].forEach(n=>n.classList.toggle("active", n.dataset.kind===kind));
   setStatus("読込中…","orange");
 
   const clid = els.clientId.value.trim().toUpperCase();
   const beh  = els.behavior.value.toUpperCase();
+  const name = KIND_TO_NAME[kind];
 
-  currentKind = null; // kind概念は使わない（ファイル基準）
-  currentFilenameTarget = `client/${clid}/${item.file}`;
+  currentFilenameTarget = `client/${clid}/${name}`;
   document.getElementById("fileTitle").textContent = currentFilenameTarget;
 
   const candidates = [
-    `client/${clid}/${item.file}`,
-    `prompt/${clid}/${item.file}`,
-    templateFromFilename(item.file, beh)
+    `client/${clid}/${name}`,
+    `prompt/${clid}/${name}`,
+    behaviorTemplatePath(beh, kind)
   ];
 
   let loaded = null, used = null;
@@ -334,7 +252,7 @@ async function openItem(item){
     const r = await tryLoad(f);
     if (r) { loaded = r; used = f; break; }
   }
-  const templ = await tryLoad(templateFromFilename(item.file, beh));
+  const templ = await tryLoad(behaviorTemplatePath(beh, kind));
   templateText = templ ? JSON.stringify(templ.data, null, 2) : "";
 
   if (!loaded){
@@ -368,6 +286,7 @@ async function openItem(item){
   setStatus("読み込み完了","green");
   clearDirty();
 }
+
 /* ---------- Save ---------- */
 els.btnSave.addEventListener("click", saveCurrent);
 async function saveCurrent(){
