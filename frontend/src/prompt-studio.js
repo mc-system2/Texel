@@ -779,3 +779,76 @@ function templateFromFilename(filename, behavior){
   };
 })();
 /* === /Patch =============================================================== */
+
+/* === Fix: Add button double-prompt & index overwrite (2025-11-09) =======================
+   - Prevent multiple click handlers by cloning the button before wiring.
+   - Ask for display name only once.
+   - Append new item to existing prompt-index.json (do not replace others).
+   - Create a unique filename and save both the index and the new prompt file.
+========================================================================================== */
+(function(){
+  function slugify(s){
+    s = (s||"").trim();
+    if (!s) return "prompt";
+    try{
+      // Keep letters/numbers/_-., collapse spaces to '-'
+      s = s.replace(/\s+/g, "-").replace(/[^0-9A-Za-z._\-一-龯ぁ-ゔァ-ヴー々〆〤]/g, "-");
+      // Remove consecutive dashes
+      s = s.replace(/-+/g, "-").replace(/^-|-$/g, "");
+      return s || "prompt";
+    }catch(_){ return "prompt"; }
+  }
+  function ts(){
+    const d = new Date();
+    const pad = (n)=> String(n).padStart(2,"0");
+    return d.getFullYear() + pad(d.getMonth()+1) + pad(d.getDate()) + "-" + pad(d.getHours()) + pad(d.getMinutes()) + pad(d.getSeconds());
+  }
+
+  async function addPromptUnified(){
+    const clid = (els.clientId?.value||"").trim().toUpperCase();
+    const beh  = (els.behavior?.value||"BASE").trim().toUpperCase();
+    if (!clid){ alert("クライアントコードを入力してください"); return; }
+
+    // Ensure existing index is loaded (client-root優先)
+    try{
+      await ensurePromptIndex(clid, beh);
+    }catch(e){
+      console.error("ensurePromptIndex failed:", e);
+      alert("インデックスの読み込みに失敗しました。"); 
+      return;
+    }
+
+    const display = prompt("新しいプロンプトの表示名", "おすすめ");
+    if (display === null) return; // cancelled
+
+    // Prepare unique filename
+    const base = slugify(display);
+    const existing = new Set((promptIndex?.items||[]).map(it=>it.file));
+    let file = `${base}-${ts()}.json`; let i=2;
+    while(existing.has(file)){ file = `${base}-${ts()}-${i++}.json`; }
+
+    // Append item (do not drop existing ones)
+    const maxOrder = Math.max(0, ...((promptIndex?.items||[]).map(it=>it.order||0)));
+    const item = { file, name: display.trim(), order: maxOrder + 10, hidden: false };
+    promptIndex.items.push(item);
+    promptIndex.updatedAt = new Date().toISOString();
+
+    // Save index, then create file
+    await saveIndex(promptIndexPath || `client/${clid}/prompt-index.json`, promptIndex, promptIndexEtag);
+    await createClientFile(clid, file, "// Prompt template\n");
+
+    // Refresh UI
+    if (typeof renderFileList === "function") renderFileList();
+    if (typeof openItem === "function") openItem(item);
+  }
+
+  // Override any previous handler and wire a single clean one
+  window.onAdd = addPromptUnified;
+  const btn = document.getElementById("btnAdd");
+  if (btn){
+    const clean = btn.cloneNode(true);            // removes all previous listeners
+    btn.parentNode.replaceChild(clean, btn);
+    clean.addEventListener("click", addPromptUnified, { once: false });
+  }
+})();
+// === End Fix ============================================================================
