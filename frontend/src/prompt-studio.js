@@ -90,6 +90,49 @@ async function saveIndex(path, idx, etag){
   promptIndexEtag = j?.etag || promptIndexEtag || null;
   return j;
 }
+async function saveIndexRobust(path, localIdx){
+  // Try optimistic save with known etag; if lost update -> refetch/merge/retry
+  try{
+    await saveIndex(path, localIdx, promptIndexEtag);
+    return true;
+  }catch(e){
+    // refetch latest then merge
+    const latest = await tryLoad(path);
+    const srv = normalizeIndex(latest?.data) || { items: [] };
+    const merged = mergeIndexItems(srv, localIdx);
+    promptIndexEtag = latest?.etag || null;
+    await saveIndex(path, merged, promptIndexEtag);
+    // Replace current in-memory
+    promptIndex = merged;
+    return true;
+  }
+}
+function mergeIndexItems(serverIdx, localIdx){
+  const out = { ...serverIdx, version: (serverIdx.version||1), clientId: localIdx.clientId||serverIdx.clientId, behavior: localIdx.behavior||serverIdx.behavior, updatedAt: new Date().toISOString() };
+  const map = new Map();
+  (serverIdx.items||[]).forEach(it=> map.set(it.file, { ...it }));
+  (localIdx.items||[]).forEach(it=>{
+    if (!map.has(it.file)) map.set(it.file, { ...it });
+    else {
+      const cur = map.get(it.file);
+      map.set(it.file, { ...cur, ...it });
+    }
+  });
+  const arr = [...map.values()];
+  arr.sort((a,b)=>(a.order??0)-(b.order??0));
+  // pin roomphoto top
+  const pinned = arr.filter(isRoomphotoFile);
+  const rest   = arr.filter(it=>!isRoomphotoFile(it));
+  pinned.forEach((it,i)=> it.order = (i+1)*10);
+  rest.forEach((it,i)=> it.order = (pinned.length*10) + (i+1)*10);
+  out.items = [...pinned, ...rest];
+  return out;
+}
+function isRoomphotoFile(it){
+  const f = (typeof it==="string"?it:it.file||"").toLowerCase();
+  return f==="texel-roomphoto.json" || f==="roomphoto.json";
+}
+
 
 // ensure index exists (client-root preferred), else auto-generate
 function normalizeIndex(obj){
@@ -144,17 +187,17 @@ async function renameIndexItem(file, newName){
 }
 async function tryDelete(path){
   const base = els.apiBase.value.replace(/\/+$/,'');
-  const candidates = [
-    base+"/DeletePromptText",
-    base+"/DeleteBlob",
-    base+"/DeleteFile"
-  ];
+  const postCandidates = ["DeletePromptText","DeleteBlob","DeleteFile"]; // POST JSON
+  const getCandidates  = ["DeletePromptText"]; // GET ?filename=
   const body = JSON.stringify({ filename: path });
-  for (const url of candidates){
-    try{
-      const r = await fetch(url, { method:"POST", headers:{"Content-Type":"application/json"}, body });
-      if (r.ok) return true;
-    }catch(e){/* try next */}
+  for (const name of postCandidates){
+    const url = base+"/"+name;
+    try{ const r = await fetch(url, { method:"POST", headers:{"Content-Type":"application/json"}, body }); if (r.ok) return true; }catch(e){}
+  }
+  // try GET style
+  for (const name of getCandidates){
+    const url = base+"/"+name+"?filename="+encodeURIComponent(path);
+    try{ const r = await fetch(url, { method:"GET" }); if (r.ok) return true; }catch(e){}
   }
   return false;
 }
@@ -176,11 +219,13 @@ async function deleteIndexItem(file){
 async function saveOrderFromDOM(){
   if (!promptIndex) return;
   const lis = [...els.fileList.querySelectorAll('.fileitem')];
-  lis.forEach((el, i) => {
-    const f = el.dataset.file;
-    const it = promptIndex.items.find(x=>x.file===f);
-    if (it) it.order = (i+1)*10;
-  });
+  let cursor = 0;
+  for (const el of lis){
+    const f = el.dataset.file; const it = promptIndex.items.find(x=>x.file===f);
+    if (!it) continue;
+    if (isRoomphotoFile(it)) { it.order = 10; continue; }
+    cursor += 10; it.order = 10 + cursor;
+  }
   promptIndex.updatedAt = new Date().toISOString();
   await saveIndex(promptIndexPath, promptIndex, promptIndexEtag);
 }
@@ -302,16 +347,17 @@ async function renderFileList(){
     const li = document.createElement("div");
     li.className = "fileitem";
     li.dataset.file = it.file;
-    li.draggable = true;
+    const pinned = isRoomphotoFile(it);
+    li.draggable = !pinned;
     li.innerHTML = `<span class="drag">≡</span>
-                    <div class="name" title="${it.file}">${name}</div>
+                    <div class="name" title="${it.file}">${name}${isRoomphotoFile(it)?' <span class="chip info">固定</span>':''} </div>
                     <div class="meta">
                       <button class="rename" title="名称を変更">✎</button>
                       <button class="trash" title="削除">🗑</button>
                     </div>`;
     els.fileList.appendChild(li);
 
-    li.addEventListener('dragstart', ()=> li.classList.add('dragging'));
+    li.addEventListener('dragstart', ()=> { if(li.draggable){ li.classList.add('dragging'); } });
     li.addEventListener('dragend', async ()=>{
       li.classList.remove('dragging');
       await saveOrderFromDOM();
@@ -352,8 +398,11 @@ li.addEventListener("click", (e)=>{ if (!e.target.classList.contains("rename") &
       // 先に BLOB を削除（失敗しても index は進める）
       const blobPath = `client/${clid}/${it.file}`;
       const okDel = await tryDelete(blobPath);
+      // read-back verification (best-effort)
+      const still = await tryLoad(blobPath);
       await deleteIndexItem(it.file);
-      setStatus(okDel?"削除しました（BLOBも削除）":"インデックスのみ削除しました（BLOB削除失敗）","green");
+      const ok = okDel && !still;
+      setStatus(ok?"削除しました（BLOBも削除）":"インデックスのみ削除しました（BLOB削除失敗）","green");
       await renderFileList();
       // もし削除したアイテムを編集中ならエディタをリセット
       if (currentFilenameTarget && currentFilenameTarget.endsWith(`/${it.file}`)){
