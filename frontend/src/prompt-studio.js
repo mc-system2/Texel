@@ -68,8 +68,10 @@ async function tryLoad(path){
     });
     if (!r.ok) return null;
     const json = await r.json();
-    const dataText = json?.text ?? json?.prompt ?? null;
-    const data = dataText ? JSON.parse(dataText) : (json?.json ?? null);
+    const dataText = json && typeof json.text === 'string' ? json.text : (typeof json.prompt === 'string' ? json.prompt : null);
+    let data = null;
+    if (dataText){ try{ data = JSON.parse(dataText); }catch{ data = dataText; } }
+    if (!data && json && typeof json.prompt === 'object') data = json;
     return { etag: json?.etag ?? null, data };
   }catch{ return null; }
 }
@@ -90,13 +92,28 @@ async function saveIndex(path, idx, etag){
 }
 
 // ensure index exists (client-root preferred), else auto-generate
-async function ensurePromptIndex(clientId, behavior){
+async 
+function normalizeIndex(obj){
+  try{
+    if (!obj) return null;
+    if (obj.items && Array.isArray(obj.items)) return obj;
+    if (obj.prompt && obj.prompt.items) return obj.prompt;
+    // Some endpoints may return stringified index
+    if (typeof obj === "string"){
+      const parsed = JSON.parse(obj);
+      if (parsed.items) return parsed;
+      if (parsed.prompt && parsed.prompt.items) return parsed.prompt;
+    }
+  }catch{}
+  return null;
+}
+function ensurePromptIndex(clientId, behavior){
   const tryPaths = [ indexClientPath(clientId), indexBehaviorPath(clientId, behavior) ];
   let usedPath = null, idx = null, etag = null;
 
   for (const p of tryPaths){
     const s = await tryLoad(p);
-    if (s && s.data){ usedPath = p; idx = s.data; etag = s.etag; break; }
+    if (s && s.data){ const n = normalizeIndex(s.data); if (n){ usedPath = p; idx = n; etag = s.etag; break; } }
   }
 
   if (!idx){
@@ -111,6 +128,7 @@ async function ensurePromptIndex(clientId, behavior){
     await saveIndex(usedPath, idx, null);
     const s = await tryLoad(usedPath);
     etag = s ? s.etag : null;
+    if (s && s.data){ const n = normalizeIndex(s.data); if (n) idx = n; }
   }
 
   promptIndex = idx;
@@ -240,7 +258,7 @@ async function renderFileList(){
   const kinds = Object.keys(KIND_TO_NAME).filter(k=>FAMILY[beh].has(k));
   const allowedFiles = new Set(kinds.map(k=>KIND_TO_NAME[k]));
 
-  const rows = [...(promptIndex.items||[])]
+  const rows = [...((promptIndex && Array.isArray(promptIndex.items) ? promptIndex.items : []))]
     .filter(it => !it.hidden)
     .sort((a,b)=>(a.order??0)-(b.order??0));
 
