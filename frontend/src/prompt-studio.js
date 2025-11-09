@@ -21,7 +21,6 @@ const els = {
   behavior:  document.getElementById("behavior"),
   apiBase:   document.getElementById("apiBase"),
   fileList:  document.getElementById("fileList"),
-  search:    document.getElementById("search"),
   fileTitle: document.getElementById("fileTitle"),
   badgeState:document.getElementById("badgeState"),
   badgeEtag: document.getElementById("badgeEtag"),
@@ -215,13 +214,6 @@ function boot(){
     if ((e.ctrlKey||e.metaKey) && e.key.toLowerCase()==="s"){ e.preventDefault(); saveCurrent(); }
   });
 
-  els.search.addEventListener("input", ()=>{
-    const kw = els.search.value.toLowerCase();
-    [...els.fileList.children].forEach(it=>{
-      const t = it.querySelector(".name").textContent.toLowerCase();
-      it.style.display = t.includes(kw) ? "" : "none";
-    });
-  });
 
   els.promptEditor.addEventListener("input", markDirty);
 
@@ -259,7 +251,7 @@ async function renderFileList(){
       else els.fileList.insertBefore(dragging, after);
     });
     els.fileList.addEventListener('drop', async ()=>{ await saveOrderFromDOM(); });
-    els.fileList.onDragOverAttached = True;
+    els.fileList.onDragOverAttached = true;
   }
 
   for (const it of rows){
@@ -287,10 +279,7 @@ async function renderFileList(){
     const template   = templateFromFilename(it.file, beh);
     const state = await resolveState([clientPath, legacyPath], template);
     const chip  = li.querySelector(".chip");
-    if (state === "client") { chip.textContent = "上書き"; chip.classList.add("ok"); }
-    else if (state === "legacy"){ chip.textContent = "上書き（旧）"; chip.classList.add("ok"); }
-    else if (state === "template"){ chip.textContent = "Template"; chip.classList.add("info"); }
-    else { chip.textContent = "Missing"; chip.classList.add("warn"); }
+    chip.style.display = "none";
 
     li.addEventListener("click", (e)=>{ if (!e.target.classList.contains("rename") && !e.target.classList.contains("drag")) openItem(it); });
 
@@ -299,7 +288,7 @@ async function renderFileList(){
       const nameDiv = li.querySelector(".name");
       const current = nameDiv.textContent;
       nameDiv.classList.add("editing");
-      nameDiv.innerHTML = `<input value="${current}" aria-label="name">";
+      nameDiv.innerHTML = `<input value="${current.replace(/"/g, "&quot;")}" aria-label="name">`;
       const input = nameDiv.querySelector("input");
       const finish = async (commit)=>{
         nameDiv.classList.remove("editing");
@@ -380,7 +369,7 @@ async function openItem(it){
     els.promptEditor.value = "";
     loadedParams = {};
     writeParamUI(loadedParams);
-    setBadges("Missing（新規）", null);
+    setBadges("—", null);
     setStatus("新規作成できます。右上の保存で client 配下に作成します。");
     clearDirty();
     return;
@@ -399,9 +388,7 @@ async function openItem(it){
 
   currentEtag = (used.startsWith("client/") || used.startsWith("prompt/")) ? loaded.etag : null;
 
-  if (used.startsWith("client/")) setBadges("上書き", currentEtag, "ok");
-  else if (used.startsWith("prompt/")) setBadges("上書き（旧）", currentEtag, "ok");
-  else setBadges("Template（未上書き）", loaded.etag || "—", "info");
+  setBadges("—", currentEtag || loaded?.etag || "—");
 
   setStatus("読み込み完了","green");
   clearDirty();
@@ -426,7 +413,7 @@ async function saveCurrent(){
     if (!r.ok) throw new Error(json?.error || raw || `HTTP ${r.status}`);
 
     currentEtag = json?.etag || currentEtag || null;
-    setBadges("上書き", currentEtag, "ok");
+    setBadges("—", currentEtag);
     setStatus("保存完了","green");
     clearDirty();
     renderFileList();
