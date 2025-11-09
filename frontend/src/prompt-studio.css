@@ -124,3 +124,10 @@ input[type="range"]{width:100%}
 .fileitem .drag { cursor:grab; user-select:none; opacity:0.6; padding:2px 4px; }
 .fileitem.dragging { opacity:0.6; }
 .fileitem .name { flex:1; min-width:0; }
+
+
+/* small icon buttons inside list */
+.fileitem .meta button{ border:1px solid var(--line); background:#fff; border-radius:8px; padding:6px 8px; cursor:pointer }
+.fileitem .meta .trash{ color:#b42318; }
+.fileitem .meta .trash:hover{ background:#fff5f5; border-color:#f7c2bd; }
+.fileitem .meta .rename:hover{ background:#f6fbff; }
