@@ -300,13 +300,6 @@ function boot(){
   window.addEventListener("keydown", (e)=>{
     if ((e.ctrlKey||e.metaKey) && e.key.toLowerCase()==="s"){ e.preventDefault(); saveCurrent(); }
   });
-
-  els.search.addEventListener("input", ()=>{
-    const kw = els.search.value.toLowerCase();
-    [...els.fileList.children].forEach(it=>{
-      const t = it.querySelector(".name").textContent.toLowerCase();
-      it.style.display = t.includes(kw) ? "" : "none";
-    });
   });
 
   els.promptEditor.addEventListener("input", markDirty);
@@ -352,8 +345,7 @@ async function renderFileList(){
     li.innerHTML = `<span class="drag">≡</span>
                     <div class="name" title="${it.file}">${name}${isRoomphotoFile(it)?' <span class="chip info">固定</span>':''} </div>
                     <div class="meta">
-                      <button class="rename" title="名称を変更">✎</button>
-                      <button class="trash" title="削除">🗑</button>
+                      ${isRoomphotoFile(it)?'':'<button class="rename" title="名称を変更">✎</button><button class="trash" title="削除">🗑</button>'}
                     </div>`;
     els.fileList.appendChild(li);
 
@@ -372,7 +364,7 @@ li.addEventListener("click", (e)=>{ if (!e.target.classList.contains("rename") &
       const current = nameDiv.textContent;
       nameDiv.classList.add("editing");
       nameDiv.innerHTML = `<input value="${current}" aria-label="name">`;
-      const input = nameDiv.querySelector("input");
+      if (pinned) return; const input = nameDiv.querySelector("input");
       const finish = async (commit)=>{
         nameDiv.classList.remove("editing");
         if (commit){
@@ -391,7 +383,7 @@ li.addEventListener("click", (e)=>{ if (!e.target.classList.contains("rename") &
       input.focus(); input.select();
     });
 
-    li.querySelector(".trash").addEventListener("click", async (e)=>{
+    if (!pinned) li.querySelector(".trash").addEventListener("click", async (e)=>{
       e.preventDefault(); e.stopPropagation();
       const ok = confirm(`「${name}」を一覧から削除します。\n※ BLOB の実ファイルも削除します。`);
       if (!ok) return;
@@ -645,86 +637,15 @@ function templateFromFilename(filename, behavior){
   }
 
   async function ensurePromptIndexLoaded(){
-    if (window.state?.promptIndex?.prompts) return;
-    if (typeof window.loadPromptIndex === 'function'){
-      const idx = await window.loadPromptIndex(window.state.clientCode, window.state.behavior);
-      if (!idx || !Array.isArray(idx.prompts)) {
-        window.state.promptIndex = {version:1, client: window.state.clientCode, behavior: window.state.behavior, prompts:[], params:{}};
-      } else {
-        window.state.promptIndex = idx;
-      }
-      return;
-    }
-    // If there's a custom loader elsewhere, leave it; otherwise create empty.
-    if (!window.state) window.state = {};
-    if (!window.state.promptIndex) window.state.promptIndex = {version:1, client: window.state.clientCode, behavior: window.state.behavior, prompts:[], params:{}};
-  }
-
-  function ensureRoomPhotoPinned(){
-    const idx = window.state.promptIndex;
-    const fixedFile = 'texel-roomphoto.json';
-    const fixedName = '画像分析プロンプト';
-    let rp = idx.prompts.find(p => p.file === fixedFile);
-    if (!rp){
-      idx.prompts.unshift({ file: fixedFile, name: fixedName, order: 0, hidden: false, locked: true });
-    }else{
-      rp.name = fixedName; rp.locked = true; rp.order = 0;
-    }
-    idx.prompts.sort((a,b)=> (b.locked?1:0)-(a.locked?1:0) || a.order-b.order)
-      .forEach((p,i)=> p.order = i*10);
-  }
-
-  async function onAdd(){
-    try{
-      await ensurePromptIndexLoaded();
-      ensureRoomPhotoPinned();
-
-      const name = prompt('新しいプロンプトの表示名', 'おすすめ');
-      if (name === null) return;
-      const base = sanitizeFileBase(name || 'prompt');
-      const file = `${base}-${timestampId()}.json`;
-
-      const idx = window.state.promptIndex;
-      const insertAt = Math.min(1, idx.prompts.length);
-      const nextOrder = (idx.prompts.at(-1)?.order ?? 0) + 10;
-      idx.prompts.splice(insertAt, 0, { file, name: name || '新しいプロンプト', order: nextOrder, hidden: false });
-
-      if (typeof window.savePromptIndex === 'function'){
-        await window.savePromptIndex(window.state.clientCode, window.state.behavior, idx);
-      }
-
-      const template = [
-        'あなたは不動産向けのプロンプトです。',
-        '（ここにルールや出力形式を書いてください）'
-      ].join('\\n');
-      if (typeof window.savePromptText === 'function'){
-        await window.savePromptText(window.state.clientCode, file, template, { behavior: window.state.behavior });
-      }
-
-      if (typeof window.renderFileList === 'function') window.renderFileList();
-      if (typeof window.selectFileInList === 'function') window.selectFileInList(file);
-      if (typeof window.showToast === 'function') window.showToast('新しいプロンプトを追加しました');
-    }catch(e){
-      console.error(e);
-      if (typeof window.showError === 'function') window.showError('追加に失敗しました：'+(e?.message||e));
-    }
-  }
-
-  function wire(){
-    const btn = findAddButton();
-    if (btn && !btn.__wiredAdd){
-      btn.__wiredAdd = true;
-      btn.id ||= 'btnAdd';
-      btn.addEventListener('click', onAdd);
-    }
-  }
-
-  if (document.readyState === 'loading'){
-    document.addEventListener('DOMContentLoaded', wire);
-  } else {
-    wire();
-  }
-})();
+  if (promptIndex && Array.isArray(promptIndex.items)) return;
+  const clid = els.clientId.value.trim() || "A001";
+  const path = indexClientPath(clid);
+  const res  = await tryLoad(path);
+  promptIndexPath = path;
+  promptIndexEtag = res?.etag || null;
+  promptIndex = normalizeIndex(res?.data) || { version:1, clientId: clid, behavior: (els.behavior.value||'BASE'), items:[], params:{} };
+}
+)();
 /* === / Add Prompt handler ================================================ */
 
 
