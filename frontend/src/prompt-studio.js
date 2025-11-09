@@ -128,24 +128,6 @@ async function saveIndex(path, idx, etag){
   }
   throw new Error("Save failed");
 }
-;
-  // 1) Try POST
-  try{
-    const r = await fetch(`${base}/SavePromptText`, {
-      method:"POST",
-      headers:{ "Content-Type":"application/json" },
-      body: JSON.stringify(etag ? { ...payload, etag } : payload)
-    });
-    if (r.ok) return;
-  }catch{}
-  // 2) Fallback GET (URL-encoded)
-  const q = new URLSearchParams();
-  q.set("filename", path);
-  q.set("prompt", JSON.stringify(idx));
-  if (etag) q.set("etag", etag);
-  const r2 = await fetch(`${base}/SavePromptText?${q.toString()}`);
-  if (!r2.ok) throw new Error("Save failed");
-}
 
 async function saveIndexRobust(path, idx){
   try{ await saveIndex(path, idx, promptIndexEtag); }
