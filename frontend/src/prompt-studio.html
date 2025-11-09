@@ -1,115 +1,77 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="ja">
 <head>
-  <meta charset="utf-8" />
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Prompt Studio</title>
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <link rel="stylesheet" href="./prompt-studio.css" />
+  <link rel="stylesheet" href="prompt-studio.css" />
 </head>
 <body>
-  <div class="app">
-    <!-- ヘッダー -->
-    <header class="ps-header">
-      <div class="left"><h1 class="app-title">Prompt Studio</h1></div>
-      <div class="middle">
-        <label class="label">Client</label>
-        <input id="clientId" class="input sm" placeholder="A001" autocomplete="off" />
-        <label class="label">Behavior</label>
-        <select id="behavior" class="input sm">
-          <option>BASE</option><option>TYPE-R</option><option>TYPE-S</option>
+  <header class="toolbar">
+    <div class="left">
+      <span class="app-title">Prompt Studio</span>
+    </div>
+    <div class="right">
+      <label>Client
+        <input id="clientInput" placeholder="A001" />
+      </label>
+      <label>Behavior
+        <select id="behaviorSelect">
+          <option>BASE</option>
+          <option>TYPE-R</option>
+          <option>TYPE-S</option>
         </select>
-        <label class="label">API Base</label>
-        <input id="apiBase" class="input sm wide" placeholder="https://.../api" autocomplete="off" />
+      </label>
+      <label>API Base
+        <input id="apiBaseInput" placeholder="https://.../api" />
+      </label>
+      <button id="diffBtn" class="ghost">差分</button>
+      <button id="saveBtn" class="primary">保存 (Ctrl+S)</button>
+    </div>
+  </header>
+
+  <main class="layout">
+    <aside class="sidebar">
+      <div class="search-row">
+        <input id="filterInput" placeholder="ファイル検索…" />
+        <button id="addBtn" class="primary small">＋ 追加</button>
       </div>
-      <div class="right">
-        <button id="btnDiff" class="btn secondary">差分</button>
-        <button id="btnSave" class="btn">保存 (Ctrl+S)</button>
+      <ul id="fileList" class="file-list"></ul>
+      <div class="hint">画像分析プロンプトは最上段に固定・変更不可です。</div>
+    </aside>
+
+    <section class="editor">
+      <div class="statusbar">
+        <span>状態: <b id="statusBadge">—</b></span>
+        <span>ETag: <b id="etagBadge">—</b></span>
+        <span>ファイル: <b id="fileBadge">未選択</b></span>
       </div>
-    </header>
 
-    <!-- 本文 -->
-    <main class="ps-main">
-      <!-- サイドバー -->
-      <aside class="ps-side panel" id="sidebar">
-        <div class="tips">クライアント別の編集対象を選択してください。</div>
-        <div class="side-actions">
-          <input id="search" class="input" placeholder="ファイル検索…" />
-          <button id="btnAdd" class="btn tiny">＋ 追加</button>
-        </div>
-        <div id="fileList" class="filelist" aria-label="ファイル一覧"></div>
-      </aside>
+      <div class="tabs">
+        <button class="tab active" data-tab="prompt">プロンプト</button>
+        <button class="tab" data-tab="params">パラメータ</button>
+      </div>
 
-      <!-- エディタ -->
-      <section class="ps-editor panel">
-        <div class="bar meta">
-          <span>状態:</span> <span id="badgeState" class="chip">—</span>
-          <span>ETag:</span>  <span id="badgeEtag" class="chip">—</span>
-          <span class="file-caption">ファイル:</span>
-          <span class="filename" id="fileTitle">未選択</span>
-        </div>
+      <div class="panes">
+        <textarea id="promptArea" class="pane active" spellcheck="false"
+          placeholder="ここにプロンプトが読み込まれます…"></textarea>
+        <textarea id="paramsArea" class="pane" spellcheck="false"
+          placeholder="{ &quot;temperature&quot;: 0.2, ... }"></textarea>
+      </div>
+    </section>
+  </main>
 
-        <!-- セグメントタブ（幅をちょうど半分で2分割） -->
-        <div class="seg-tabs">
-          <button class="seg-btn left active"  id="tabPromptBtn">プロンプト</button>
-          <button class="seg-btn right"         id="tabParamsBtn">パラメータ</button>
-        </div>
+  <template id="fileItemTpl">
+    <li class="file-item">
+      <button class="drag" title="並べ替え">≡</button>
+      <span class="lock" title="固定">🔒</span>
+      <span class="title"></span>
+      <span class="spacer"></span>
+      <button class="rename" title="名称変更">✎</button>
+      <button class="remove" title="削除">🗑</button>
+    </li>
+  </template>
 
-        <!-- タブ本体 -->
-        <div class="tab-wrap">
-          <div class="tab-panel active" id="promptTab">
-            <textarea id="promptEditor" spellcheck="false" placeholder="ここにプロンプトが読み込まれます…"></textarea>
-          </div>
-
-          <div class="tab-panel" id="paramsTab">
-            <div class="param-grid">
-              <div class="slider-group">
-                <div class="slider-label">入力補完トークンの最大数（100〜32768）
-                  <span class="slider-value" id="val_max_tokens">800</span></div>
-                <input type="range" id="param_max_tokens" min="100" max="32768" step="1" value="800" />
-              </div>
-              <div class="slider-group">
-                <div class="slider-label">温度 [temperature]（0.00〜1.00）
-                  <span class="slider-value" id="val_temperature">1.00</span></div>
-                <input type="range" id="param_temperature" min="0" max="1" step="0.01" value="1.00" />
-              </div>
-              <div class="slider-group">
-                <div class="slider-label">Top P（0.01〜1.00）
-                  <span class="slider-value" id="val_top_p">1.00</span></div>
-                <input type="range" id="param_top_p" min="0.01" max="1" step="0.01" value="1.00" />
-              </div>
-              <div class="slider-group">
-                <div class="slider-label">頻度ペナルティ [frequency_penalty]（-2.00〜2.00）
-                  <span class="slider-value" id="val_frequency_penalty">0.00</span></div>
-                <input type="range" id="param_frequency_penalty" min="-2" max="2" step="0.01" value="0.00" />
-              </div>
-              <div class="slider-group">
-                <div class="slider-label">プレゼンスペナルティ [presence_penalty]（-2.00〜2.00）
-                  <span class="slider-value" id="val_presence_penalty">0.00</span></div>
-                <input type="range" id="param_presence_penalty" min="-2" max="2" step="0.01" value="0.00" />
-              </div>
-              <div class="slider-group">
-                <div class="slider-label">応答数 n（1〜4）
-                  <span class="slider-value" id="val_n">1</span></div>
-                <input type="range" id="param_n" min="1" max="4" step="1" value="1" />
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <div id="statusMessage" class="tips">ファイルを選択してください。</div>
-
-        <!-- 差分 -->
-        <div id="diffPanel" class="diff" hidden>
-          <div class="diff-head">テンプレートとの差分（左：テンプレ / 右：現在）</div>
-          <div class="diff-cols">
-            <textarea id="diffLeft" readonly></textarea>
-            <textarea id="diffRight" readonly></textarea>
-          </div>
-        </div>
-      </section>
-    </main>
-  </div>
-
-  <script src="./prompt-studio.js"></script>
+  <script src="prompt-studio.js"></script>
 </body>
 </html>

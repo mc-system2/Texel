@@ -1,433 +1,304 @@
-/* ===== Prompt Studio – logic (with index & add/remove) ===== */
-const DEV_API  = "https://func-texel-api-dev-jpe-001-b2f6fec8fzcbdrc3.japaneast-01.azurewebsites.net/api/";
-const PROD_API = "https://func-texel-api-prod-jpe-001-dsgfhtafbfbxawdz.japaneast-01.azurewebsites.net/api/";
+// Prompt Studio – inline rename edition
+(() => {
+  const $ = (sel, el=document) => el.querySelector(sel);
+  const $$ = (sel, el=document) => Array.from(el.querySelectorAll(sel));
 
-/* kind ⇔ filename */
-const KIND_TO_NAME = {
-  "suumo-catch":   "texel-suumo-catch.json",
-  "suumo-comment": "texel-suumo-comment.json",
-  "roomphoto":     "texel-roomphoto.json",
-  "suggestion":    "texel-suggestion.json",
-  "athome-appeal": "texel-athome-appeal.json",
-  "athome-comment":"texel-athome-comment.json",
-};
-const FAMILY = {
-  "BASE":   new Set(["roomphoto","suumo-catch","suumo-comment","suggestion","athome-appeal","athome-comment"]),
-  "TYPE-R": new Set(["roomphoto","suumo-catch","suumo-comment","suggestion","athome-appeal","athome-comment"]),
-  "TYPE-S": new Set(["roomphoto","suumo-catch","suumo-comment","suggestion"])
-};
+  // ---- State ----
+  let API_BASE = localStorage.getItem('ps.api') || '';
+  let CLIENT   = localStorage.getItem('ps.client') || '';
+  let BEHAVIOR = localStorage.getItem('ps.behavior') || 'BASE';
 
-const els = {
-  clientId:  document.getElementById("clientId"),
-  behavior:  document.getElementById("behavior"),
-  apiBase:   document.getElementById("apiBase"),
-  fileList:  document.getElementById("fileList"),
-  search:    document.getElementById("search"),
-  fileTitle: document.getElementById("fileTitle"),
-  badgeState:document.getElementById("badgeState"),
-  badgeEtag: document.getElementById("badgeEtag"),
-  tabPromptBtn: document.getElementById("tabPromptBtn"),
-  tabParamsBtn: document.getElementById("tabParamsBtn"),
-  promptTab:    document.getElementById("promptTab"),
-  paramsTab:    document.getElementById("paramsTab"),
-  promptEditor: document.getElementById("promptEditor"),
-  btnSave:   document.getElementById("btnSave"),
-  btnDiff:   document.getElementById("btnDiff"),
-  diffPanel: document.getElementById("diffPanel"),
-  diffLeft:  document.getElementById("diffLeft"),
-  diffRight: document.getElementById("diffRight"),
-  status:    document.getElementById("statusMessage"),
-  btnAdd:    document.getElementById("btnAdd"),
-};
+  const INDEX_NAME = 'prompt-index.json'; // client/<client>/prompt-index.json
 
-let currentEtag = null;
-let templateText = "";
-let dirty = false;
+  // Prompt index schema: { version, client, behavior, items:[{file,name,order,hidden}], params:{} }
+  let promptIndex = null;
+  let fileMap = new Map(); // key -> item
 
-/* ---------- Prompt Index (order & display name) ---------- */
-let promptIndex = null;      // {version, clientId, behavior, updatedAt, items:[{file,name,order,hidden,lock?}]}
-let promptIndexPath = null;
-let promptIndexEtag = null;
+  // selection
+  let currentKey = null;
+  let currentETag = null;
 
-function indexClientPath(clientId){ return `client/${clientId}/prompt-index.json`; }
-function prettifyNameFromFile(filename){
-  return filename.replace(/\.json$/i,'').replace(/^texel[-_]?/i,'').replace(/[-_]+/g,' ').replace(/\b\w/g, s=>s.toUpperCase());
-}
-function join(base, path){ return (base||"").replace(/\/+$/,"") + "/" + String(path||"").replace(/^\/+/, ""); }
+  // ---- Elements ----
+  const clientInput    = $('#clientInput');
+  const behaviorSelect = $('#behaviorSelect');
+  const apiBaseInput   = $('#apiBaseInput');
+  const fileListEl     = $('#fileList');
+  const filterInput    = $('#filterInput');
+  const addBtn         = $('#addBtn');
+  const saveBtn        = $('#saveBtn');
+  const diffBtn        = $('#diffBtn');
 
-async function apiLoadText(filename){
-  const r = await fetch(join(els.apiBase.value,"LoadPromptText"),{
-    method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify({ filename })
-  }).catch(()=>null);
-  if (!r || !r.ok) return null;
-  const j = await r.json().catch(()=>null);
-  let data = null;
-  const t = j?.text ?? j?.prompt ?? null;
-  if (typeof t === "string"){ try{ data = JSON.parse(t) }catch{ data = t } }
-  else if (j?.prompt) data = j;
-  return { etag: j?.etag ?? null, data };
-}
-async function apiSaveText(filename, payload, etag){
-  const body = { filename, prompt: typeof payload==="string"? payload : JSON.stringify(payload,null,2) };
-  if (etag) body.etag = etag;
-  const r = await fetch(join(els.apiBase.value,"SavePromptText"),{
-    method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify(body)
+  const statusBadge = $('#statusBadge');
+  const etagBadge   = $('#etagBadge');
+  const fileBadge   = $('#fileBadge');
+
+  const promptArea = $('#promptArea');
+  const paramsArea = $('#paramsArea');
+
+  // ---- Boot ----
+  clientInput.value = CLIENT;
+  apiBaseInput.value = API_BASE;
+  behaviorSelect.value = BEHAVIOR;
+
+  clientInput.addEventListener('change', () => {
+    CLIENT = clientInput.value.trim();
+    localStorage.setItem('ps.client', CLIENT);
+    reload();
   });
-  const raw = await r.text(); let j={}; try{ j = raw?JSON.parse(raw):{} }catch{}
-  if (!r.ok) throw new Error(j?.error || raw || `HTTP ${r.status}`);
-  return j;
-}
+  apiBaseInput.addEventListener('change', () => {
+    API_BASE = apiBaseInput.value.trim();
+    localStorage.setItem('ps.api', API_BASE);
+  });
+  behaviorSelect.addEventListener('change', () => {
+    BEHAVIOR = behaviorSelect.value;
+    localStorage.setItem('ps.behavior', BEHAVIOR);
+  });
 
-function normalizeIndex(x){
-  try{
-    if (!x) return null;
-    if (x.items) return x;
-    if (x.prompt?.items) return x.prompt;
-    if (typeof x === "string"){ const p=JSON.parse(x); return p.items? p : (p.prompt?.items? p.prompt : null); }
-  }catch{}
-  return null;
-}
+  addBtn.addEventListener('click', onAdd);
+  fileListEl.addEventListener('click', onFileListClick);
+  fileListEl.addEventListener('keydown', onFileListKey);
 
-async function ensurePromptIndex(clientId, behavior){
-  const path = indexClientPath(clientId);
-  const r = await apiLoadText(path);
-  if (r){
-    const idx = normalizeIndex(r.data);
-    if (idx){ promptIndex=idx; promptIndexPath=path; promptIndexEtag=r.etag||null; return promptIndex; }
+  document.addEventListener('keydown', (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+      e.preventDefault();
+      onSave();
+    }
+  });
+
+  reload();
+
+  async function reload() {
+    clearEditor();
+    await ensureIndex();
+    renderFileList();
   }
-  // auto-generate: roomphoto locked at top
-  const kinds = [...FAMILY[behavior]];
-  const items = [];
-  let order = 10;
-  for (const k of kinds){
-    const file = KIND_TO_NAME[k];
-    const isRoom = (k==="roomphoto");
-    items.push({
-      file,
-      name: isRoom ? "画像分析プロンプト" : prettifyNameFromFile(file),
-      order: order, hidden:false, lock: isRoom
-    });
-    order += 10;
+
+  function getClientFolder() {
+    if (!CLIENT) throw new Error('Client 未設定');
+    return `client/${CLIENT}`;
   }
-  promptIndex = { version:1, clientId, behavior, updatedAt:new Date().toISOString(), items };
-  promptIndexPath = path; promptIndexEtag=null;
-  await apiSaveText(promptIndexPath, promptIndex, null);
-  return promptIndex;
-}
 
-async function saveIndex(){
-  if (!promptIndex) return;
-  promptIndex.updatedAt = new Date().toISOString();
-  const res = await apiSaveText(promptIndexPath, promptIndex, promptIndexEtag);
-  promptIndexEtag = res?.etag || promptIndexEtag || null;
-}
-
-async function renameIndexItem(file, newName){
-  const it = promptIndex.items.find(x=>x.file===file);
-  if (!it || it.lock) return;
-  it.name = newName || it.name;
-  await saveIndex();
-}
-async function deleteIndexItem(file){
-  const i = promptIndex.items.findIndex(x=>x.file===file);
-  if (i<0 || promptIndex.items[i].lock) return;
-  promptIndex.items.splice(i,1);
-  // 再採番
-  promptIndex.items.sort((a,b)=>(a.order??0)-(b.order??0)).forEach((x,i)=>x.order=(i+1)*10);
-  await saveIndex();
-}
-async function addIndexItem(fileName, displayName){
-  // sanitize
-  let file = fileName.trim();
-  if (!file.endsWith(".json")) file = file + ".json";
-  if (!file.startsWith("texel-")) file = "texel-" + file;
-  if (promptIndex.items.some(x=>x.file===file)) throw new Error("同名ファイルが既に存在します。");
-  const maxOrder = Math.max(0, ...promptIndex.items.map(x=>x.order||0));
-  promptIndex.items.push({ file, name: displayName?.trim()||prettifyNameFromFile(file), order:maxOrder+10, hidden:false });
-  await saveIndex();
-}
-
-/* ---------- Tabs ---------- */
-function showTab(which){
-  const isPrompt = which === "prompt";
-  els.tabPromptBtn.classList.toggle("active", isPrompt);
-  els.tabParamsBtn.classList.toggle("active", !isPrompt);
-  els.promptTab.classList.toggle("active", isPrompt);
-  els.paramsTab.classList.toggle("active", !isPrompt);
-}
-els.tabPromptBtn.addEventListener("click", ()=>showTab("prompt"));
-els.tabParamsBtn.addEventListener("click", ()=>showTab("params"));
-
-/* ---------- Params ---------- */
-const paramKeys = [
-  ["max_tokens",         800],
-  ["temperature",       1.00],
-  ["top_p",             1.00],
-  ["frequency_penalty", 0.00],
-  ["presence_penalty",  0.00],
-  ["n",                 1   ],
-];
-function writeParamUI(params){
-  paramKeys.forEach(([k, def])=>{
-    const input = document.getElementById("param_"+k);
-    const span  = document.getElementById("val_"+k);
-    if (!input || !span) return;
-    const v = (params && params[k] !== undefined) ? params[k] : def;
-    input.value = v;
-    span.textContent = (""+v).includes(".") ? Number(v).toFixed(2) : v;
-  });
-}
-function readParamUI(){
-  const o = {};
-  paramKeys.forEach(([k])=>{
-    const v = document.getElementById("param_"+k).value;
-    o[k] = (""+v).includes(".") ? parseFloat(v) : parseInt(v,10);
-  });
-  return o;
-}
-paramKeys.forEach(([k])=>{
-  const input = document.getElementById("param_"+k);
-  const span  = document.getElementById("val_"+k);
-  if (input && span){
-    input.addEventListener("input", ()=>{
-      const v = input.value;
-      span.textContent = (""+v).includes(".") ? Number(v).toFixed(2) : v;
-      markDirty();
+  // ---- API helpers ----
+  async function apiPost(path, body) {
+    if (!API_BASE) throw new Error('API Base 未設定');
+    const res = await fetch(`${API_BASE}/${path}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body || {}),
     });
+    if (!res.ok) {
+      const t = await res.text().catch(()=>'');
+      throw new Error(`${path} ${res.status} ${res.statusText}\n${t}`);
+    }
+    return res.json();
   }
-});
 
-/* ---------- Boot ---------- */
-window.addEventListener("DOMContentLoaded", boot);
-function boot(){
-  const q = new URLSearchParams(location.hash.replace(/^#\??/, ''));
-  els.clientId.value = (q.get("client") || "").toUpperCase();
-  els.behavior.value = (q.get("behavior") || "BASE").toUpperCase();
-  els.apiBase.value  = q.get("api") || DEV_API;
+  // Expected server functions:
+  // - LoadText { path } -> { text, etag? }
+  // - SaveText { path, text, etag? } -> { etag }
+  // - ListFiles { prefix } -> { files: [ "client/A001/xxx.json", ... ] }
+  async function loadText(path) { return apiPost('LoadText', { path }); }
+  async function saveText(path, text, etag) { return apiPost('SaveText', { path, text, etag }); }
+  async function listFiles(prefix) { return apiPost('ListFiles', { prefix }); }
 
-  renderFileList();
+  // ----- Index handling -----
+  async function ensureIndex() {
+    const folder = getClientFolder();
+    const indexPath = `${folder}/${INDEX_NAME}`;
+    try {
+      const { text } = await loadText(indexPath);
+      promptIndex = JSON.parse(text);
+    } catch (e) {
+      // Create initial index (roomphoto fixed)
+      promptIndex = {
+        version: 1,
+        client: CLIENT,
+        behavior: BEHAVIOR,
+        items: [
+          { file: 'texel-roomphoto.json', name: '画像分析プロンプト', order: 0, locked: true }
+        ],
+        params: {}
+      };
+      await saveIndex();
+    }
+    fileMap.clear();
+    for (const it of promptIndex.items) fileMap.set(it.file, it);
+  }
 
-  window.addEventListener("keydown", (e)=>{
-    if ((e.ctrlKey||e.metaKey) && e.key.toLowerCase()==="s"){ e.preventDefault(); saveCurrent(); }
-  });
+  async function saveIndex() {
+    const folder = getClientFolder();
+    const indexPath = `${folder}/${INDEX_NAME}`;
+    await saveText(indexPath, JSON.stringify(promptIndex, null, 2));
+  }
 
-  els.search.addEventListener("input", ()=>{
-    const kw = els.search.value.toLowerCase();
-    [...els.fileList.children].forEach(it=>{
-      const t = it.querySelector(".name").textContent.toLowerCase();
-      it.style.display = t.includes(kw) ? "" : "none";
-    });
-  });
+  // ----- List render -----
+  function renderFileList() {
+    fileListEl.innerHTML = '';
+    const tpl = $('#fileItemTpl');
 
-  els.promptEditor.addEventListener("input", markDirty);
+    // sort by order asc
+    const items = [...promptIndex.items].sort((a,b) => (a.order ?? 0) - (b.order ?? 0));
 
-  els.btnAdd.addEventListener("click", async ()=>{
-    const fname = prompt("新しいプロンプトのファイル名（texel-*.jsonの*部分。拡張子不要）","custom");
-    if (!fname) return;
-    const dname = prompt("表示名（未入力なら自動生成）","");
-    try{
-      await ensurePromptIndex(els.clientId.value.trim().toUpperCase(), els.behavior.value.toUpperCase());
-      await addIndexItem(fname, dname);
-      await renderFileList();
-    }catch(e){ alert("追加に失敗: "+e.message); }
-  });
-}
-function markDirty(){ dirty = true; }
-function clearDirty(){ dirty = false; }
-window.addEventListener("beforeunload", (e)=>{ if (!dirty) return; e.preventDefault(); e.returnValue=""; });
+    for (const it of items) {
+      const li = tpl.content.firstElementChild.cloneNode(true);
+      li.dataset.key = it.file;
+      $('.title', li).textContent = it.name || toTitle(it.file);
+      if (it.locked) li.classList.add('locked');
+      fileListEl.appendChild(li);
+    }
+  }
 
-/* ---------- File List ---------- */
-function templateFromFilename(filename, behavior){
-  if (behavior === "TYPE-R") return filename.replace(/^texel-/, "texel-r-");
-  if (behavior === "TYPE-S") return filename.replace(/^texel-/, "texel-s-");
-  return filename;
-}
+  function toTitle(file) {
+    // "texel-sumo-comment.json" -> "Suumo Comment"
+    return file
+      .replace(/^texel-/, '')
+      .replace(/\.json$/,'')
+      .split('-')
+      .map(s => s.charAt(0).toUpperCase() + s.slice(1))
+      .join(' ');
+  }
 
-async function tryLoad(filename){
-  const url = join(els.apiBase.value, "LoadPromptText") + `?filename=${encodeURIComponent(filename)}`;
-  const res = await fetch(url, { cache: "no-store" }).catch(()=>null);
-  if (!res || !res.ok) return null;
-  const etag = res.headers.get("etag") || null;
-  let data = {};
-  try { data = await res.json(); } catch { data = {}; }
-  return { data, etag };
-}
+  // ----- Events -----
+  function onFileListClick(e) {
+    const li = e.target.closest('.file-item');
+    if (!li) return;
+    const key = li.dataset.key;
+    const item = fileMap.get(key);
 
-async function renderFileList(){
-  els.fileList.innerHTML = "";
-  const clid = els.clientId.value.trim().toUpperCase();
-  const beh  = els.behavior.value.toUpperCase();
+    if (e.target.classList.contains('rename')) {
+      if (item.locked) return;
+      beginInlineRename(li, item);
+      return;
+    }
+    if (e.target.classList.contains('remove')) {
+      if (item.locked) return;
+      removeItem(key);
+      return;
+    }
+    if (e.target.classList.contains('drag')) {
+      // no-op here (drag handled by browser if needed / or future enhancement)
+      return;
+    }
+    // select
+    selectKey(key);
+  }
 
-  await ensurePromptIndex(clid, beh);
+  function onFileListKey(e) {
+    const li = e.target.closest('.file-item');
+    if (!li) return;
+    const key = li.dataset.key;
+    const item = fileMap.get(key);
+    if (e.key === 'Enter' && e.target.classList.contains('inline-edit')) {
+      e.preventDefault();
+      commitInlineRename(li, item, e.target.value);
+    } else if (e.key === 'Escape' && e.target.classList.contains('inline-edit')) {
+      e.preventDefault();
+      cancelInlineRename(li, item);
+    }
+  }
 
-  const rows = [...promptIndex.items]
-    .filter(it => !it.hidden)
-    .sort((a,b)=>(a.order??0)-(b.order??0));
+  function beginInlineRename(li, item) {
+    const titleSpan = $('.title', li);
+    const old = item.name || titleSpan.textContent;
+    const input = document.createElement('input');
+    input.className = 'inline-edit';
+    input.value = old;
+    li.replaceChild(input, titleSpan);
+    input.focus();
+    input.select();
+    input.addEventListener('blur', () => commitInlineRename(li, item, input.value));
+  }
 
-  // drag sort
-  els.fileList.addEventListener('dragover', (e)=>{
-    e.preventDefault();
-    const dragging = document.querySelector('.fileitem.dragging');
-    const after = getDragAfterElement(els.fileList, e.clientY);
-    if (!after) els.fileList.appendChild(dragging);
-    else els.fileList.insertBefore(dragging, after);
-  });
-  els.fileList.addEventListener('drop', async ()=>{
-    const lis = [...els.fileList.querySelectorAll('.fileitem')];
-    lis.forEach((el, i) => {
-      const f = el.dataset.file;
-      const it = promptIndex.items.find(x=>x.file===f);
-      if (it) it.order = (i+1)*10;
-    });
+  async function commitInlineRename(li, item, value) {
+    const newName = (value || '').trim();
+    const span = document.createElement('span');
+    span.className = 'title';
+    if (!newName) {
+      span.textContent = item.name || toTitle(item.file);
+      li.replaceChild(span, $('.inline-edit', li));
+      return;
+    }
+    item.name = newName;
+    span.textContent = newName;
+    li.replaceChild(span, $('.inline-edit', li));
     await saveIndex();
-  });
+  }
 
-  for (const it of rows){
-    const name = it.name || prettifyNameFromFile(it.file);
-    const li = document.createElement("div");
-    li.className = "fileitem" + (it.lock? " locked": "");
-    li.dataset.file = it.file;
-    li.draggable = !it.lock;
+  function cancelInlineRename(li, item) {
+    const span = document.createElement('span');
+    span.className = 'title';
+    span.textContent = item.name || toTitle(item.file);
+    li.replaceChild(span, $('.inline-edit', li));
+  }
 
-    const lockIcon = it.lock ? `<span class="lock">🔒</span>` : "";
-
-    li.innerHTML = `<span class="drag">≡</span>
-                    <div class="name" title="${it.file}">${lockIcon}${name}</div>
-                    <div class="meta">
-                      ${it.lock? "" : '<button class="rename" title="名称を変更">✎</button>'}
-                      ${it.lock? "" : '<button class="delete" title="削除">🗑</button>'}
-                    </div>`;
-    els.fileList.appendChild(li);
-
-    if (!it.lock){
-      li.addEventListener('dragstart', ()=> li.classList.add('dragging'));
-      li.addEventListener('dragend', async ()=>{
-        li.classList.remove('dragging');
-        const lis = [...els.fileList.querySelectorAll('.fileitem')];
-        lis.forEach((el, i) => {
-          const f = el.dataset.file;
-          const it2 = promptIndex.items.find(x=>x.file===f);
-          if (it2) it2.order = (i+1)*10;
-        });
-        await saveIndex();
-      });
-    }
-
-    li.addEventListener("click", async (e)=>{
-      if (e.target.closest("button")) return; // handled by buttons
-      await openByFilename(it.file);
-    });
-
-    if (!it.lock){
-      li.querySelector(".rename").addEventListener("click", async (e)=>{
-        e.preventDefault(); e.stopPropagation();
-        const nv = prompt("表示名の変更", name);
-        if (nv!=null){ await renameIndexItem(it.file, nv.trim()); await renderFileList(); }
-      });
-      li.querySelector(".delete").addEventListener("click", async (e)=>{
-        e.preventDefault(); e.stopPropagation();
-        if (!confirm(`「${name}」を一覧から削除します。ファイル自体は削除されません。よろしいですか？`)) return;
-        await deleteIndexItem(it.file);
-        await renderFileList();
-      });
+  async function removeItem(key) {
+    const idx = promptIndex.items.findIndex(i => i.file === key);
+    if (idx >= 0) {
+      promptIndex.items.splice(idx, 1);
+      fileMap.delete(key);
+      await saveIndex();
+      renderFileList();
+      if (currentKey === key) clearEditor();
     }
   }
-}
 
-function getDragAfterElement(container, y){
-  const els = [...container.querySelectorAll('.fileitem:not(.dragging)')];
-  return els.reduce((closest, child)=>{
-    const box = child.getBoundingClientRect();
-    const offset = y - box.top - box.height/2;
-    return (offset < 0 && offset > closest.offset) ? { offset, element: child } : closest;
-  }, { offset: Number.NEGATIVE_INFINITY }).element;
-}
-
-/* ---------- Open / Save ---------- */
-async function openByFilename(filename){
-  if (dirty && !confirm("未保存の変更があります。破棄して読み込みますか？")) return;
-
-  els.diffPanel.hidden = true;
-  [...els.fileList.children].forEach(n=>n.classList.toggle("active", n.dataset.file===filename));
-  setStatus("読込中…","orange");
-
-  const clid = els.clientId.value.trim().toUpperCase();
-  const beh  = els.behavior.value.toUpperCase();
-
-  const clientTarget = `client/${clid}/${filename}`;
-  document.getElementById("fileTitle").textContent = clientTarget;
-
-  const candidates = [ clientTarget, `prompt/${clid}/${filename}`, templateFromFilename(filename, beh) ];
-
-  let loaded = null, used = null;
-  for (const f of candidates){
-    const r = await tryLoad(f);
-    if (r) { loaded = r; used = f; break; }
-  }
-  const templ = await tryLoad(templateFromFilename(filename, beh));
-  templateText = templ ? JSON.stringify(templ.data, null, 2) : "";
-
-  if (!loaded){
-    currentEtag = null;
-    els.promptEditor.value = "";
-    writeParamUI({});
-    setBadges("Missing（新規）", null);
-    setStatus("新規作成できます。右上の保存で client 配下に作成します。");
-    clearDirty();
-    return;
+  async function onAdd() {
+    const baseName = prompt('追加するファイル（例: texel-suggestion.json または suggestion）', 'suggestion');
+    if (!baseName) return;
+    const file = baseName.endsWith('.json') ? `texel-${baseName.replace(/^texel-/, '')}` : `texel-${baseName}.json`;
+    if (fileMap.has(file)) {
+      alert('すでに存在します');
+      return;
+    }
+    const display = prompt('表示名（空で自動整形）', '');
+    const order = Math.max(0, ...promptIndex.items.map(i => i.order ?? 0)) + 10;
+    const item = { file, name: (display||'').trim() || toTitle(file), order };
+    promptIndex.items.push(item);
+    fileMap.set(file, item);
+    await saveIndex();
+    renderFileList();
   }
 
-  const d = loaded.data || {};
-  let promptText = "";
-  if (typeof d.prompt === "string") promptText = d.prompt;
-  else if (d.prompt && typeof d.prompt.text === "string") promptText = d.prompt.text;
-  else if (typeof d === "string") promptText = d;
-  else promptText = JSON.stringify(d, null, 2);
+  async function selectKey(key) {
+    currentKey = key;
+    fileBadge.textContent = `${getClientFolder()}/${key}`;
+    statusBadge.textContent = 'Loading…';
+    etagBadge.textContent = '—';
+    promptArea.value = '';
+    paramsArea.value = JSON.stringify(promptIndex.params || {}, null, 2);
 
-  els.promptEditor.value = promptText;
-  writeParamUI(d.params || {});
-
-  currentEtag = (used.startsWith("client/") || used.startsWith("prompt/")) ? loaded.etag : null;
-
-  if (used.startsWith("client/")) setBadges("Overridden", currentEtag, "ok");
-  else if (used.startsWith("prompt/")) setBadges("Overridden (legacy)", currentEtag, "ok");
-  else setBadges("Template（未上書き）", loaded.etag || "—", "info");
-
-  setStatus("読み込み完了","green");
-  clearDirty();
-}
-
-els.btnSave.addEventListener("click", saveCurrent);
-async function saveCurrent(){
-  const title = document.getElementById("fileTitle").textContent;
-  if (!title || title==="未選択") return;
-  const filename = title;
-  const prompt = els.promptEditor.value;
-  const params = readParamUI();
-  setStatus("保存中…","orange");
-  try{
-    const res = await apiSaveText(filename, { prompt, params }, currentEtag || undefined);
-    currentEtag = res?.etag || currentEtag || null;
-    setBadges("Overridden", currentEtag, "ok");
-    setStatus("保存完了","green");
-    clearDirty();
-  }catch(e){
-    setStatus("保存失敗: " + e.message, "red");
-    if (String(e).includes("412")) alert("他の人が更新しました。再読み込みしてから保存してください。");
+    const path = `${getClientFolder()}/${key}`;
+    try {
+      const { text, etag } = await loadText(path);
+      currentETag = etag || null;
+      etagBadge.textContent = etag || '—';
+      statusBadge.textContent = 'Overridden';
+      promptArea.value = text;
+    } catch (e) {
+      // not found -> empty
+      currentETag = null;
+      statusBadge.textContent = 'Missing';
+      promptArea.value = '';
+    }
   }
-}
 
-/* ---------- Diff ---------- */
-els.btnDiff.addEventListener("click", ()=>{
-  els.diffLeft.value  = templateText || "(テンプレートなし)";
-  els.diffRight.value = els.promptEditor.value || "";
-  els.diffPanel.hidden = !els.diffPanel.hidden;
-});
+  function clearEditor() {
+    currentKey = null;
+    fileBadge.textContent = '未選択';
+    statusBadge.textContent = '—';
+    etagBadge.textContent = '—';
+    promptArea.value = '';
+    paramsArea.value = JSON.stringify(promptIndex?.params || {}, null, 2);
+  }
 
-/* ---------- Utils ---------- */
-function setStatus(msg, color="#0AA0A6"){ els.status.style.color = color; els.status.textContent = msg; }
-function setBadges(stateText, etag, mode){
-  els.badgeState.textContent = stateText;
-  els.badgeState.className = "chip " + (mode||"");
-  els.badgeEtag.textContent = etag || "—";
-}
+  async function onSave() {
+    if (!currentKey) return;
+    const path = `${getClientFolder()}/${currentKey}`;
+    const text = promptArea.value;
+    const { etag } = await saveText(path, text, currentETag);
+    currentETag = etag || null;
+    etagBadge.textContent = etag || '—';
+    statusBadge.textContent = 'Overridden';
+  }
+
+})();
