@@ -31,25 +31,60 @@ function isRoomphotoFile(it){ const f=(typeof it==='string'?it:it.file||'').toLo
 function setStatus(msg,color){ if(!els.status) return; els.status.textContent=msg||''; els.status.style.color=color||'var(--tx-muted)'; }
 
 // ===== API =====
+
 async function tryLoad(path){
-  const url = join(els.apiBase.value, "LoadPromptText");
+  const base = els.apiBase.value.replace(/\/+$/,'');
+  // 1) Try POST
   try{
-    const r = await fetch(url, { method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify({ filename: path }) });
-    if(!r.ok) return null;
-    const j = await r.json();
-    const text = (typeof j.text === "string") ? j.text : (typeof j.prompt === "string") ? j.prompt : null;
-    let data = null; if(text){ try{ data = JSON.parse(text); }catch{ data=null; } }
-    if(!data && j && typeof j.prompt === "object") data = j.prompt;
-    return { etag: j?.etag ?? null, data };
-  }catch{ return null; }
+    const r = await fetch(`${base}/LoadPromptText`, {
+      method:"POST",
+      headers:{ "Content-Type":"application/json" },
+      body: JSON.stringify({ filename: path })
+    });
+    if (r.ok){
+      const j = await r.json();
+      const text = (typeof j.text === "string") ? j.text : (typeof j.prompt === "string" ? j.prompt : null);
+      let data = null; if (text){ try{ data = JSON.parse(text); }catch{ data=null; } }
+      if (!data && j && typeof j.prompt === "object") data = j.prompt;
+      return { etag: j?.etag ?? null, data };
+    }
+  }catch{}
+  // 2) Fallback GET
+  try{
+    const r = await fetch(`${base}/LoadPromptText?filename=${encodeURIComponent(path)}`);
+    if (r.ok){
+      const j = await r.json();
+      const text = (typeof j.text === "string") ? j.text : (typeof j.prompt === "string" ? j.prompt : null);
+      let data = null; if (text){ try{ data = JSON.parse(text); }catch{ data=null; } }
+      if (!data && j && typeof j.prompt === "object") data = j.prompt;
+      return { etag: j?.etag ?? null, data };
+    }
+  }catch{}
+  return null;
 }
+
+
 async function saveIndex(path, idx, etag){
-  const url = join(els.apiBase.value, "SavePromptText");
-  const payload = { filename: path, prompt: JSON.stringify(idx,null,2) };
-  if (etag) payload.etag = etag;
-  const r = await fetch(url, { method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify(payload) });
-  if(!r.ok) throw new Error("Save failed");
+  const base = els.apiBase.value.replace(/\/+$/,'');
+  const payload = { filename: path, prompt: JSON.stringify(idx, null, 2) };
+  // 1) Try POST
+  try{
+    const r = await fetch(`${base}/SavePromptText`, {
+      method:"POST",
+      headers:{ "Content-Type":"application/json" },
+      body: JSON.stringify(etag ? { ...payload, etag } : payload)
+    });
+    if (r.ok) return;
+  }catch{}
+  // 2) Fallback GET (URL-encoded)
+  const q = new URLSearchParams();
+  q.set("filename", path);
+  q.set("prompt", JSON.stringify(idx));
+  if (etag) q.set("etag", etag);
+  const r2 = await fetch(`${base}/SavePromptText?${q.toString()}`);
+  if (!r2.ok) throw new Error("Save failed");
 }
+
 async function saveIndexRobust(path, idx){
   try{ await saveIndex(path, idx, promptIndexEtag); }
   catch{
@@ -192,7 +227,19 @@ async function onAdd(){
   promptIndex = mergeIndexItems(promptIndex, promptIndex);
   await saveIndexRobust(promptIndexPath||indexClientPath(clid), promptIndex);
   const body = JSON.stringify({ filename:`client/${clid}/${file}`, text:"// Prompt template\n// ここにルールや出力形式を書いてください。\n" });
-  await fetch(join(els.apiBase.value,"SavePromptText"), { method:"POST", headers:{ "Content-Type":"application/json" }, body });
+  {
+    const base = els.apiBase.value.replace(/\/+$/,'');
+    let ok = false;
+    try{
+      const r = await fetch(`${base}/SavePromptText`, { method:"POST", headers:{ "Content-Type":"application/json" }, body });
+      ok = r.ok;
+    }catch{}
+    if(!ok){
+      const j = JSON.parse(body);
+      const q = new URLSearchParams(); q.set("filename", j.filename); q.set("text", j.text||"");
+      await fetch(`${base}/SavePromptText?${q.toString()}`);
+    }
+  }
   await renderFileList();
   setStatus(`「${name}」を追加しました。`, "green");
 }
