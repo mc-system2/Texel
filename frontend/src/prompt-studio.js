@@ -30,43 +30,105 @@ function indexClientPath(cid){ return `client/${cid}/prompt-index.json`; }
 function isRoomphotoFile(it){ const f=(typeof it==='string'?it:it.file||'').toLowerCase(); return f==='texel-roomphoto.json' || f==='roomphoto.json'; }
 function setStatus(msg,color){ if(!els.status) return; els.status.textContent=msg||''; els.status.style.color=color||'var(--tx-muted)'; }
 
+
+// ===== Diagnostics / Preflight =====
+const apiCaps = { loadPost:true, loadGet:true, savePost:true, saveGet:true };
+
+async function checkMethod(url, method, body=null){
+  try{
+    const res = await fetch(url, {
+      method,
+      headers: body ? { "Content-Type":"application/json" } : undefined,
+      body: body ? JSON.stringify(body) : undefined
+    });
+    // 200-299: ok, 405: method not allowed, others: treat as unknown but not fatal
+    if (res.status === 405) return false;
+    return res.ok || res.status === 404; // 404でもAPIの到達はできているとみなす
+  }catch{ return false; }
+}
+
+async function preflight(){
+  const base = els.apiBase?.value?.replace(/\/+$/,'') || "/api";
+  // 軽い確認：LoadPromptText を GET/POST で叩いてみる（存在しないファイル名を指定）
+  const dummy = { filename: "client/A001/__probe__.json" };
+  apiCaps.loadPost = await checkMethod(`${base}/LoadPromptText`, "POST", dummy);
+  apiCaps.loadGet  = await checkMethod(`${base}/LoadPromptText?filename=${encodeURIComponent(dummy.filename)}`, "GET");
+
+  // SavePromptText はBODYが必要。GET/POSTの両方を試す（保存はしないが405検知用）
+  const saveDummy = { filename: "client/A001/__probe__.json", prompt: "{}" };
+  apiCaps.savePost = await checkMethod(`${base}/SavePromptText`, "POST", saveDummy);
+  apiCaps.saveGet  = await checkMethod(`${base}/SavePromptText?filename=${encodeURIComponent(saveDummy.filename)}&prompt=%7B%7D`, "GET");
+
+  console.info("[PromptStudio] API capability:", apiCaps);
+}
+
+// グローバルエラーハンドラ（画面上の状態エリアにも反映）
+window.addEventListener("error", (e)=> setStatus(`Error: ${e.message||e}`, "#b30"));
+window.addEventListener("unhandledrejection", (e)=> setStatus(`Unhandled: ${e.reason?.message||e.reason||"unknown"}`, "#b30"));
+
 // ===== API =====
+
 
 async function tryLoad(path){
   const base = els.apiBase.value.replace(/\/+$/,'');
-  // 1) Try POST
-  try{
-    const r = await fetch(`${base}/LoadPromptText`, {
-      method:"POST",
-      headers:{ "Content-Type":"application/json" },
-      body: JSON.stringify({ filename: path })
-    });
-    if (r.ok){
-      const j = await r.json();
-      const text = (typeof j.text === "string") ? j.text : (typeof j.prompt === "string" ? j.prompt : null);
-      let data = null; if (text){ try{ data = JSON.parse(text); }catch{ data=null; } }
-      if (!data && j && typeof j.prompt === "object") data = j.prompt;
-      return { etag: j?.etag ?? null, data };
-    }
-  }catch{}
-  // 2) Fallback GET
-  try{
-    const r = await fetch(`${base}/LoadPromptText?filename=${encodeURIComponent(path)}`);
-    if (r.ok){
-      const j = await r.json();
-      const text = (typeof j.text === "string") ? j.text : (typeof j.prompt === "string" ? j.prompt : null);
-      let data = null; if (text){ try{ data = JSON.parse(text); }catch{ data=null; } }
-      if (!data && j && typeof j.prompt === "object") data = j.prompt;
-      return { etag: j?.etag ?? null, data };
-    }
-  }catch{}
+  // prefer method based on preflight
+  const order = apiCaps.loadPost ? ["POST","GET"] : ["GET","POST"];
+  for (const m of order){
+    try{
+      if (m==="POST"){
+        const r = await fetch(`${base}/LoadPromptText`, { method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify({ filename:path }) });
+        if (r.ok){
+          const j = await r.json();
+          const text = (typeof j.text === "string") ? j.text : (typeof j.prompt === "string" ? j.prompt : null);
+          let data = null; if (text){ try{ data = JSON.parse(text); }catch{ data=null; } }
+          if (!data && j && typeof j.prompt === "object") data = j.prompt;
+          return { etag: j?.etag ?? null, data };
+        }
+        if (r.status===405) continue;
+      }else{
+        const r = await fetch(`${base}/LoadPromptText?filename=${encodeURIComponent(path)}`);
+        if (r.ok){
+          const j = await r.json();
+          const text = (typeof j.text === "string") ? j.text : (typeof j.prompt === "string" ? j.prompt : null);
+          let data = null; if (text){ try{ data = JSON.parse(text); }catch{ data=null; } }
+          if (!data && j && typeof j.prompt === "object") data = j.prompt;
+          return { etag: j?.etag ?? null, data };
+        }
+        if (r.status===405) continue;
+      }
+    }catch{ /* try next */ }
+  }
   return null;
 }
+
+
 
 
 async function saveIndex(path, idx, etag){
   const base = els.apiBase.value.replace(/\/+$/,'');
   const payload = { filename: path, prompt: JSON.stringify(idx, null, 2) };
+  const order = apiCaps.savePost ? ["POST","GET"] : ["GET","POST"];
+  for (const m of order){
+    try{
+      if (m==="POST"){
+        const r = await fetch(`${base}/SavePromptText`, {
+          method:"POST", headers:{ "Content-Type":"application/json" },
+          body: JSON.stringify(etag ? { ...payload, etag } : payload)
+        });
+        if (r.ok) return;
+        if (r.status===405) continue;
+      }else{
+        const q = new URLSearchParams();
+        q.set("filename", path); q.set("prompt", JSON.stringify(idx)); if (etag) q.set("etag", etag);
+        const r = await fetch(`${base}/SavePromptText?${q.toString()}`);
+        if (r.ok) return;
+        if (r.status===405) continue;
+      }
+    }catch{ /* try next */ }
+  }
+  throw new Error("Save failed");
+}
+;
   // 1) Try POST
   try{
     const r = await fetch(`${base}/SavePromptText`, {
@@ -217,6 +279,7 @@ function saveOrderFromDOM(){
 }
 
 async function onAdd(){
+  await preflight();
   await ensurePromptIndex();
   const name = window.prompt("新しいプロンプトの表示名", "おすすめ"); if(name===null) return;
   const clid = (els.clientId?.value||"A001").trim()||"A001";
@@ -248,6 +311,7 @@ async function onAdd(){
 async function boot(){
   if(!els.clientId?.value) els.clientId.value = "A001";
   if(!els.apiBase?.value)  els.apiBase.value  = "/api";
+  await preflight();
   await ensurePromptIndex();
   await renderFileList();
   if(els.btnAdd && !els.btnAdd.__wired){ els.btnAdd.__wired=true; els.btnAdd.addEventListener("click", onAdd); }
