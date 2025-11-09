@@ -300,7 +300,6 @@ function boot(){
   window.addEventListener("keydown", (e)=>{
     if ((e.ctrlKey||e.metaKey) && e.key.toLowerCase()==="s"){ e.preventDefault(); saveCurrent(); }
   });
-  });
 
   els.promptEditor.addEventListener("input", markDirty);
 }
