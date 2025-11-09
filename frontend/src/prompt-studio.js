@@ -482,3 +482,9 @@ function setBadges(stateText, etag, mode){
   els.badgeEtag.textContent = etag || "—";
 }
 function join(base, path){ return (base||"").replace(/\/+$/,"") + "/" + String(path||"").replace(/^\/+/,""); }
+
+function templateFromFilename(filename, behavior){
+  if (behavior === "TYPE-R") return filename.replace(/^texel-/, "texel-r-");
+  if (behavior === "TYPE-S") return filename.replace(/^texel-/, "texel-s-");
+  return filename;
+}
