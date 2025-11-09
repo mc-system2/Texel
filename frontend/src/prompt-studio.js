@@ -142,6 +142,23 @@ async function renameIndexItem(file, newName){
   promptIndex.updatedAt = new Date().toISOString();
   await saveIndex(promptIndexPath, promptIndex, promptIndexEtag);
 }
+async function tryDelete(path){
+  const base = els.apiBase.value.replace(/\/+$/,'');
+  const candidates = [
+    base+"/DeletePromptText",
+    base+"/DeleteBlob",
+    base+"/DeleteFile"
+  ];
+  const body = JSON.stringify({ filename: path });
+  for (const url of candidates){
+    try{
+      const r = await fetch(url, { method:"POST", headers:{"Content-Type":"application/json"}, body });
+      if (r.ok) return true;
+    }catch(e){/* try next */}
+  }
+  return false;
+}
+
 async function deleteIndexItem(file){
   if (!promptIndex) return;
   const before = promptIndex.items.length;
@@ -291,7 +308,6 @@ async function renderFileList(){
                     <div class="meta">
                       <button class="rename" title="名称を変更">✎</button>
                       <button class="trash" title="削除">🗑</button>
-                      <span class="chip">checking…</span>
                     </div>`;
     els.fileList.appendChild(li);
 
@@ -342,8 +358,11 @@ async function renderFileList(){
       e.preventDefault(); e.stopPropagation();
       const ok = confirm(`「${name}」を一覧から削除します。\n※ BLOB 上のファイル自体は消えません。`);
       if (!ok) return;
+      // 先に BLOB を削除（失敗しても index は進める）
+      const blobPath = `client/${clid}/${it.file}`;
+      const okDel = await tryDelete(blobPath);
       await deleteIndexItem(it.file);
-      setStatus("削除しました。","green");
+      setStatus(okDel?"削除しました（BLOBも削除）":"インデックスのみ削除しました（BLOB削除失敗）","green");
       await renderFileList();
       // もし削除したアイテムを編集中ならエディタをリセット
       if (currentFilenameTarget && currentFilenameTarget.endsWith(`/${it.file}`)){
