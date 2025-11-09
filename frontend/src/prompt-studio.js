@@ -1478,3 +1478,90 @@ function templateFromFilename(filename, behavior){
   }
 })();
 // === End Ensure-Create Shim ===============================================================
+
+/* === API Adaptor Shim (maps SavePromptText/LoadPromptText + path fix) - 2025-11-09 ======
+   - Provides SavePromptText if missing (delegates to existing save routine or raw fetch)
+   - Wraps LoadPromptText to force prompts/client/{clid}/... path
+   - Normalizes filename to prompts/ root
+========================================================================================== */
+(function(){
+  const ROOT = "prompts";
+  const pad = n => String(n).padStart(2,'0');
+  const ts  = () => { const d=new Date(); return d.getFullYear()+pad(d.getMonth()+1)+pad(d.getDate())+"-"+pad(d.getHours())+pad(d.getMinutes())+pad(d.getSeconds()); };
+  const asciiName = () => `prompt-${ts()}.json`;
+  const clid = () => { try { return (els && els.clientId ? (els.clientId.value||"") : "").trim().toUpperCase(); } catch(e){ return ""; } };
+  const idxPath = (c) => `${ROOT}/client/${c}/prompt-index.json`;
+  const filePath = (c, f) => `${ROOT}/client/${c}/${f}`;
+  const apiBase = () => (els && els.apiBase ? els.apiBase.value : "").replace(/\/+$/,"");
+
+  function norm(p){
+    const c = clid();
+    if (!p) return p;
+    if (p.startsWith(`${ROOT}/`)) return p;
+    if (p.startsWith(`client/`)) return `${ROOT}/${p}`;
+    if (/\.json$/i.test(p)) return filePath(c, p);
+    return p;
+  }
+
+  async function apiFetch(name, params, method="GET", body=null){
+    const base = apiBase();
+    const url = new URL(`${base}/api/${name}`);
+    for (const [k,v] of Object.entries(params||{})){
+      url.searchParams.set(k, v);
+    }
+    const res = await fetch(url.href, {
+      method,
+      headers: body ? {"Content-Type":"text/plain;charset=UTF-8"} : undefined,
+      body: body || undefined,
+    });
+    if (!res.ok){
+      const t = await res.text().catch(()=>res.statusText);
+      throw new Error(`${name} ${res.status} ${t}`);
+    }
+    return res;
+  }
+
+  // ------- LoadPromptText wrapper (path fix) -------
+  if (typeof window.LoadPromptText === "function" && !window.LoadPromptText.__ps_wrap){
+    const orig = window.LoadPromptText;
+    window.LoadPromptText = async function(filename){
+      return await orig.call(this, norm(filename));
+    };
+    window.LoadPromptText.__ps_wrap = true;
+  }
+  if (typeof window.LoadPromptText !== "function"){
+    window.LoadPromptText = async function(filename){
+      const res = await apiFetch("LoadPromptText", { filename: norm(filename) }, "GET");
+      return await res.text();
+    };
+    window.LoadPromptText.__ps_wrap = true;
+  }
+
+  // ------- SavePromptText shim (delegates or fetch) -------
+  if (typeof window.SavePromptText !== "function"){
+    // try common alternates
+    const alt = window.SaveBLOBText || window.SaveText || null;
+    if (typeof alt === "function"){
+      window.SavePromptText = async function(filename, text){
+        return await alt.call(this, norm(filename), text);
+      };
+    }else{
+      window.SavePromptText = async function(filename, text){
+        await apiFetch("SavePromptText", { filename: norm(filename) }, "POST", text || "");
+        return true;
+      };
+    }
+  } else if (!window.SavePromptText.__ps_wrap){
+    const orig = window.SavePromptText;
+    window.SavePromptText = async function(filename, text){
+      return await orig.call(this, norm(filename), text);
+    };
+    window.SavePromptText.__ps_wrap = true;
+  }
+
+  // Expose helpers for other shims
+  window.__ps_normPath = norm;
+  window.__ps_idxPath = idxPath;
+  window.__ps_filePath = filePath;
+})();
+// === End API Adaptor Shim ================================================================
