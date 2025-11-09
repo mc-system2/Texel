@@ -789,3 +789,97 @@ function templateFromFilename(filename, behavior){
   };
 })();
 /* === /Patch =============================================================== */
+
+/* === Minimal Stable Add Patch (2025-11-09) ==============================================
+   Strategy:
+   - Replace the original #btnAdd element with a fresh one having id="btnAdd2" so that any
+     old capture-phase interceptors bound to "#btnAdd" are bypassed.
+   - Wire a single, simple handler that appends to in-memory promptIndex, saves the index,
+     creates the file, and re-renders the list. One prompt dialog, immediate reflect.
+========================================================================================== */
+(function(){
+  async function simpleAddHandler(){
+    try{
+      var clid = (els.clientId && els.clientId.value || "").trim().toUpperCase();
+      var beh  = (els.behavior && els.behavior.value || "BASE").trim().toUpperCase();
+      if (!clid){ alert("クライアントコードを入力してください"); return; }
+
+      if (typeof ensurePromptIndex === "function"){
+        await ensurePromptIndex(clid, beh);
+      } else {
+        if (!window.promptIndex) window.promptIndex = { items:[], updatedAt:new Date().toISOString() };
+      }
+
+      var display = window.prompt("新しいプロンプトの表示名", "おすすめ");
+      if (display === null) return;
+      display = (display||"").trim();
+      if (!display) display = "新規プロンプト";
+
+      function slug(s){
+        s = (s||"").trim().replace(/\s+/g,"-").replace(/[^0-9A-Za-z._\-一-龯ぁ-ゔァ-ヴー々〆〤]/g,"-");
+        s = s.replace(/-+/g,"-").replace(/^-|-$/g,"");
+        return s || "prompt";
+      }
+      function ts(){
+        var d=new Date(), p=(n)=>String(n).padStart(2,"0");
+        return d.getFullYear()+p(d.getMonth()+1)+p(d.getDate())+"-"+p(d.getHours())+p(d.getMinutes())+p(d.getSeconds());
+      }
+
+      var base = slug(display);
+      var existing = new Set((window.promptIndex && window.promptIndex.items || []).map(function(x){ return x.file; }));
+      var file = base+"-"+ts()+".json"; var i=2;
+      while(existing.has(file)){ file = base+"-"+ts()+"-"+(i++)+".json"; }
+
+      var maxOrder = 0;
+      if (window.promptIndex && Array.isArray(window.promptIndex.items) && window.promptIndex.items.length){
+        maxOrder = Math.max.apply(null, window.promptIndex.items.map(function(it){ return it.order||0; }));
+      }
+
+      var item = { file:file, name:display, order:maxOrder+10, hidden:false };
+      if (!window.promptIndex) window.promptIndex = { items:[] };
+      window.promptIndex.items.push(item);
+      window.promptIndex.updatedAt = new Date().toISOString();
+
+      var idxPath = (typeof promptIndexPath!=="undefined" && promptIndexPath) ? promptIndexPath : ("client/"+clid+"/prompt-index.json");
+      if (typeof saveIndex === "function"){
+        await saveIndex(idxPath, window.promptIndex, (typeof promptIndexEtag!=="undefined"?promptIndexEtag:null));
+      }
+
+      if (typeof window.createClientFile === "function"){
+        await window.createClientFile(clid, file, "// Prompt template\n");
+      }
+
+      if (typeof renderFileList === "function"){
+        await renderFileList(); // regular render（ネット再読込があっても index は保存済みのため反映）
+      }
+
+      if (typeof openItem === "function"){ openItem(item); }
+    }catch(e){
+      console.error("simpleAddHandler failed:", e);
+      alert("追加処理でエラーが発生しました: " + (e && e.message ? e.message : e));
+    }
+  }
+
+  function installSimpleAdd(){
+    try{
+      var oldBtn = document.getElementById("btnAdd");
+      if (!oldBtn) return;
+      var newBtn = oldBtn.cloneNode(true);
+      newBtn.id = "btnAdd2";
+      // 表示テキストを維持
+      if (oldBtn.parentNode) oldBtn.parentNode.replaceChild(newBtn, oldBtn);
+      newBtn.addEventListener("click", function(ev){
+        ev.preventDefault();
+        ev.stopPropagation();
+        simpleAddHandler();
+      });
+    }catch(e){ console.warn("installSimpleAdd failed:", e); }
+  }
+
+  if (document.readyState === "loading"){
+    document.addEventListener("DOMContentLoaded", installSimpleAdd, { once:true });
+  }else{
+    installSimpleAdd();
+  }
+})();
+// === End Minimal Stable Add Patch ========================================================
