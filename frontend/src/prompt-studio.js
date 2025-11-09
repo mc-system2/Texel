@@ -1383,3 +1383,98 @@ function templateFromFilename(filename, behavior){
   (async ()=>{ await migrateIndex(); })();
 })();
 // === End Robust Normalization Shim =======================================================
+
+/* === Ensure-Create Shim (final) - 2025-11-09 ============================================
+   1) guarantee file creation with SavePromptText before opening (avoid 404)
+   2) force prompts/client/{clid}/... path
+   3) make +追加 create file first, then open
+=========================================================================================== */
+(function(){
+  const ROOT = "prompts";
+  const pad = n => String(n).padStart(2,'0');
+  const ts  = () => { const d=new Date(); return d.getFullYear()+pad(d.getMonth()+1)+pad(d.getDate())+"-"+pad(d.getHours())+pad(d.getMinutes())+pad(d.getSeconds()); };
+  const asciiName = () => `prompt-${ts()}.json`;
+  const clid = () => { try { return (els && els.clientId ? (els.clientId.value||"") : "").trim().toUpperCase(); } catch(e){ return ""; } };
+  const idxPath = (c) => `${ROOT}/client/${c}/prompt-index.json`;
+  const filePath = (c, f) => `${ROOT}/client/${c}/${f}`;
+
+  async function ensureFileExists(fullPath){
+    try{
+      if (typeof LoadPromptText === "function"){
+        await LoadPromptText(fullPath); // exists -> return
+        return;
+      }
+    }catch(_e){ /* continue to create */ }
+    if (typeof SavePromptText === "function"){
+      await SavePromptText(fullPath, "// Prompt template\n");
+    }else{
+      console.warn("SavePromptText is not defined. Please map your save API here.");
+    }
+  }
+
+  // Always keep promptIndexPath aligned
+  function syncIndexPath(){
+    const c = clid();
+    if (c) window.promptIndexPath = idxPath(c);
+  }
+  syncIndexPath();
+
+  // Wrap openItem so it always ensures the blob exists
+  if (typeof window.openItem === "function" && !window.openItem.__ps_ensure){
+    const orig = window.openItem;
+    window.openItem = async function(item){
+      try{
+        const c = clid();
+        if (item && item.file){
+          await ensureFileExists(filePath(c, item.file));
+        }
+      }catch(e){ console.warn("ensure before open failed:", e); }
+      syncIndexPath();
+      return await orig.apply(this, arguments);
+    };
+    window.openItem.__ps_ensure = true;
+  }
+
+  // Hijack +追加 to: save index -> create blob -> render -> open
+  function installAddFlow(){
+    const btn = document.getElementById("btnAdd");
+    if (!btn || btn.__ps_addflow) return;
+    btn.__ps_addflow = true;
+    btn.addEventListener("click", async (ev)=>{
+      try{
+        ev.preventDefault(); ev.stopPropagation(); ev.stopImmediatePropagation();
+        const c = clid(); if (!c) return;
+        syncIndexPath();
+        if (typeof ensurePromptIndex === "function"){
+          await ensurePromptIndex(c, (els && els.behavior ? els.behavior.value : "BASE"));
+        }
+        const disp = window.prompt("新しいプロンプトの表示名", "新規プロンプト");
+        if (disp === null) return;
+        if (!window.promptIndex) window.promptIndex = { items:[], updatedAt:new Date().toISOString() };
+        const items = window.promptIndex.items || [];
+        const maxOrder = items.length ? Math.max.apply(null, items.map(it => it.order || 0)) : 0;
+        const file = asciiName();
+        const item = { file, name: (disp||"").trim() || "新規プロンプト", order: maxOrder + 10, hidden:false };
+        items.push(item);
+        window.promptIndex.updatedAt = new Date().toISOString();
+        if (typeof saveIndex === "function"){
+          await saveIndex(idxPath(c), window.promptIndex, (typeof promptIndexEtag!=="undefined"?promptIndexEtag:null));
+        }
+        // create blob BEFORE open
+        await ensureFileExists(filePath(c, file));
+        // refresh + open
+        try{ await (window.renderFileList ? window.renderFileList({local:true}) : null); }catch(_){}
+        try{ if (typeof openItem === "function") openItem(item); }catch(_){}
+      }catch(e){
+        console.warn("add flow failed:", e);
+        alert("追加に失敗しました: " + (e && e.message ? e.message : e));
+      }
+    }, true);
+  }
+  if (document.readyState === "loading"){
+    document.addEventListener("DOMContentLoaded", installAddFlow, { once:true });
+  }else{
+    installAddFlow();
+  }
+})();
+// === End Ensure-Create Shim ===============================================================
