@@ -974,3 +974,122 @@ function templateFromFilename(filename, behavior){
     window.openItem.__ps_guarded = true;
   }
 })();
+
+/* === Consolidated Path & Filename Shim (2025-11-09) =====================================
+   - Forces all operations under prompts/client/{clid}/...
+   - Uses ASCII-only filenames: prompt-YYYYMMDD-HHMMSS.json
+   - Auto-creates index/file before open to avoid 404 and list wipes
+========================================================================================== */
+(function(){
+  const BLOB_ROOT = "prompts";
+  function indexPathOf(clid){ return `${BLOB_ROOT}/client/${clid}/prompt-index.json`; }
+  function filePathOf(clid, file){ return `${BLOB_ROOT}/client/${clid}/${file}`; }
+  function tsStamp(){ const d=new Date(),p=n=>String(n).padStart(2,"0"); return d.getFullYear()+p(d.getMonth()+1)+p(d.getDate())+"-"+p(d.getHours())+p(d.getMinutes())+p(d.getSeconds()); }
+  function newAsciiFilename(){ return `prompt-${tsStamp()}.json`; }
+  function currentClid(){ try{ return (els?.clientId?.value||"").trim().toUpperCase(); }catch(_){ return ""; } }
+  function currentBeh(){ try{ return (els?.behavior?.value||"BASE").trim().toUpperCase(); }catch(_){ return "BASE"; } }
+
+  // Ensure promptIndexPath always points under prompts/
+  window.__ps_fixPaths = function(){
+    const clid = currentClid();
+    if (clid) window.promptIndexPath = indexPathOf(clid);
+  };
+
+  // Wrap ensurePromptIndex: set path; if 404/empty, create index
+  if (typeof window.ensurePromptIndex === "function" && !window.ensurePromptIndex.__ps_paths){
+    const orig = window.ensurePromptIndex;
+    window.ensurePromptIndex = async function(clientId, behavior){
+      const cl = (clientId||currentClid()).trim().toUpperCase();
+      const bh = (behavior||currentBeh()).trim().toUpperCase();
+      window.promptIndexPath = indexPathOf(cl);
+      try{
+        const r = await orig(cl, bh);
+        if (!window.promptIndex || !Array.isArray(window.promptIndex.items)){
+          window.promptIndex = { items:[], updatedAt:new Date().toISOString() };
+          if (typeof saveIndex==="function"){
+            await saveIndex(window.promptIndexPath, window.promptIndex, (typeof promptIndexEtag!=="undefined"?promptIndexEtag:null));
+          }
+        }
+        return r;
+      }catch(e){
+        window.promptIndex = { items:[], updatedAt:new Date().toISOString() };
+        if (typeof saveIndex==="function"){
+          await saveIndex(indexPathOf(cl), window.promptIndex, (typeof promptIndexEtag!=="undefined"?promptIndexEtag:null));
+        }
+        return window.promptIndex;
+      }
+    };
+    window.ensurePromptIndex.__ps_paths = true;
+  }
+
+  // Force createClientFile to use prompts/ full path
+  if (typeof window.createClientFile === "function" && !window.createClientFile.__ps_promptsRoot){
+    const orig = window.createClientFile;
+    window.createClientFile = async function(clientId, file, text){
+      const cl = (clientId||currentClid()).trim().toUpperCase();
+      const full = String(file||"").startsWith(`${BLOB_ROOT}/`) ? file : filePathOf(cl, file);
+      return await orig(cl, full, text);
+    };
+    window.createClientFile.__ps_promptsRoot = true;
+  }
+
+  // After any add, enforce ASCII filename and create file before open
+  const __origAdd = window.addPromptUnified || window.onAdd || null;
+  if (__origAdd && !__origAdd.__ps_asciiCreate){
+    const wrapped = async function(){
+      await window.ensurePromptIndex(currentClid(), currentBeh());
+      const before = (window.promptIndex?.items||[]).map(x=>x.file);
+      const r = await __origAdd.apply(this, arguments);
+      const after = (window.promptIndex?.items||[]);
+      const newly = after.find(x=>!before.includes(x.file));
+      if (newly){
+        // enforce ascii filename
+        const isAscii = /^[\x00-\x7F]+$/.test(newly.file);
+        if (!isAscii){
+          newly.file = newAsciiFilename();
+          if (typeof saveIndex==="function"){
+            await saveIndex(window.promptIndexPath, window.promptIndex, (typeof promptIndexEtag!=="undefined"?promptIndexEtag:null));
+          }
+        }
+        // create file before open
+        if (typeof window.createClientFile === "function"){
+          await window.createClientFile(currentClid(), newly.file, "// Prompt template\\n");
+        }
+        // re-render locally and open
+        try{ await (window.renderFileList ? window.renderFileList({local:true}) : null); }catch{}
+        try{ if (typeof openItem==="function") openItem(newly); }catch{}
+      }
+      return r;
+    };
+    wrapped.__ps_asciiCreate = true;
+    if (window.addPromptUnified) window.addPromptUnified = wrapped;
+    else window.onAdd = wrapped;
+  }
+
+  // If we added our own simpleAdd earlier, align its behavior too
+  if (typeof window.simpleAddHandler === "function" && !window.simpleAddHandler.__ps_asciiCreate){
+    const origSimple = window.simpleAddHandler;
+    window.simpleAddHandler = async function(){
+      await window.ensurePromptIndex(currentClid(), currentBeh());
+      const r = await origSimple.apply(this, arguments);
+      const items = (window.promptIndex?.items||[]);
+      const last = items[items.length-1];
+      if (last){
+        if (!/^[\x00-\x7F]+$/.test(last.file)){
+          last.file = newAsciiFilename();
+          if (typeof saveIndex==="function"){
+            await saveIndex(window.promptIndexPath, window.promptIndex, (typeof promptIndexEtag!=="undefined"?promptIndexEtag:null));
+          }
+        }
+        if (typeof window.createClientFile === "function"){
+          await window.createClientFile(currentClid(), last.file, "// Prompt template\\n");
+        }
+        try{ await (window.renderFileList ? window.renderFileList({local:true}) : null); }catch{}
+        try{ if (typeof openItem==="function") openItem(last); }catch{}
+      }
+      return r;
+    };
+    window.simpleAddHandler.__ps_asciiCreate = true;
+  }
+})();
+// === End Consolidated Shim ===============================================================
