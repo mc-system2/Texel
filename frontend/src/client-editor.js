@@ -1,465 +1,124 @@
-/* =========================================================
- * Client Catalog Editor
- *  - 重複IDの即時検知/警告（保存ボタン自動無効化）
- *  - ユニークなランダム発番（表内・既存スナップショットと衝突回避）
- *  - 保存後にクライアント別プロンプト同期（BASE / TYPE-R / TYPE-S 対応）
- *  - Prompt Studio（prompt-studio.html）を Studio ピル/行ダブルクリックで起動
- *  - 堅牢なレスポンス処理（Content-Typeを判定）
- * ========================================================= */
-const DEV_API  = "https://func-texel-api-dev-jpe-001-b2f6fec8fzcbdrc3.japaneast-01.azurewebsites.net/api/";
-const PROD_API = "https://func-texel-api-prod-jpe-001-dsgfhtafbfbxawdz.japaneast-01.azurewebsites.net/api/";
-const FILENAME = "texel-client-catalog.json";
+// Client Catalog Editor v2025-11-09
+// 保存後：新規クライアントに限り roomphoto 固定の index とテンプレを自動作成。
 
 const els = {
-  apiBase:   document.getElementById("apiBase"),
-  load:      document.getElementById("loadBtn"),
-  save:      document.getElementById("saveBtn"),
-  addRow:    document.getElementById("addRowBtn"),
-  export:    document.getElementById("exportBtn"),
-  import:    document.getElementById("importFile"),
-  gridBody:  document.getElementById("gridBody"),
-  etag:      document.getElementById("etagBadge"),
-  status:    document.getElementById("status"),
-  alert:     document.getElementById("alert"),
-  dev:       document.getElementById("devPreset"),
-  prod:      document.getElementById("prodPreset"),
-  version:   document.getElementById("version"),
-  updatedAt: document.getElementById("updatedAt"),
-  count:     document.getElementById("count"),
+  apiBase: document.getElementById("apiBase"),
+  btnRead: document.getElementById("btnRead"),
+  btnSave: document.getElementById("btnSave"),
+  btnAdd: document.getElementById("btnAddClientRow"),
+  list: document.getElementById("list"),
+  status: document.getElementById("status"),
 };
 
-const rowTmpl = document.getElementById("rowTmpl");
-
-// 直近ロード時スナップショット（保存後の差分検出に使用）: code -> behaviorView
-let previousCatalogCodes = new Map();
-
-/* ---------- helpers ---------- */
-function updateEnvActive(which){
-  els.dev.classList.toggle("is-active", which === "dev");
-  els.prod.classList.toggle("is-active", which === "prod");
+function join(base, path){ return base.replace(/\/+$/,'') + '/' + path.replace(/^\/+/,''); }
+async function postJSON(url, body){
+  const r = await fetch(url, { method:"POST", headers:{ "Content-Type":"application/json; charset=utf-8" }, body: JSON.stringify(body||{}) });
+  if (!r.ok) throw new Error(await r.text()||`HTTP ${r.status}`);
+  return r;
 }
-const showAlert = (msg, type="ok")=>{
-  els.alert.hidden = false;
-  els.alert.textContent = msg;
-  els.alert.style.background = type==="error" ? "var(--danger-weak)" : "var(--primary-weak)";
-  els.alert.style.color = type==="error" ? "var(--danger)" : "#0d5f3a";
-  clearTimeout(showAlert._t);
-  showAlert._t = setTimeout(()=>{ els.alert.hidden = true; }, 1800);
-};
-const setStatus = (txt="")=>{ els.status.textContent = txt; };
+function setStatus(s){ els.status.textContent = s; }
 
-const extractSheetId = (input)=>{
-  const v = (input||"").trim();
-  if (!v) return "";
-  let m = v.match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]{10,})/);
-  if (m) return m[1];
-  m = v.match(/[?&]id=([a-zA-Z0-9-_]{10,})/);
-  if (m) return m[1];
-  return /^[a-zA-Z0-9-_]{10,}$/.test(v) ? v : "";
-};
-
-const normalizeBehavior = (b)=>{
-  const v = String(b||"").toUpperCase();
-  return v==="R" ? "TYPE-R" : v==="S" ? "TYPE-S" : v==="TYPE-R" ? "TYPE-R" : v==="TYPE-S" ? "TYPE-S" : "BASE";
-};
-const behaviorToPayload = (v)=> v==="TYPE-R" ? "R" : v==="TYPE-S" ? "S" : "";
-
-/* ---------- 行生成 & 監視取付 ---------- */
-function makeRow(item = {code:"",name:"",behavior:"BASE",spreadsheetId:"",createdAt:""}) {
-  const tr = rowTmpl.content.firstElementChild.cloneNode(true);
-  tr.querySelector(".code").value  = item.code || "";
-  tr.querySelector(".name").value  = item.name || "";
-  tr.querySelector(".behavior").value = normalizeBehavior(item.behavior);
-  tr.querySelector(".sheet").value = item.spreadsheetId || "";
-  tr.querySelector(".created").value = item.createdAt || "";
-  attachCodeWatcher(tr); // コード入力監視（即時検証）
-  return tr;
-}
-function attachCodeWatcher(tr){
-  const codeInput = tr.querySelector(".code");
-  if (!codeInput) return;
-  // エラーヒントを行内に生成
-  let hint = tr.querySelector(".code-hint");
-  if (!hint) {
-    hint = document.createElement("div");
-    hint.className = "hint bad code-hint";
-    hint.style.display = "none";
-    codeInput.parentElement.appendChild(hint);
-  }
-  codeInput.addEventListener("input", ()=>{
-    // 英大文字・数字のみ 4桁に矯正
-    const raw = codeInput.value;
-    const norm = raw.toUpperCase().replace(/[^A-Z0-9]/g,"").slice(0,4);
-    if (raw !== norm) codeInput.value = norm;
-    validateGrid(); // 全体再評価
-  });
-}
-
-/* ---------- 読込 ---------- */
-async function loadCatalog() {
-  clearTable();
-  setStatus("読込中…");
-  try{
-    const url = join(els.apiBase.value, "LoadClientCatalog") + `?filename=${encodeURIComponent(FILENAME)}`;
-    const res = await fetch(url, { cache: "no-cache" });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-
-    const ctype = (res.headers.get("content-type")||"").toLowerCase();
-    const raw = ctype.includes("application/json") ? await res.json() : JSON.parse(await res.text());
-    const clients = Array.isArray(raw?.clients) ? raw.clients : [];
-
-    for (const c of clients) {
-      els.gridBody.appendChild(makeRow({
-        code: (c.code||"").toUpperCase(),
-        name: c.name||"",
-        behavior: c.behavior||"",
-        spreadsheetId: c.spreadsheetId || c.sheetId || "",
-        createdAt: c.createdAt || ""
-      }));
-    }
-    els.version.textContent   = String(raw?.version ?? 1);
-    els.updatedAt.textContent = raw?.updatedAt || "-";
-    els.count.textContent     = String(clients.length);
-    els.etag.dataset.etag     = raw?.etag || "";
-    els.etag.textContent      = raw?.etag ? `ETag: ${raw.etag}` : "";
-
-    // スナップショット更新（次回保存時の差分検出に使用）
-    previousCatalogCodes = new Map();
-    for (const c of clients) {
-      const code = String(c.code||"").toUpperCase();
-      if (!code) continue;
-      previousCatalogCodes.set(code, normalizeBehavior(c.behavior||""));
-    }
-
-    validateGrid(); // 初期状態の検証
-    showAlert("読み込み完了", "ok");
-  }catch(e){
-    showAlert(`読み込み失敗：${e.message||e}`, "error");
-  }finally{
-    setStatus("");
-  }
-}
-
-function clearTable(){ els.gridBody.innerHTML = ""; }
-function addRow(){
-  els.gridBody.appendChild(makeRow());
-  validateGrid();
-}
-
-/* ---------- 保存 ---------- */
-async function saveCatalog(){
-  // 直前検証（NGなら保存しない）
-  const v = validateGrid();
-  if (!v.ok) { showAlert(v.message || "入力エラーがあります。", "error"); return; }
-
-  const rows = [...els.gridBody.querySelectorAll("tr")];
-  const clients = [];
-
-  for (const tr of rows){
-    const code = tr.querySelector(".code").value.trim().toUpperCase();
-    const name = tr.querySelector(".name").value.trim();
-    const behaviorView = tr.querySelector(".behavior").value;
-    const sheetInput = tr.querySelector(".sheet").value.trim();
-    const createdAt = tr.querySelector(".created").value.trim();
-    const spreadsheetId = extractSheetId(sheetInput);
-
-    clients.push({ code, name, behavior: behaviorToPayload(behaviorView), spreadsheetId, createdAt });
-  }
-
-  const catalog = { version:1, updatedAt:new Date().toISOString(), clients };
-  const body = { filename: FILENAME, catalog, etag: els.etag.dataset.etag || undefined };
-
-  setStatus("保存中…");
-  try{
-    const url = join(els.apiBase.value, "SaveClientCatalog");
-    const res = await fetch(url, {
-      method:"POST",
-      headers:{ "Content-Type":"application/json; charset=utf-8" },
-      body: JSON.stringify(body)
-    });
-    const rawText = await res.text();
-    let json = {}; try{ json = rawText ? JSON.parse(rawText) : {}; }catch{}
-
-    if (!res.ok) throw new Error(json?.error || rawText || `HTTP ${res.status}`);
-
-    els.updatedAt.textContent = catalog.updatedAt;
-    els.count.textContent     = String(clients.length);
-    if (json?.etag){ els.etag.dataset.etag = json.etag; els.etag.textContent = `ETag: ${json.etag}`; }
-    showAlert("保存完了", "ok");
-
-    // 保存成功後：クライアント別プロンプト 初期コピー/削除 を同期
-    await syncClientPromptsAfterSave(clients);
-
-    // スナップショットを最新に
-    previousCatalogCodes = new Map();
-    for (const c of clients) previousCatalogCodes.set(c.code, normalizeBehavior(c.behavior||""));
-
-  }catch(e){
-    showAlert(`保存に失敗しました： ${e.message||e}`, "error");
-  }finally{
-    setStatus("");
-  }
-}
-
-/* ---------- 重複/形式検証（即時） ---------- */
-function validateGrid(){
-  const inputs = [...els.gridBody.querySelectorAll("input.code")];
-  const codes = inputs.map(i => i.value.trim().toUpperCase());
-  const counts = new Map();
-  let hasError = false;
-  let duplicateList = [];
-
-  // カウント
-  for (const c of codes) counts.set(c, (counts.get(c)||0) + 1);
-
-  // 入力ごとに装飾＆ヒント
-  inputs.forEach((inp) => {
-    const v = inp.value.trim().toUpperCase();
-    const isFormatOk = /^[A-Z0-9]{4}$/.test(v);
-    const isDup = v && (counts.get(v) > 1);
-
-    const hint = inp.parentElement.querySelector(".code-hint");
-    inp.classList.toggle("is-invalid", !isFormatOk || isDup);
-    if (!isFormatOk) {
-      hint.textContent = "A〜Z/0〜9の4桁で入力してください";
-      hint.style.display = "block";
-      hasError = true;
-    } else if (isDup) {
-      hint.textContent = "このコードは重複しています";
-      hint.style.display = "block";
-      hasError = true;
-      if (!duplicateList.includes(v)) duplicateList.push(v);
-    } else {
-      hint.textContent = "";
-      hint.style.display = "none";
-    }
-  });
-
-  // Spreadsheet ID 空チェック（保存時は必須）
-  let sheetMissing = false;
-  for (const tr of els.gridBody.querySelectorAll("tr")) {
-    const sid = extractSheetId(tr.querySelector(".sheet").value);
-    if (!sid) { sheetMissing = true; }
-  }
-
-  // 保存ボタンの有効/無効
-  els.save.disabled = hasError || sheetMissing;
-
-  // ステータス表示
-  let message = "";
-  if (hasError) {
-    if (duplicateList.length) message += `重複: ${duplicateList.join(", ")} `;
-  }
-  if (sheetMissing) message += (message ? "/ " : "") + "Spreadsheet ID が未入力の行があります";
-
-  if (message) setStatus(message); else setStatus("");
-
-  return { ok: !(hasError || sheetMissing), message };
-}
-
-/* ---------- 行内操作 + Studio 起動 ---------- */
-els.gridBody.addEventListener("click", (e)=>{
-  const tr = e.target.closest("tr");
-  if (!tr) return;
-
-  // 削除
-  if (e.target.classList.contains("btn-del")) {
-    tr.remove();
-    els.count.textContent = String(els.gridBody.querySelectorAll("tr").length);
-    validateGrid();
-    return;
-  }
-  // 複製（ユニーク発番＋監視の付け直し）
-  if (e.target.classList.contains("btn-dup")) {
-    const copy = tr.cloneNode(true);
-    copy.querySelectorAll(".code-hint").forEach(h => h.remove());
-    els.gridBody.insertBefore(copy, tr.nextSibling);
-    attachCodeWatcher(copy);
-    copy.querySelector(".code").value = issueNewCode();
-    els.count.textContent = String(els.gridBody.querySelectorAll("tr").length);
-    validateGrid();
-    return;
-  }
-  // Studio ピルで Prompt Studio を開く
-  if (e.target.classList.contains("studio-link")) {
-    openPromptStudioForRow(tr);
-    return;
-  }
-});
-
-// 行ダブルクリックでも Studio を開く（入力上のダブルクリックは除外）
-els.gridBody.addEventListener("dblclick", (e)=>{
-  const tr = e.target.closest("tr");
-  if (!tr) return;
-  if (e.target.matches('input, select, textarea')) return;
-  openPromptStudioForRow(tr);
-});
-
-function openPromptStudioForRow(tr){
-  const code = tr.querySelector(".code").value.trim().toUpperCase();
-  if (!/^[A-Z0-9]{4}$/.test(code)) { showAlert("コードが不正です", "error"); return; }
-  const behavior = tr.querySelector(".behavior").value;
-  const api = (document.getElementById("apiBase").value || DEV_API).trim();
-  const url = `./prompt-studio.html#?client=${encodeURIComponent(code)}&behavior=${encodeURIComponent(behavior)}&api=${encodeURIComponent(api)}`;
-  window.open(url, "_blank");
-}
-
-/* ---------- ユニークなランダム発番 ---------- */
-function issueNewCode(){
-  // 表内＋前回ロード時スナップショットの両方に衝突しない
-  const used = new Set([
-    ...[...els.gridBody.querySelectorAll(".code")].map(i=>i.value.trim().toUpperCase()),
-    ...previousCatalogCodes.keys(),
-  ]);
-  const alph = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
-  for (let i=0; i<50000; i++){
-    const code = alph[Math.floor(Math.random()*alph.length)] + String(Math.floor(Math.random()*1000)).padStart(3,"0");
-    if (!used.has(code)) return code;
-  }
-  // フォールバック（理論上到達しにくい）
-  let n = 0;
-  while (used.has(`Z${String(n).padStart(3,"0")}`)) n++;
-  return `Z${String(n).padStart(3,"0")}`;
-}
-
-/* ---------- 環境切替 ---------- */
-els.dev.addEventListener("click", ()=>{
-  els.apiBase.value = DEV_API;
-  updateEnvActive("dev");
-  showAlert("DEVに切替","ok");
-});
-els.prod.addEventListener("click", ()=>{
-  els.apiBase.value = PROD_API;
-  updateEnvActive("prod");
-  showAlert("PRODに切替","ok");
-});
-
-/* ---------- ボタン ---------- */
-els.load.addEventListener("click", loadCatalog);
-els.save.addEventListener("click", saveCatalog);
-els.addRow.addEventListener("click", addRow);
-
-/* ---------- utilities ---------- */
-function join(base, path){
-  return (base||"").replace(/\/+$/,"") + "/" + String(path||"").replace(/^\/+/,"");
-}
-
-/* ===== プロンプト同期（保存後） =====
- * - adds: 現在行すべて（BASE/TYPE-R/TYPE-S）→ 初回コピーのみ（API側で存在チェック）
- * - deletes: 前回にあって今回ないコード → client/<CLID>/ と legacy prompt/<CLID>/ を削除（API側実装）
- */
-async function syncClientPromptsAfterSave(currentClients){
-  const nowMap = new Map(currentClients.map(c => [c.code, normalizeBehavior(c.behavior||"")]));
-
-  // 削除検出
-  const deletes = [];
-  for (const code of previousCatalogCodes.keys()) {
-    if (!nowMap.has(code)) deletes.push(code);
-  }
-
-  // 追加：全行（存在するものはAPI側でskip）
-  const adds = [];
-  for (const [code, behavior] of nowMap.entries()) {
-    adds.push({ code, behavior });
-  }
-
-  if (adds.length === 0 && deletes.length === 0) return;
-
-  setStatus("プロンプト同期中…");
-  const url = join(els.apiBase.value, "SyncClientPrompts");
-  const payload = { adds, deletes };
-
-  try {
-    const res = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type":"application/json; charset=utf-8" },
-      body: JSON.stringify(payload)
-    });
-
-    const ctype = (res.headers.get("content-type") || "").toLowerCase();
-    let result = {};
-    let rawText = "";
-    try {
-      if (ctype.includes("application/json")) {
-        result = await res.json();
-      } else {
-        rawText = await res.text();
-        try { result = JSON.parse(rawText); } catch {}
-      }
-    } catch {}
-
-    if (!res.ok) {
-      const reason = result?.error || rawText || `HTTP ${res.status}`;
-      throw new Error(reason);
-    }
-
-    const created = Array.isArray(result.created) ? result.created.length : 0;
-    const skipped = Array.isArray(result.skipped) ? result.skipped.length : 0;
-    const deleted = Array.isArray(result.deleted) ? result.deleted.length : 0;
-    const errors  = Array.isArray(result.errors)  ? result.errors.length  : 0;
-    showAlert(`プロンプト同期 完了（新規${created} / 既存${skipped} / 削除${deleted} / エラー${errors}）`, errors ? "error" : "ok");
-    if (errors && result.errors) console.table(result.errors);
-  } catch (err) {
-    showAlert(`プロンプト同期 失敗：${err.message||err}`, "error");
-  } finally {
-    setStatus("");
-  }
-}
-
-/* ===== 起動時の自動読込 ===== */
-window.addEventListener("DOMContentLoaded", async ()=>{
-  if (!els.apiBase.value) els.apiBase.value = DEV_API;
-  updateEnvActive(els.apiBase.value.includes("-dev-") ? "dev" : "prod");
-  try { await loadCatalog(); } catch {}
-});
-
-
-function addClientRow(code="", name=""){
-  clients.push({ code, name, behavior: "BASE" });
-  renderClientList();
-}
-function deleteClientRow(idx){
-  clients.splice(idx,1);
-  renderClientList();
-}
-
+let clients = [];           // [{ code, name, behavior }]
+let previousCodes = new Set();
 
 function renderClientList(){
-  const box = document.getElementById("list");
-  box.innerHTML = "";
+  els.list.innerHTML = "";
   clients.forEach((c, idx)=>{
     const row = document.createElement("div");
     row.className = "client-row";
-    row.innerHTML = \`
-      <input class="code" maxlength="4" placeholder="CODE" value="\${c.code||""}">
-      <input class="name" placeholder="名称" value="\${c.name||""}">
-      <button class="btn row-del" title="削除">🗑</button>
-    \`;
+    row.innerHTML = `
+      <input class="code" maxlength="4" placeholder="CODE" value="${c.code||""}">
+      <input class="name" placeholder="名称" value="${c.name||""}">
+      <button class="btn row-del" title="削除">🗑</button>`;
     const [codeEl, nameEl] = row.querySelectorAll("input");
     codeEl.addEventListener("input", (e)=>{
       clients[idx].code = e.target.value.toUpperCase().replace(/[^A-Z0-9]/g,"").slice(0,4);
       e.target.value = clients[idx].code;
     });
     nameEl.addEventListener("input", (e)=> clients[idx].name = e.target.value );
-    row.querySelector(".row-del").addEventListener("click", ()=> deleteClientRow(idx));
-    box.appendChild(row);
+    row.querySelector(".row-del").addEventListener("click", ()=>{ clients.splice(idx,1); renderClientList(); });
+    els.list.appendChild(row);
   });
 }
 
-
-document.getElementById("btnAddClientRow")?.addEventListener("click", ()=> addClientRow());
-
-
-let clients = [];
-function hydrateFromDOM(){
-  clients = Array.from(document.querySelectorAll("#list .client-row")).map(r=>{
-    const [codeEl, nameEl] = r.querySelectorAll("input");
-    return { code: (codeEl?.value||"").toUpperCase(), name: nameEl?.value||"", behavior:"BASE" };
-  });
+// ==== 読込/保存 ====
+// カタログの読み書きは prompts/client/catalog.json を仮定（既存環境に合わせて修正可）
+async function loadCatalog(){
+  setStatus("読込中…");
+  try{
+    const r = await postJSON(join(els.apiBase.value,"LoadPromptText"), { filename: "client/catalog.json" });
+    const j = await r.json().catch(()=>null);
+    const p = j?.text ? JSON.parse(j.text) : (j||{ clients:[] });
+    clients = (p.clients||[]).map(x=>({ code:(x.code||"").toUpperCase(), name: x.name||"", behavior: (x.behavior||"BASE").toUpperCase() }));
+    previousCodes = new Set(clients.map(x=>x.code));
+    renderClientList();
+    setStatus("読込完了");
+  }catch(e){
+    clients = [];
+    previousCodes = new Set();
+    renderClientList();
+    setStatus("新規作成");
+  }
 }
 
+async function saveCatalog(){
+  setStatus("保存中…");
+  const payload = { clients };
+  const text = JSON.stringify(payload, null, 2);
+  await postJSON(join(els.apiBase.value,"SavePromptText"), { filename:"client/catalog.json", prompt:text });
+  await initPromptsForNewClients(clients);
+  previousCodes = new Set(clients.map(x=>x.code));
+  setStatus("保存完了");
+}
 
-window.addEventListener("DOMContentLoaded", ()=>{
-  if (clients.length===0) clients = [];
-  renderClientList();
-});
+// ==== 新規クライアントの初期化 ====
+function templateFromFilename(filename, behavior){
+  behavior = (behavior||"BASE").toUpperCase();
+  if (behavior === "TYPE-R") return filename.replace(/^texel-/, "texel-r-");
+  if (behavior === "TYPE-S") return filename.replace(/^texel-/, "texel-s-");
+  return filename;
+}
+
+async function savePromptText(filename, promptText){
+  await postJSON(join(els.apiBase.value,"SavePromptText"), { filename, prompt: promptText });
+}
+async function loadPromptText(filename){
+  try{
+    const r = await postJSON(join(els.apiBase.value,"LoadPromptText"), { filename });
+    const j = await r.json().catch(()=>null);
+    return j?.text || j?.prompt || "";
+  }catch{ return ""; }
+}
+
+async function initPromptsForNewClients(currentClients){
+  const now = new Map(currentClients.map(c => [c.code.toUpperCase(), (c.behavior||"BASE").toUpperCase()]));
+  const adds = [];
+  for (const [code, beh] of now.entries()){
+    if (!previousCodes.has(code)) adds.push({ code, behavior: beh });
+  }
+  if (adds.length===0) return;
+
+  for (const {code, behavior} of adds){
+    // 1) index（roomphoto固定のみ）
+    const index = {
+      version: 1,
+      clientId: code,
+      behavior,
+      updatedAt: new Date().toISOString(),
+      items: [{ file:"texel-roomphoto.json", name:"画像分析プロンプト", order:10, hidden:false, fixed:true }],
+      params: {}
+    };
+    await savePromptText(`client/${code}/prompt-index.json`, JSON.stringify(index, null, 2));
+    // 2) roomphoto テンプレコピー
+    const templFile = templateFromFilename("texel-roomphoto.json", behavior);
+    const t = await loadPromptText(templFile);
+    const content = t || JSON.stringify({ prompt:"", params:{} }, null, 2);
+    await savePromptText(`client/${code}/texel-roomphoto.json`, content);
+  }
+}
+
+// ==== 起動 ====
+els.btnRead.addEventListener("click", loadCatalog);
+els.btnSave.addEventListener("click", saveCatalog);
+els.btnAdd.addEventListener("click", ()=>{ clients.push({ code:"", name:"", behavior:"BASE" }); renderClientList(); });
+loadCatalog();
