@@ -92,7 +92,6 @@ async function saveIndex(path, idx, etag){
 }
 
 // ensure index exists (client-root preferred), else auto-generate
-async 
 function normalizeIndex(obj){
   try{
     if (!obj) return null;
@@ -107,45 +106,32 @@ function normalizeIndex(obj){
   }catch{}
   return null;
 }
+
 async function ensurePromptIndex(clientId, behavior){
-  const tryPaths = [ indexClientPath(clientId), indexBehaviorPath(clientId, behavior) ];
-  let usedPath = null, idx = null, etag = null;
-
-  for (const p of tryPaths){
-    const s = await tryLoad(p);
-    if (s && s.data){ const n = normalizeIndex(s.data); if (n){ usedPath = p; idx = n; etag = s.etag; break; } }
-  }
-  // MIGRATION: If behavior-level exists but client-root is missing, copy once.
-  try {
-    const rBeh = await tryLoad(indexBehaviorPath(clientId, behavior));
-    const rCli = await tryLoad(indexClientPath(clientId));
-    if (rBeh && rBeh.data && !rCli){
-      const n = normalizeIndex(rBeh.data);
-      if (n){ await saveIndex(indexClientPath(clientId), n, null); }
+  const path = indexClientPath(clientId);
+  const res = await tryLoad(path);
+  if (res && res.data){
+    const n = normalizeIndex(res.data);
+    if (n){
+      promptIndex = n;
+      promptIndexPath = path;
+      promptIndexEtag = res.etag || null;
+      return promptIndex;
     }
-  } catch(e){ console.warn('index migration failed', e); }
-
-
-  if (!idx){
-    // generate from known kinds allowed for this behavior
-    const kinds = Object.keys(KIND_TO_NAME).filter(k=>FAMILY[behavior].has(k));
-    const items = kinds.map((k,i)=>{
-      const file = KIND_TO_NAME[k];
-      return { file, name: prettifyNameFromFile(file), order: (i+1)*10, hidden:false };
-    });
-    idx = { version:1, clientId, behavior, updatedAt:new Date().toISOString(), items };
-    usedPath = indexClientPath(clientId);
-    await saveIndex(usedPath, idx, null);
-    const s = await tryLoad(usedPath);
-    etag = s ? s.etag : null;
-    if (s && s.data){ const n = normalizeIndex(s.data); if (n) idx = n; }
   }
-
-  promptIndex = idx;
-  promptIndexPath = usedPath;
-  promptIndexEtag = etag || null;
-  return idx;
+  // auto-generate from behavior kinds
+  const kinds = Object.keys(KIND_TO_NAME).filter(k=>FAMILY[behavior].has(k));
+  const items = kinds.map((k,i)=>{
+    const file = KIND_TO_NAME[k];
+    return { file, name: prettifyNameFromFile(file), order: (i+1)*10, hidden:false };
+  });
+  promptIndex = { version:1, clientId, behavior, updatedAt:new Date().toISOString(), items };
+  promptIndexPath = path;
+  promptIndexEtag = null;
+  await saveIndex(promptIndexPath, promptIndex, null);
+  return promptIndex;
 }
+
 
 // Rename an item and save index
 async function renameIndexItem(file, newName){
