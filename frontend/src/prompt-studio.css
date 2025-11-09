@@ -1,120 +1,57 @@
+/* --- Light UI (restored) --- */
 :root{
-  --tx-primary:#0AA0A6;
-  --line:#d7e7f7;
-  --chip-bg:#eef6fa; --chip-ink:#247;
-  --muted:#5e6b7a; --panel:#fff; --bg:#f6fafc;
-  --radius:12px;
+  --bg:#f7f8fb; --panel:#ffffff; --line:#e6e9ef;
+  --text:#223; --muted:#7a8599; --brand:#0aa0a6; --brand-2:#0b6cf2;
+  --ok:#20b66e; --warn:#ff9f1a; --danger:#e05252; --info:#2080f0;
+  --chip-bg:#f1f4f8;
 }
-
-html,body{height:100%; margin:0;}
-body{
-  font:14px/1.6 "Noto Sans JP", system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial;
-  color:#123; background:var(--bg);
-}
-.app{height:100dvh; display:flex; flex-direction:column; min-width:960px}
-
-/* ---------- Header ---------- */
-.ps-header{
-  flex:0 0 auto; height:64px; display:grid;
-  grid-template-columns: 1fr minmax(520px, 1.2fr) auto;
-  align-items:center; gap:12px; padding:10px 14px;
-  background:#fff; border-bottom:1px solid var(--line);
-}
-.ps-header .left{display:flex; align-items:center; gap:12px; min-width:0;}
-.app-title{margin:0; font-size:18px; white-space:nowrap;}
-.ps-header .middle{
-  display:grid; grid-template-columns: auto 110px auto 110px auto minmax(280px,1fr);
-  align-items:center; gap:8px; min-width:520px;
-}
-.label{font-size:12px; color:var(--muted); white-space:nowrap;}
-.ps-header .right{display:flex; gap:8px}
-
-.input{background:#fff; border:1px solid var(--line); border-radius:8px; padding:8px 10px; min-width:0; outline:none}
-.input.sm{padding:6px 8px}
-.input.wide{width:100%}
-.btn{background:var(--tx-primary); color:#fff; border:none; border-radius:10px; padding:9px 14px; cursor:pointer; font-weight:700}
-.btn.secondary{background:#0d2330; color:#fff}
-.btn.ghost{background:#fff; color:#0d2330; border:1px solid var(--line)}
-
-/* ---------- Main ---------- */
-.ps-main{
-  flex:1 1 auto; min-height:0;
-  display:grid; grid-template-columns: clamp(260px, 18vw, 340px) 1fr; gap:16px;
-  padding:16px; overflow:hidden;
-}
-.panel{background:var(--panel); border:1px solid var(--line); border-radius:var(--radius); min-height:0}
-
-/* Sidebar */
-.ps-side{display:flex; flex-direction:column; min-width:0; resize:horizontal; overflow:auto}
-.tips{color:var(--muted); padding:12px 12px 4px}
-.ps-side .input{margin:0 12px 10px}
-.filelist{padding:0 12px 12px; display:flex; flex-direction:column; gap:8px}
-.fileitem{display:flex; align-items:center; justify-content:space-between; gap:8px; padding:10px; border:1px solid var(--line); border-radius:10px; background:#fff; cursor:pointer}
-.fileitem.active{outline:2px solid #0aa0a633}
-.fileitem .name{font-weight:700; color:#134; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
-.fileitem .meta{display:flex; gap:6px; align-items:center}
-.chip{background:var(--chip-bg); color:var(--chip-ink); padding:2px 8px; border-radius:999px; font-size:12px; border:1px solid var(--line); white-space:nowrap}
-.chip.ok{color:#066; background:#e7faf8; border-color:#b8efe9}
-.chip.warn{color:#764f00; background:#fff5d6; border-color:#f4e1a4}
-.chip.info{color:#124a7a; background:#e8f2ff; border-color:#cfe2ff}
-
-/* Editor */
-.ps-editor{display:flex; flex-direction:column; min-width:0; min-height:0; overflow:hidden}
-.bar.meta{
-  flex:0 0 auto; display:grid; grid-template-columns: repeat(2, auto) repeat(2, auto) auto 1fr;
-  align-items:center; gap:8px; padding:12px; border-bottom:1px solid var(--line)
-}
-.file-caption{color:var(--muted)}
-.filename{font-weight:700; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
-
-/* === Segmented tabs (50% / 50%) === */
-.seg-tabs{
-  flex:0 0 auto; padding:12px 12px 0;
-  display:grid; grid-template-columns: 1fr 1fr; gap:0;
-}
-.seg-btn{
-  height:40px; border:1px solid var(--line); background:#f6fbff; color:#134;
-  font-weight:700; cursor:pointer;
-}
-.seg-btn.left { border-right:none; border-top-left-radius:10px;  border-bottom-left-radius:10px; }
-.seg-btn.right{                 border-top-right-radius:10px; border-bottom-right-radius:10px; }
-.seg-btn.active{ background:#fff; position:relative; z-index:1; }
-
-/* タブ本体 */
-.tab-wrap{flex:1 1 auto; min-height:0; display:flex; flex-direction:column; overflow:hidden}
-.tab-panel{display:none; flex:1 1 auto; min-height:0; overflow:auto}
+*{box-sizing:border-box} html,body{height:100%} body{margin:0;background:var(--bg);color:var(--text);font-family: system-ui, -apple-system, Segoe UI, Roboto, Noto Sans JP, Helvetica, Arial, "Apple Color Emoji","Segoe UI Emoji";}
+.app{min-height:100vh;display:flex;flex-direction:column}
+.ps-header{display:flex;gap:16px;align-items:center;justify-content:space-between;padding:10px 16px;border-bottom:1px solid var(--line);background:#fff;position:sticky;top:0;z-index:10}
+.app-title{font-size:18px;margin:0 8px 0 0}
+.label{font-size:12px;color:var(--muted);margin:0 6px}
+.input{border:1px solid var(--line);background:#fff;border-radius:8px;padding:8px 10px;font-size:14px;min-width:120px}
+.input.sm{padding:6px 8px;font-size:13px}
+.input.wide{min-width:420px}
+.btn{border:none;background:var(--brand);color:#fff;border-radius:10px;padding:10px 14px;font-weight:600;cursor:pointer;box-shadow:0 1px 0 rgba(0,0,0,.05)}
+.btn.secondary{background:#eef3ff;color:#1d4ed8}
+.btn.tiny{padding:6px 10px;font-size:13px}
+.btn:active{transform:translateY(1px)}
+.ps-main{display:grid;grid-template-columns:320px 1fr;gap:16px;padding:16px;flex:1}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;box-shadow:0 1px 0 rgba(0,0,0,.02)}
+.ps-side{padding:12px;display:flex;flex-direction:column;gap:12px}
+.tips{color:var(--muted);font-size:12px}
+.side-actions{display:flex;gap:8px}
+.filelist{display:flex;flex-direction:column;gap:8px;overflow:auto;min-height:300px}
+.fileitem{display:grid;grid-template-columns:20px 1fr auto;align-items:center;gap:8px;border:1px solid var(--line);border-radius:10px;padding:10px 10px;background:#fff}
+.fileitem .drag{cursor:grab;color:var(--muted)}
+.fileitem.dragging{opacity:.6}
+.fileitem .name{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.fileitem .name .lock{margin-right:6px}
+.fileitem.locked{opacity:.85}
+.fileitem .meta button{border:none;background:#f2f6ff;color:#1d4ed8;border-radius:8px;padding:6px 8px;margin-left:6px;cursor:pointer}
+.fileitem.active{outline:2px solid var(--brand)}
+.ps-editor{display:flex;flex-direction:column;gap:10px;padding:12px}
+.bar.meta{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--muted)}
+.filename{font-weight:700;color:var(--text)}
+.chip{background:var(--chip-bg);border:1px solid var(--line);padding:4px 8px;border-radius:999px}
+.chip.ok{background:#edfbf4;border-color:#c6f1dc;color:#0f7e52}
+.chip.info{background:#eef4ff;border-color:#d8e6ff;color:#1d4ed8}
+.seg-tabs{display:grid;grid-template-columns:1fr 1fr;border:1px solid var(--line);border-radius:10px;overflow:hidden;width:max-content}
+.seg-btn{padding:8px 12px;border:none;background:#f6f8fc;cursor:pointer}
+.seg-btn.active{background:#fff;color:#000}
+.tab-wrap{border:1px solid var(--line);border-radius:10px;overflow:hidden}
+.tab-panel{display:none}
 .tab-panel.active{display:block}
-#promptTab{padding:12px; height:100%}
-#promptEditor{
-  width:100%; height:100%; min-height:0;
-  border:1px solid var(--line); border-top:none;
-  border-radius:0 0 10px 10px; padding:12px;
-  resize:none; box-sizing:border-box; background:#fbfeff;
-  font:13px/1.7 ui-monospace, Menlo, Consolas, "Noto Sans JP";
-  white-space:pre-wrap; overflow:auto
-}
-
-/* パラメータ：常に 1 列（6×1） */
-#paramsTab{padding:12px}
-.param-grid{display:grid; grid-template-columns: 1fr; gap:16px}
-.slider-group{background:#fcfeff; border:1px solid var(--line); border-radius:10px; padding:10px 12px}
-.slider-label{display:flex; align-items:center; justify-content:space-between; gap:12px; white-space:nowrap}
-.slider-value{color:#134; font-weight:700}
-input[type="range"]{width:100%}
-
-#statusMessage{flex:0 0 auto; padding:8px 12px; color:#0AA0A6}
-
-/* Diff */
-.diff{flex:0 0 auto; border-top:1px dashed var(--line); padding:12px}
-.diff-head{font-weight:700; color:#345; margin:.5em 0 10px}
-.diff-cols{display:grid; grid-template-columns:1fr 1fr; gap:12px}
-.diff textarea{
-  width:100%; height:240px; font:12px/1.6 ui-monospace, "Noto Sans JP";
-  background:#f9fcff; border:1px dashed var(--line); border-radius:8px; padding:10px; resize:none
-}
-
-/* Responsive（列固定なので不要だが、ヘッダーの折返し対策のみ） */
-@media (max-width: 1100px){
-  .ps-header{grid-template-columns: 1fr; height:auto; row-gap:8px; padding:8px 14px}
-  .ps-main{grid-template-columns: clamp(240px, 22vw, 320px) 1fr}
+#promptEditor{width:100%;height:60vh;border:none;outline:none;resize:none;padding:12px;font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;font-size:13px;line-height:1.5}
+.param-grid{display:grid;grid-template-columns:repeat(3, minmax(240px,1fr));gap:16px;padding:12px}
+.slider-group{background:#fafbfe;border:1px solid var(--line);border-radius:10px;padding:10px}
+.slider-label{font-size:12px;color:var(--muted);display:flex;justify-content:space-between;align-items:center}
+.diff{border:1px dashed var(--line);border-radius:12px;padding:8px}
+.diff-cols{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.diff textarea{width:100%;height:40vh}
+@media (max-width: 1024px){
+  .ps-main{grid-template-columns:1fr}
+  .input.wide{min-width:280px}
+  .param-grid{grid-template-columns:1fr}
 }
