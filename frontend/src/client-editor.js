@@ -13,6 +13,19 @@ const els = {
 
 function join(base, path){ return base.replace(/\/+$/,'') + '/' + path.replace(/^\/+/,''); }
 
+// ---- API compatibility helper ----
+async function callApiCompat(name, variants){
+  let lastErr=null;
+  for (const body of variants){
+    try{
+      const r = await postJSON(join(els.apiBase.value, name), body);
+      const j = await r.json().catch(()=>null);
+      if (j!=null) return j;
+    }catch(e){ lastErr=e; }
+  }
+  if (lastErr) throw lastErr; else throw new Error('API response empty');
+}
+
 // ===== API Base (lenient) =====
 function resolveApiBase(){
   const u = new URL(location.href);
@@ -57,8 +70,9 @@ async function loadCatalog(){
   resolveApiBase();
   setStatus("読込中…");
   try{
-    const r = await postJSON(join(els.apiBase.value,"LoadPromptText"), { filename: "client/catalog.json" });
-    const j = await r.json().catch(()=>null);
+    const j = await callApiCompat("LoadPromptText", [
+      { filename: "client/catalog.json" }, { path: "client/catalog.json" }
+    ]);
     const p = j?.text ? JSON.parse(j.text) : (j||{ clients:[] });
     clients = (p.clients||[]).map(x=>({ code:(x.code||"").toUpperCase(), name: x.name||"", behavior: (x.behavior||"BASE").toUpperCase() }));
     previousCodes = new Set(clients.map(x=>x.code));
@@ -74,7 +88,11 @@ async function saveCatalog(){
   setStatus("保存中…");
   const payload = { clients };
   const text = JSON.stringify(payload, null, 2);
-  await postJSON(join(els.apiBase.value,"SavePromptText"), { filename:"client/catalog.json", prompt:text });
+  try{
+    await postJSON(join(els.apiBase.value,"SavePromptText"), { filename:"client/catalog.json", text });
+  }catch(e){
+    await postJSON(join(els.apiBase.value,"SavePromptText"), { filename:"client/catalog.json", prompt:text });
+  }
   await initPromptsForNewClients(clients);
   previousCodes = new Set(clients.map(x=>x.code));
   setStatus("保存完了");
@@ -83,8 +101,11 @@ async function saveCatalog(){
 // ---- fallback: enumerate client folders when catalog.json is missing ----
 async function listClientFoldersFallback(){
   try{
-    const r = await postJSON(join(els.apiBase.value, "ListBLOB"), { container: "prompts", folder: "client" });
-    const j = await r.json().catch(()=>null);
+    const j = await callApiCompat("ListBLOB", [
+      { container: "prompts", folder: "client" },
+      { containerName: "prompts", prefix: "client/" },
+      { container: "prompts", prefix: "client/" }
+    ]);
     let codes = [];
     if (j?.prefixes?.length){
       codes = j.prefixes.map(x => String(x).split("/")[1]).filter(Boolean);

@@ -22,6 +22,19 @@ const els = {
 
 function join(base, path){ return base.replace(/\/+$/,'') + '/' + path.replace(/^\/+/,''); }
 
+// ---- API compatibility helper ----
+async function callApiCompat(name, variants){
+  let lastErr=null;
+  for (const body of variants){
+    try{
+      const r = await postJSON(join(els.apiBase.value, name), body);
+      const j = await r.json().catch(()=>null);
+      if (j!=null) return j;
+    }catch(e){ lastErr=e; }
+  }
+  if (lastErr) throw lastErr; else throw new Error('API response empty');
+}
+
 // ===== API Base (lenient) =====
 function resolveApiBase(){
   const u = new URL(location.href);
@@ -38,9 +51,9 @@ async function postJSON(url, body){
 }
 async function tryLoadasync function tryLoad(filename){
   try{
-    const r = await postJSON(join(els.apiBase.value, "LoadPromptText"), { filename });
-    const j = await r.json().catch(()=>null);
-    if (!j) return null;
+    const j = await callApiCompat("LoadPromptText", [
+      { filename }, { path: filename }
+    ]);
     return { etag: j.etag||null, data: parsePromptText(j) };
   }catch(e){ return null; }
 }
@@ -53,10 +66,16 @@ function parsePromptText(j){
   return j;
 }
 async function savePromptText(filename, promptText, etag){
-  const body = { filename, prompt: promptText, etag: etag||null };
-  const r = await postJSON(join(els.apiBase.value, "SavePromptText"), body);
-  const j = await r.json().catch(()=>({}));
-  return j.etag||null;
+  let body = { filename, text: promptText, etag: etag||null };
+  try{
+    const r = await postJSON(join(els.apiBase.value, "SavePromptText"), body);
+    const j = await r.json().catch(()=>({}));
+    return j.etag||null;
+  }catch(e){
+    const r2 = await postJSON(join(els.apiBase.value, "SavePromptText"), { filename, prompt: promptText, etag: etag||null });
+    const j2 = await r2.json().catch(()=>({}));
+    return j2.etag||null;
+  }
 }
 
 function setStatus(s){ els.status.textContent = `状態: ${s}`; }
