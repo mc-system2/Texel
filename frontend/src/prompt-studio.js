@@ -317,17 +317,8 @@ async function renderFileList(){
       await saveOrderFromDOM();
     });
 
-    const clientPath = `client/${clid}/${it.file}`;
-    const legacyPath = `prompt/${clid}/${it.file}`;
-    const template   = templateFromFilename(it.file, beh);
-    const state = await resolveState([clientPath, legacyPath], template);
-    const chip  = li.querySelector(".chip");
-    if (state === "client") { chip.textContent = "Overridden"; chip.classList.add("ok"); }
-    else if (state === "legacy"){ chip.textContent = "Overridden (legacy)"; chip.classList.add("ok"); }
-    else if (state === "template"){ chip.textContent = "Template"; chip.classList.add("info"); }
-    else { chip.textContent = "Missing"; chip.classList.add("warn"); }
-
-    li.addEventListener("click", (e)=>{ if (!e.target.classList.contains("rename") && !e.target.classList.contains("drag")) openItem(it); });
+        // (state check removed)
+li.addEventListener("click", (e)=>{ if (!e.target.classList.contains("rename") && !e.target.classList.contains("drag")) openItem(it); });
 
     li.querySelector(".rename").addEventListener("click", (e)=>{
       e.preventDefault(); e.stopPropagation();
@@ -784,11 +775,7 @@ function templateFromFilename(filename, behavior){
   const _renderFileList = window.renderFileList;
   window.renderFileList = async function(){
     if (_renderFileList) await _renderFileList();
-    // localize chip labels
-    document.querySelectorAll(".chip").forEach(ch=>{
-      if (/Overridden\s*\(legacy\)/i.test(ch.textContent)) ch.textContent = "上書き（旧）";
-      else if (/Overridden/i.test(ch.textContent)) ch.textContent = "上書き";
-    });
+
   };
 })();
 /* === /Patch =============================================================== */
