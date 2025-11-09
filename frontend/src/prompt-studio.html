@@ -1,76 +1,57 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="ja">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>Prompt Studio</title>
-  <link rel="stylesheet" href="prompt-studio.css" />
+  <link rel="stylesheet" href="prompt-studio.css">
 </head>
 <body>
-  <header class="toolbar">
-    <div class="left">
-      <span class="app-title">Prompt Studio</span>
+  <div class="appbar">
+    <div class="row">
+      <label>Client</label>
+      <input id="client" value="A001" />
+      <label>Behavior</label>
+      <select id="behavior">
+        <option value="BASE">BASE</option>
+        <option value="TYPE-R">TYPE-R</option>
+        <option value="TYPE-S">TYPE-S</option>
+      </select>
+      <label>API Base</label>
+      <input id="apiBase" placeholder="https://.../api" />
+      <button id="btnDiff">差分</button>
+      <button id="btnSave">保存 (Ctrl+S)</button>
     </div>
-    <div class="right">
-      <label>Client
-        <input id="clientInput" placeholder="A001" />
-      </label>
-      <label>Behavior
-        <select id="behaviorSelect">
-          <option>BASE</option>
-          <option>TYPE-R</option>
-          <option>TYPE-S</option>
-        </select>
-      </label>
-      <label>API Base
-        <input id="apiBaseInput" placeholder="https://.../api" />
-      </label>
-      <button id="diffBtn" class="ghost">差分</button>
-      <button id="saveBtn" class="primary">保存 (Ctrl+S)</button>
-    </div>
-  </header>
+  </div>
 
-  <main class="layout">
-    <aside class="sidebar">
-      <div class="search-row">
-        <input id="filterInput" placeholder="ファイル検索…" />
-        <button id="addBtn" class="primary small">＋ 追加</button>
+  <main class="wrap">
+    <aside class="left">
+      <div class="searchRow">
+        <input id="search" placeholder="ファイル検索…" />
+        <button id="btnAdd">＋追加</button>
       </div>
-      <ul id="fileList" class="file-list"></ul>
-      <div class="hint">画像分析プロンプトは最上段に固定・変更不可です。</div>
+
+      <ul id="fileList" class="fileList"></ul>
     </aside>
 
-    <section class="editor">
-      <div class="statusbar">
-        <span>状態: <b id="statusBadge">—</b></span>
-        <span>ETag: <b id="etagBadge">—</b></span>
-        <span>ファイル: <b id="fileBadge">未選択</b></span>
+    <section class="right">
+      <div class="statusBar">
+        <span>状態: <span id="status">—</span></span>
+        <span>ETag: <span id="etag">—</span></span>
+        <span>ファイル: <span id="currentFile">未選択</span></span>
       </div>
-
       <div class="tabs">
         <button class="tab active" data-tab="prompt">プロンプト</button>
         <button class="tab" data-tab="params">パラメータ</button>
       </div>
-
-      <div class="panes">
-        <textarea id="promptArea" class="pane active" spellcheck="false"
-          placeholder="ここにプロンプトが読み込まれます…"></textarea>
-        <textarea id="paramsArea" class="pane" spellcheck="false"
-          placeholder="{ &quot;temperature&quot;: 0.2, ... }"></textarea>
+      <div id="pane-prompt" class="pane active">
+        <textarea id="editor" placeholder="ここにプロンプトが読み込まれます…"></textarea>
+      </div>
+      <div id="pane-params" class="pane">
+        <pre id="paramsView"></pre>
       </div>
     </section>
   </main>
-
-  <template id="fileItemTpl">
-    <li class="file-item">
-      <button class="drag" title="並べ替え">≡</button>
-      <span class="lock" title="固定">🔒</span>
-      <span class="title"></span>
-      <span class="spacer"></span>
-      <button class="rename" title="名称変更">✎</button>
-      <button class="remove" title="削除">🗑</button>
-    </li>
-  </template>
 
   <script src="prompt-studio.js"></script>
 </body>

@@ -1,304 +1,227 @@
-// Prompt Studio – inline rename edition
+
 (() => {
-  const $ = (sel, el=document) => el.querySelector(sel);
-  const $$ = (sel, el=document) => Array.from(el.querySelectorAll(sel));
+  const $ = (s, el=document) => el.querySelector(s);
+  const $$ = (s, el=document) => Array.from(el.querySelectorAll(s));
 
-  // ---- State ----
-  let API_BASE = localStorage.getItem('ps.api') || '';
-  let CLIENT   = localStorage.getItem('ps.client') || '';
-  let BEHAVIOR = localStorage.getItem('ps.behavior') || 'BASE';
-
-  const INDEX_NAME = 'prompt-index.json'; // client/<client>/prompt-index.json
-
-  // Prompt index schema: { version, client, behavior, items:[{file,name,order,hidden}], params:{} }
+  let API_BASE = '';
+  let currentClient = '';
+  let currentBehavior = 'BASE';
+  let indexPath = '';
   let promptIndex = null;
-  let fileMap = new Map(); // key -> item
+  let etagIndex = null;
+  let currentItem = null;
 
-  // selection
-  let currentKey = null;
-  let currentETag = null;
+  const REQUIRED_ROOMPHOTO = {
+    file: 'texel-roomphoto.json',
+    name: '画像分析プロンプト',
+    order: 0,
+    locked: true
+  };
 
-  // ---- Elements ----
-  const clientInput    = $('#clientInput');
-  const behaviorSelect = $('#behaviorSelect');
-  const apiBaseInput   = $('#apiBaseInput');
-  const fileListEl     = $('#fileList');
-  const filterInput    = $('#filterInput');
-  const addBtn         = $('#addBtn');
-  const saveBtn        = $('#saveBtn');
-  const diffBtn        = $('#diffBtn');
-
-  const statusBadge = $('#statusBadge');
-  const etagBadge   = $('#etagBadge');
-  const fileBadge   = $('#fileBadge');
-
-  const promptArea = $('#promptArea');
-  const paramsArea = $('#paramsArea');
-
-  // ---- Boot ----
-  clientInput.value = CLIENT;
-  apiBaseInput.value = API_BASE;
-  behaviorSelect.value = BEHAVIOR;
-
-  clientInput.addEventListener('change', () => {
-    CLIENT = clientInput.value.trim();
-    localStorage.setItem('ps.client', CLIENT);
-    reload();
-  });
-  apiBaseInput.addEventListener('change', () => {
-    API_BASE = apiBaseInput.value.trim();
-    localStorage.setItem('ps.api', API_BASE);
-  });
-  behaviorSelect.addEventListener('change', () => {
-    BEHAVIOR = behaviorSelect.value;
-    localStorage.setItem('ps.behavior', BEHAVIOR);
-  });
-
-  addBtn.addEventListener('click', onAdd);
-  fileListEl.addEventListener('click', onFileListClick);
-  fileListEl.addEventListener('keydown', onFileListKey);
-
-  document.addEventListener('keydown', (e) => {
-    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
-      e.preventDefault();
-      onSave();
-    }
-  });
-
-  reload();
-
-  async function reload() {
-    clearEditor();
-    await ensureIndex();
-    renderFileList();
+  function apiUrl(fn) {
+    let base = $('#apiBase').value.trim();
+    if (!base) throw new Error('API Base 未設定');
+    if (!base.endsWith('/')) base += '/';
+    return base + fn;
   }
-
-  function getClientFolder() {
-    if (!CLIENT) throw new Error('Client 未設定');
-    return `client/${CLIENT}`;
-  }
-
-  // ---- API helpers ----
-  async function apiPost(path, body) {
-    if (!API_BASE) throw new Error('API Base 未設定');
-    const res = await fetch(`${API_BASE}/${path}`, {
+  async function apiPost(fn, body) {
+    const res = await fetch(apiUrl(fn), {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(body || {}),
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify(body||{})
     });
     if (!res.ok) {
-      const t = await res.text().catch(()=>'');
-      throw new Error(`${path} ${res.status} ${res.statusText}\n${t}`);
+      const t = await res.text();
+      throw new Error(`${fn} ${res.status}: ${t}`);
     }
     return res.json();
   }
 
-  // Expected server functions:
-  // - LoadText { path } -> { text, etag? }
-  // - SaveText { path, text, etag? } -> { etag }
-  // - ListFiles { prefix } -> { files: [ "client/A001/xxx.json", ... ] }
-  async function loadText(path) { return apiPost('LoadText', { path }); }
-  async function saveText(path, text, etag) { return apiPost('SaveText', { path, text, etag }); }
-  async function listFiles(prefix) { return apiPost('ListFiles', { prefix }); }
+  const loadText = (path) => apiPost('LoadText', { path });
+  const saveText = (path, text, etag) => apiPost('SaveText', { path, text, etag });
+  const listFiles = (prefix) => apiPost('ListFiles', { prefix });
 
-  // ----- Index handling -----
-  async function ensureIndex() {
-    const folder = getClientFolder();
-    const indexPath = `${folder}/${INDEX_NAME}`;
+  function getClientFolder() {
+    return `client/${currentClient}/`;
+  }
+  function getIndexPath() {
+    return getClientFolder() + 'prompt-index.json';
+  }
+
+  function normalizeNameFromFile(file) {
+    // texel-suumo-comment.json → Suumo Comment
+    const m = file.replace(/^texel-/, '').replace(/\.json$/,'').split('-');
+    return m.map(x => x.charAt(0).toUpperCase() + x.slice(1)).join(' ');
+  }
+
+  async function ensurePromptIndex() {
+    indexPath = getIndexPath();
     try {
-      const { text } = await loadText(indexPath);
+      const { text, etag } = await loadText(indexPath);
+      etagIndex = etag || null;
       promptIndex = JSON.parse(text);
+      // 実装差異に備え
+      if (!promptIndex || !Array.isArray(promptIndex.prompts)) throw new Error('invalid index');
     } catch (e) {
-      // Create initial index (roomphoto fixed)
-      promptIndex = {
-        version: 1,
-        client: CLIENT,
-        behavior: BEHAVIOR,
-        items: [
-          { file: 'texel-roomphoto.json', name: '画像分析プロンプト', order: 0, locked: true }
-        ],
-        params: {}
-      };
-      await saveIndex();
+      // 404想定 → 新規作成
+      const { files } = await listFiles(getClientFolder());
+      const items = files
+        .filter(f => f.endsWith('.json') && f !== 'prompt-index.json')
+        .map((f, i) => ({
+          file: f.split('/').pop(),
+          name: f.includes('roomphoto') ? '画像分析プロンプト' : normalizeNameFromFile(f.split('/').pop()),
+          order: (i+1)*10,
+          hidden: false,
+          locked: f.includes('roomphoto')
+        }));
+
+      // 先頭に roomphoto 固定（無ければ追加）
+      const hasRoom = items.some(x => x.file.includes('roomphoto'));
+      if (!hasRoom) items.unshift(REQUIRED_ROOMPHOTO);
+      else {
+        // 確実に最上段へ
+        items.sort((a,b) => (a.file.includes('roomphoto')?-1:1));
+        items[0].order = 0; items[0].locked = true; items[0].name = '画像分析プロンプト';
+      }
+
+      promptIndex = { version: 1, client: currentClient, behavior: currentBehavior, prompts: items, params:{} };
+      const { etag } = await saveText(indexPath, JSON.stringify(promptIndex, null, 2), null);
+      etagIndex = etag || null;
     }
-    fileMap.clear();
-    for (const it of promptIndex.items) fileMap.set(it.file, it);
+  }
+
+  function renderFileList() {
+    const ul = $('#fileList');
+    ul.innerHTML = '';
+    if (!promptIndex || !Array.isArray(promptIndex.prompts)) return;
+
+    const sorted = [...promptIndex.prompts].sort((a,b)=> (a.order??0)-(b.order??0));
+    for (const item of sorted) {
+      // 検索フィルタ対応
+      const q = $('#search').value.trim().toLowerCase();
+      if (q && !(item.name||'').toLowerCase().includes(q) && !(item.file||'').toLowerCase().includes(q)) continue;
+
+      const li = document.createElement('li');
+      li.className = 'fileItem'+(item.locked?' locked':'');
+      li.dataset.file = item.file;
+
+      const drag = document.createElement('span');
+      drag.className = 'drag'; drag.textContent = '≡';
+      li.appendChild(drag);
+
+      const title = document.createElement('div');
+      title.className = 'title';
+      title.textContent = item.name || normalizeNameFromFile(item.file);
+      li.appendChild(title);
+
+      // rename（インライン）
+      if (!item.locked) {
+        const btnEdit = document.createElement('button');
+        btnEdit.className='btn'; btnEdit.textContent='✎';
+        btnEdit.title='名称変更';
+        btnEdit.addEventListener('click', ()=> inlineRename(li, item, title));
+        li.appendChild(btnEdit);
+      }
+
+      // delete
+      if (!item.locked) {
+        const btnDel = document.createElement('button');
+        btnDel.className='btn'; btnDel.textContent='🗑';
+        btnDel.title='削除';
+        btnDel.addEventListener('click', async ()=> {
+          if (!confirm(`「${item.name}」を一覧から削除しますか？（ファイルは削除しません）`)) return;
+          promptIndex.prompts = promptIndex.prompts.filter(x=>x!==item);
+          await saveIndex();
+          renderFileList();
+        });
+        li.appendChild(btnDel);
+      }
+
+      // select
+      li.addEventListener('click', ()=> openItem(item));
+
+      ul.appendChild(li);
+    }
+  }
+
+  async function openItem(item) {
+    currentItem = item;
+    $('#currentFile').textContent = getClientFolder()+item.file;
+    $('#status').textContent = item.locked ? 'Locked' : '—';
+    $('#etag').textContent = '—';
+    $('#editor').value = '読み込み中…';
+    try {
+      const { text, etag } = await loadText(getClientFolder()+item.file);
+      $('#editor').value = text;
+      $('#etag').textContent = etag || '—';
+    } catch(e) {
+      $('#editor').value = `// 読み込み失敗: ${e.message}`;
+    }
+  }
+
+  function inlineRename(li, item, titleEl) {
+    const input = document.createElement('input');
+    input.className='inline';
+    input.value = item.name || normalizeNameFromFile(item.file);
+    li.replaceChild(input, titleEl);
+    input.focus();
+    input.select();
+    const cancel = () => {
+      li.replaceChild(titleEl, input);
+    };
+    const commit = async () => {
+      item.name = input.value.trim() || normalizeNameFromFile(item.file);
+      titleEl.textContent = item.name;
+      li.replaceChild(titleEl, input);
+      await saveIndex();
+      renderFileList();
+    };
+    input.addEventListener('keydown',(ev)=>{
+      if (ev.key==='Enter') commit();
+      if (ev.key==='Escape') cancel();
+    });
+    input.addEventListener('blur', commit);
   }
 
   async function saveIndex() {
-    const folder = getClientFolder();
-    const indexPath = `${folder}/${INDEX_NAME}`;
-    await saveText(indexPath, JSON.stringify(promptIndex, null, 2));
+    const { etag } = await saveText(indexPath, JSON.stringify(promptIndex, null, 2), etagIndex);
+    etagIndex = etag || null;
   }
 
-  // ----- List render -----
-  function renderFileList() {
-    fileListEl.innerHTML = '';
-    const tpl = $('#fileItemTpl');
+  async function boot() {
+    // URL パラメータから復元
+    const usp = new URLSearchParams(location.hash.replace(/^#\?/,'?'));
+    currentClient = usp.get('client') || $('#client').value || 'A001';
+    currentBehavior = usp.get('behavior') || $('#behavior').value || 'BASE';
+    const api = usp.get('api') || $('#apiBase').value;
+    $('#client').value = currentClient;
+    $('#behavior').value = currentBehavior;
+    if (api) $('#apiBase').value = api;
 
-    // sort by order asc
-    const items = [...promptIndex.items].sort((a,b) => (a.order ?? 0) - (b.order ?? 0));
-
-    for (const it of items) {
-      const li = tpl.content.firstElementChild.cloneNode(true);
-      li.dataset.key = it.file;
-      $('.title', li).textContent = it.name || toTitle(it.file);
-      if (it.locked) li.classList.add('locked');
-      fileListEl.appendChild(li);
-    }
-  }
-
-  function toTitle(file) {
-    // "texel-sumo-comment.json" -> "Suumo Comment"
-    return file
-      .replace(/^texel-/, '')
-      .replace(/\.json$/,'')
-      .split('-')
-      .map(s => s.charAt(0).toUpperCase() + s.slice(1))
-      .join(' ');
-  }
-
-  // ----- Events -----
-  function onFileListClick(e) {
-    const li = e.target.closest('.file-item');
-    if (!li) return;
-    const key = li.dataset.key;
-    const item = fileMap.get(key);
-
-    if (e.target.classList.contains('rename')) {
-      if (item.locked) return;
-      beginInlineRename(li, item);
-      return;
-    }
-    if (e.target.classList.contains('remove')) {
-      if (item.locked) return;
-      removeItem(key);
-      return;
-    }
-    if (e.target.classList.contains('drag')) {
-      // no-op here (drag handled by browser if needed / or future enhancement)
-      return;
-    }
-    // select
-    selectKey(key);
-  }
-
-  function onFileListKey(e) {
-    const li = e.target.closest('.file-item');
-    if (!li) return;
-    const key = li.dataset.key;
-    const item = fileMap.get(key);
-    if (e.key === 'Enter' && e.target.classList.contains('inline-edit')) {
-      e.preventDefault();
-      commitInlineRename(li, item, e.target.value);
-    } else if (e.key === 'Escape' && e.target.classList.contains('inline-edit')) {
-      e.preventDefault();
-      cancelInlineRename(li, item);
-    }
-  }
-
-  function beginInlineRename(li, item) {
-    const titleSpan = $('.title', li);
-    const old = item.name || titleSpan.textContent;
-    const input = document.createElement('input');
-    input.className = 'inline-edit';
-    input.value = old;
-    li.replaceChild(input, titleSpan);
-    input.focus();
-    input.select();
-    input.addEventListener('blur', () => commitInlineRename(li, item, input.value));
-  }
-
-  async function commitInlineRename(li, item, value) {
-    const newName = (value || '').trim();
-    const span = document.createElement('span');
-    span.className = 'title';
-    if (!newName) {
-      span.textContent = item.name || toTitle(item.file);
-      li.replaceChild(span, $('.inline-edit', li));
-      return;
-    }
-    item.name = newName;
-    span.textContent = newName;
-    li.replaceChild(span, $('.inline-edit', li));
-    await saveIndex();
-  }
-
-  function cancelInlineRename(li, item) {
-    const span = document.createElement('span');
-    span.className = 'title';
-    span.textContent = item.name || toTitle(item.file);
-    li.replaceChild(span, $('.inline-edit', li));
-  }
-
-  async function removeItem(key) {
-    const idx = promptIndex.items.findIndex(i => i.file === key);
-    if (idx >= 0) {
-      promptIndex.items.splice(idx, 1);
-      fileMap.delete(key);
+    // 主要イベント
+    $('#search').addEventListener('input', renderFileList);
+    $('#btnAdd').addEventListener('click', async () => {
+      // 新規エントリ（空のプレースホルダ）
+      const fname = prompt('新しいプロンプトのファイル名（.json）', 'custom-prompt.json');
+      if (!fname) return;
+      const item = { file: fname, name: normalizeNameFromFile(fname), order: ((promptIndex.prompts?.length||0)+1)*10, hidden:false };
+      promptIndex.prompts.push(item);
       await saveIndex();
       renderFileList();
-      if (currentKey === key) clearEditor();
-    }
-  }
+    });
+    $('#btnSave').addEventListener('click', async ()=>{
+      if (!currentItem) return;
+      await saveText(getClientFolder()+currentItem.file, $('#editor').value, null);
+      alert('保存しました');
+    });
+    window.addEventListener('keydown', (e)=>{
+      if (e.ctrlKey && e.key.toLowerCase()==='s') { e.preventDefault(); $('#btnSave').click(); }
+    });
 
-  async function onAdd() {
-    const baseName = prompt('追加するファイル（例: texel-suggestion.json または suggestion）', 'suggestion');
-    if (!baseName) return;
-    const file = baseName.endsWith('.json') ? `texel-${baseName.replace(/^texel-/, '')}` : `texel-${baseName}.json`;
-    if (fileMap.has(file)) {
-      alert('すでに存在します');
-      return;
-    }
-    const display = prompt('表示名（空で自動整形）', '');
-    const order = Math.max(0, ...promptIndex.items.map(i => i.order ?? 0)) + 10;
-    const item = { file, name: (display||'').trim() || toTitle(file), order };
-    promptIndex.items.push(item);
-    fileMap.set(file, item);
-    await saveIndex();
+    await ensurePromptIndex();
     renderFileList();
   }
 
-  async function selectKey(key) {
-    currentKey = key;
-    fileBadge.textContent = `${getClientFolder()}/${key}`;
-    statusBadge.textContent = 'Loading…';
-    etagBadge.textContent = '—';
-    promptArea.value = '';
-    paramsArea.value = JSON.stringify(promptIndex.params || {}, null, 2);
-
-    const path = `${getClientFolder()}/${key}`;
-    try {
-      const { text, etag } = await loadText(path);
-      currentETag = etag || null;
-      etagBadge.textContent = etag || '—';
-      statusBadge.textContent = 'Overridden';
-      promptArea.value = text;
-    } catch (e) {
-      // not found -> empty
-      currentETag = null;
-      statusBadge.textContent = 'Missing';
-      promptArea.value = '';
-    }
-  }
-
-  function clearEditor() {
-    currentKey = null;
-    fileBadge.textContent = '未選択';
-    statusBadge.textContent = '—';
-    etagBadge.textContent = '—';
-    promptArea.value = '';
-    paramsArea.value = JSON.stringify(promptIndex?.params || {}, null, 2);
-  }
-
-  async function onSave() {
-    if (!currentKey) return;
-    const path = `${getClientFolder()}/${currentKey}`;
-    const text = promptArea.value;
-    const { etag } = await saveText(path, text, currentETag);
-    currentETag = etag || null;
-    etagBadge.textContent = etag || '—';
-    statusBadge.textContent = 'Overridden';
-  }
-
+  // init
+  window.addEventListener('DOMContentLoaded', boot);
 })();

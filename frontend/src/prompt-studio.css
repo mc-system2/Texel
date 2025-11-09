@@ -1,48 +1,35 @@
-/* ===== Reset (最小限) ===== */
-* { box-sizing: border-box; }
-html, body { height: 100%; }
-body { margin: 0; font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans JP", "Hiragino Sans", "Yu Gothic UI", "Yu Gothic", "Meiryo", sans-serif; background:#f7f9fb; color:#1c2330; }
 
-/* ===== Header ===== */
-.toolbar { display:flex; justify-content:space-between; align-items:center; gap:16px; padding:10px 16px; background:#fff; border-bottom:1px solid #e7edf3; position:sticky; top:0; z-index:10; }
-.toolbar .app-title { font-weight:700; letter-spacing:.2px; }
-.toolbar label { margin-left:12px; font-size:13px; color:#556170; }
-.toolbar input, .toolbar select { margin-left:6px; padding:6px 8px; border:1px solid #d6dce5; border-radius:8px; background:#fff; min-width:140px; }
-.toolbar .primary { background:#0ea5e9; color:#fff; border:none; padding:8px 12px; border-radius:10px; }
-.toolbar .ghost { background:#fff; border:1px solid #d6dce5; padding:8px 12px; border-radius:10px; }
-
-/* ===== Layout ===== */
-.layout { display:grid; grid-template-columns:320px 1fr; height:calc(100vh - 56px); }
-.sidebar { padding:14px; border-right:1px solid #e7edf3; background:#fbfdff; overflow:auto; }
-.editor  { display:flex; flex-direction:column; overflow:hidden; }
-
-.search-row { display:flex; gap:8px; }
-.search-row input { flex:1; padding:8px 10px; border:1px solid #d6dce5; border-radius:10px; background:#fff; }
-.small { padding:6px 10px; border-radius:10px; }
-
-.file-list { list-style:none; padding:8px 0 16px; margin:8px 0 0; display:flex; flex-direction:column; gap:10px; }
-.file-item { display:flex; align-items:center; gap:8px; padding:8px 10px; border:1px solid #e7edf3; background:#fff; border-radius:12px; }
-.file-item .drag { border:none; background:transparent; cursor:grab; font-size:16px; color:#6b7788; }
-.file-item .lock { display:none; }
-.file-item.locked .lock { display:inline; }
-.file-item.locked .rename, .file-item.locked .remove { display:none; }
-
-.file-item .title { max-width: 180px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-.file-item input.inline-edit { width: 200px; padding:6px 8px; border:1px solid #0ea5e9; border-radius:8px; outline:none; }
-.file-item .spacer { flex:1; }
-.file-item .rename, .file-item .remove { border:none; background:#f4f7fb; color:#344054; padding:6px 8px; border-radius:8px; }
-.file-item .remove { background:#fff0f0; color:#b91c1c; }
-
-.hint { color:#778197; font-size:12px; margin-top:4px; }
-
-/* ===== Editor ===== */
-.statusbar { display:flex; gap:18px; align-items:center; padding:10px 14px; border-bottom:1px solid #e7edf3; background:#fff; }
-.statusbar b { font-weight:600; color:#0b1324; }
-
-.tabs { display:flex; gap:8px; padding:8px 10px; border-bottom:1px solid #e7edf3; background:#fff; }
-.tab { border:none; background:#f4f7fb; padding:8px 12px; border-radius:10px; }
-.tab.active { background:#0ea5e9; color:#fff; }
-
-.panes { flex:1; display:grid; grid-template-columns:1fr 1fr; gap:0; height:100%; }
-.pane { width:100%; height:100%; border:none; outline:none; padding:14px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Roboto Mono", monospace; font-size:13px; line-height:1.6; background:#fff; }
-.pane:not(.active) { display:none; }
+:root {
+  --bg: #fff;
+  --fg: #222;
+  --muted:#9aa1a6;
+  --primary:#0ea5e9;
+  --panel:#f6f8fb;
+  --border:#e5e7eb;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.5 -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Noto Sans JP','Hiragino Kaku Gothic ProN',Meiryo,sans-serif}
+.appbar{position:sticky;top:0;background:#fff;border-bottom:1px solid var(--border);padding:8px 12px;z-index:2}
+.appbar .row{display:flex;gap:8px;align-items:center}
+.appbar input,.appbar select{padding:6px 8px;border:1px solid var(--border);border-radius:8px;min-width:160px}
+.appbar button{padding:6px 10px;border:1px solid var(--border);border-radius:8px;background:#fff}
+.wrap{display:grid;grid-template-columns:320px 1fr;gap:16px;padding:16px}
+.left{background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:12px;height:calc(100vh - 96px);overflow:auto}
+.right{border:1px solid var(--border);border-radius:12px}
+.searchRow{display:flex;gap:8px;margin-bottom:8px}
+.searchRow input{flex:1;padding:8px;border:1px solid var(--border);border-radius:8px}
+.searchRow button{border:1px solid var(--border);background:#fff;border-radius:8px;padding:6px 10px}
+.fileList{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px}
+.fileItem{display:flex;align-items:center;gap:8px;background:#fff;border:1px solid var(--border);border-radius:10px;padding:10px}
+.fileItem.locked{opacity:.85}
+.fileItem .drag{cursor:grab;color:var(--muted)}
+.fileItem .title{flex:1;font-weight:600}
+.fileItem .inline{flex:1;padding:6px 8px;border:1px solid var(--border);border-radius:8px}
+.fileItem .btn{border:1px solid var(--border);background:#fff;border-radius:8px;padding:6px;min-width:32px}
+.statusBar{display:flex;gap:16px;align-items:center;padding:10px;border-bottom:1px solid var(--border)}
+.tabs{display:flex;gap:4px;padding:8px;border-bottom:1px solid var(--border)}
+.tab{border:1px solid var(--border);background:#fff;border-radius:8px 8px 0 0;padding:6px 12px}
+.tab.active{background:var(--panel);border-bottom-color:var(--panel)}
+.pane{display:none;padding:8px}
+.pane.active{display:block}
+#editor{width:100%;height:calc(100vh - 230px);border:0;outline:none;padding:16px;resize:none;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:13px}
