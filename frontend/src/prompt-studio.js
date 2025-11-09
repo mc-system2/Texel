@@ -53,7 +53,7 @@ function indexClientPath(clientId){ return `client/${clientId}/prompt-index.json
 function prettifyNameFromFile(filename){
   return filename.replace(/\.json$/i,'').replace(/^texel[-_]?/i,'').replace(/[-_]+/g,' ').replace(/\b\w/g, s=>s.toUpperCase());
 }
-function join(base, path){ return (base||"").replace(/\/+$/,"") + "/" + String(path||"").replace(/^\/+/,""); }
+function join(base, path){ return (base||"").replace(/\/+$/,"") + "/" + String(path||"").replace(/^\/+/, ""); }
 
 async function apiLoadText(filename){
   const r = await fetch(join(els.apiBase.value,"LoadPromptText"),{
@@ -237,12 +237,6 @@ function clearDirty(){ dirty = false; }
 window.addEventListener("beforeunload", (e)=>{ if (!dirty) return; e.preventDefault(); e.returnValue=""; });
 
 /* ---------- File List ---------- */
-function behaviorTemplatePath(beh, kind){
-  const base = KIND_TO_NAME[kind];
-  if (beh === "TYPE-R") return base.replace("texel-", "texel-r-");
-  if (beh === "TYPE-S") return base.replace("texel-", "texel-s-");
-  return base;
-}
 function templateFromFilename(filename, behavior){
   if (behavior === "TYPE-R") return filename.replace(/^texel-/, "texel-r-");
   if (behavior === "TYPE-S") return filename.replace(/^texel-/, "texel-s-");
@@ -257,14 +251,6 @@ async function tryLoad(filename){
   let data = {};
   try { data = await res.json(); } catch { data = {}; }
   return { data, etag };
-}
-async function resolveState(clientCandidates, templatePath){
-  for (const c of clientCandidates){
-    const r = await tryLoad(c);
-    if (r) return c.includes("/prompt/") ? "legacy" : "client";
-  }
-  if (await tryLoad(templatePath)) return "template";
-  return "missing";
 }
 
 async function renderFileList(){
@@ -287,7 +273,6 @@ async function renderFileList(){
     else els.fileList.insertBefore(dragging, after);
   });
   els.fileList.addEventListener('drop', async ()=>{
-    // commit order
     const lis = [...els.fileList.querySelectorAll('.fileitem')];
     lis.forEach((el, i) => {
       const f = el.dataset.file;
@@ -327,11 +312,6 @@ async function renderFileList(){
         await saveIndex();
       });
     }
-
-    const clientPath = `client/${clid}/${it.file}`;
-    const legacyPath = `prompt/${clid}/${it.file}`;
-    const template   = templateFromFilename(it.file, beh);
-    // state check skipped in list to avoid noise
 
     li.addEventListener("click", async (e)=>{
       if (e.target.closest("button")) return; // handled by buttons
