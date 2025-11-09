@@ -1,8 +1,7 @@
-/* ===== Prompt Studio – logic (with index & add/remove) ===== */
+/* ===== Prompt Studio – logic ===== */
 const DEV_API  = "https://func-texel-api-dev-jpe-001-b2f6fec8fzcbdrc3.japaneast-01.azurewebsites.net/api/";
 const PROD_API = "https://func-texel-api-prod-jpe-001-dsgfhtafbfbxawdz.japaneast-01.azurewebsites.net/api/";
 
-/* kind ⇔ filename */
 const KIND_TO_NAME = {
   "suumo-catch":   "texel-suumo-catch.json",
   "suumo-comment": "texel-suumo-comment.json",
@@ -12,9 +11,9 @@ const KIND_TO_NAME = {
   "athome-comment":"texel-athome-comment.json",
 };
 const FAMILY = {
-  "BASE":   new Set(["roomphoto","suumo-catch","suumo-comment","suggestion","athome-appeal","athome-comment"]),
-  "TYPE-R": new Set(["roomphoto","suumo-catch","suumo-comment","suggestion","athome-appeal","athome-comment"]),
-  "TYPE-S": new Set(["roomphoto","suumo-catch","suumo-comment","suggestion"])
+  "BASE":   new Set(["suumo-catch","suumo-comment","roomphoto","suggestion","athome-appeal","athome-comment"]),
+  "TYPE-R": new Set(["suumo-catch","suumo-comment","roomphoto","suggestion","athome-appeal","athome-comment"]),
+  "TYPE-S": new Set(["suumo-catch","suumo-comment","roomphoto","suggestion"])
 };
 
 const els = {
@@ -37,115 +36,132 @@ const els = {
   diffLeft:  document.getElementById("diffLeft"),
   diffRight: document.getElementById("diffRight"),
   status:    document.getElementById("statusMessage"),
-  btnAdd:    document.getElementById("btnAdd"),
 };
 
-let currentEtag = null;
-let templateText = "";
-let dirty = false;
+let currentKind = null;
 
 /* ---------- Prompt Index (order & display name) ---------- */
-let promptIndex = null;      // {version, clientId, behavior, updatedAt, items:[{file,name,order,hidden,lock?}]}
-let promptIndexPath = null;
-let promptIndexEtag = null;
+let promptIndex = null;      // {version, clientId, behavior, updatedAt, items:[{file,name,order,hidden}]}
+let promptIndexPath = null;  // BLOB path
+let promptIndexEtag = null;  // ETag
 
-function indexClientPath(clientId){ return `client/${clientId}/prompt-index.json`; }
+function indexBehaviorPath(clientId, behavior){
+  return `client/${clientId}/${behavior}/prompt-index.json`;
+}
+function indexClientPath(clientId){
+  return `client/${clientId}/prompt-index.json`;
+}
 function prettifyNameFromFile(filename){
-  return filename.replace(/\.json$/i,'').replace(/^texel[-_]?/i,'').replace(/[-_]+/g,' ').replace(/\b\w/g, s=>s.toUpperCase());
+  return filename.replace(/\.json$/i,'')
+                 .replace(/^texel[-_]?/i,'')
+                 .replace(/[-_]+/g,' ')
+                 .replace(/\b\w/g, s=>s.toUpperCase());
 }
-function join(base, path){ return (base||"").replace(/\/+$/,"") + "/" + String(path||"").replace(/^\/+/, ""); }
 
-async function apiLoadText(filename){
-  const r = await fetch(join(els.apiBase.value,"LoadPromptText"),{
-    method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify({ filename })
-  }).catch(()=>null);
-  if (!r || !r.ok) return null;
-  const j = await r.json().catch(()=>null);
-  let data = null;
-  const t = j?.text ?? j?.prompt ?? null;
-  if (typeof t === "string"){ try{ data = JSON.parse(t) }catch{ data = t } }
-  else if (j?.prompt) data = j;
-  return { etag: j?.etag ?? null, data };
+// load if exists
+async function tryLoad(path){
+  try{
+    const r = await fetch(join(els.apiBase.value, "LoadPromptText"), {
+      method:"POST",
+      headers:{ "Content-Type":"application/json; charset=utf-8" },
+      body: JSON.stringify({ filename: path })
+    });
+    if (!r.ok) return null;
+    const json = await r.json();
+    const dataText = json && typeof json.text === 'string' ? json.text : (typeof json.prompt === 'string' ? json.prompt : null);
+    let data = null;
+    if (dataText){ try{ data = JSON.parse(dataText); }catch{ data = dataText; } }
+    if (!data && json && typeof json.prompt === 'object') data = json;
+    return { etag: json?.etag ?? null, data };
+  }catch{ return null; }
 }
-async function apiSaveText(filename, payload, etag){
-  const body = { filename, prompt: typeof payload==="string"? payload : JSON.stringify(payload,null,2) };
-  if (etag) body.etag = etag;
-  const r = await fetch(join(els.apiBase.value,"SavePromptText"),{
-    method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify(body)
+
+// Save index json via SavePromptText
+async function saveIndex(path, idx, etag){
+  const payload = { filename: path, prompt: JSON.stringify(idx, null, 2) };
+  if (etag) payload.etag = etag;
+  const r = await fetch(join(els.apiBase.value, "SavePromptText"), {
+    method:"POST",
+    headers:{ "Content-Type":"application/json; charset=utf-8" },
+    body: JSON.stringify(payload)
   });
   const raw = await r.text(); let j={}; try{ j = raw?JSON.parse(raw):{} }catch{}
   if (!r.ok) throw new Error(j?.error || raw || `HTTP ${r.status}`);
+  promptIndexEtag = j?.etag || promptIndexEtag || null;
   return j;
 }
 
-function normalizeIndex(x){
+// ensure index exists (client-root preferred), else auto-generate
+function normalizeIndex(obj){
   try{
-    if (!x) return null;
-    if (x.items) return x;
-    if (x.prompt?.items) return x.prompt;
-    if (typeof x === "string"){ const p=JSON.parse(x); return p.items? p : (p.prompt?.items? p.prompt : null); }
+    if (!obj) return null;
+    if (obj.items && Array.isArray(obj.items)) return obj;
+    if (obj.prompt && obj.prompt.items) return obj.prompt;
+    // Some endpoints may return stringified index
+    if (typeof obj === "string"){
+      const parsed = JSON.parse(obj);
+      if (parsed.items) return parsed;
+      if (parsed.prompt && parsed.prompt.items) return parsed.prompt;
+    }
   }catch{}
   return null;
 }
 
 async function ensurePromptIndex(clientId, behavior){
   const path = indexClientPath(clientId);
-  const r = await apiLoadText(path);
-  if (r){
-    const idx = normalizeIndex(r.data);
-    if (idx){ promptIndex=idx; promptIndexPath=path; promptIndexEtag=r.etag||null; return promptIndex; }
+  const res = await tryLoad(path);
+  if (res && res.data){
+    const n = normalizeIndex(res.data);
+    if (n){
+      promptIndex = n;
+      promptIndexPath = path;
+      promptIndexEtag = res.etag || null;
+      return promptIndex;
+    }
   }
-  // auto-generate: roomphoto locked at top
-  const kinds = [...FAMILY[behavior]];
-  const items = [];
-  let order = 10;
-  for (const k of kinds){
+  // auto-generate from behavior kinds
+  const kinds = Object.keys(KIND_TO_NAME).filter(k=>FAMILY[behavior].has(k));
+  const items = kinds.map((k,i)=>{
     const file = KIND_TO_NAME[k];
-    const isRoom = (k==="roomphoto");
-    items.push({
-      file,
-      name: isRoom ? "画像分析プロンプト" : prettifyNameFromFile(file),
-      order: order, hidden:false, lock: isRoom
-    });
-    order += 10;
-  }
+    return { file, name: prettifyNameFromFile(file), order: (i+1)*10, hidden:false };
+  });
   promptIndex = { version:1, clientId, behavior, updatedAt:new Date().toISOString(), items };
-  promptIndexPath = path; promptIndexEtag=null;
-  await apiSaveText(promptIndexPath, promptIndex, null);
+  promptIndexPath = path;
+  promptIndexEtag = null;
+  await saveIndex(promptIndexPath, promptIndex, null);
   return promptIndex;
 }
 
-async function saveIndex(){
+
+// Rename an item and save index
+async function renameIndexItem(file, newName){
   if (!promptIndex) return;
+  const it = promptIndex.items.find(x=>x.file===file);
+  if (!it) return;
+  it.name = newName || it.name;
   promptIndex.updatedAt = new Date().toISOString();
-  const res = await apiSaveText(promptIndexPath, promptIndex, promptIndexEtag);
-  promptIndexEtag = res?.etag || promptIndexEtag || null;
+  await saveIndex(promptIndexPath, promptIndex, promptIndexEtag);
 }
 
-async function renameIndexItem(file, newName){
-  const it = promptIndex.items.find(x=>x.file===file);
-  if (!it || it.lock) return;
-  it.name = newName || it.name;
-  await saveIndex();
+// Update orders from current DOM list and save
+async function saveOrderFromDOM(){
+  if (!promptIndex) return;
+  const lis = [...els.fileList.querySelectorAll('.fileitem')];
+  lis.forEach((el, i) => {
+    const f = el.dataset.file;
+    const it = promptIndex.items.find(x=>x.file===f);
+    if (it) it.order = (i+1)*10;
+  });
+  promptIndex.updatedAt = new Date().toISOString();
+  await saveIndex(promptIndexPath, promptIndex, promptIndexEtag);
 }
-async function deleteIndexItem(file){
-  const i = promptIndex.items.findIndex(x=>x.file===file);
-  if (i<0 || promptIndex.items[i].lock) return;
-  promptIndex.items.splice(i,1);
-  // 再採番
-  promptIndex.items.sort((a,b)=>(a.order??0)-(b.order??0)).forEach((x,i)=>x.order=(i+1)*10);
-  await saveIndex();
-}
-async function addIndexItem(fileName, displayName){
-  // sanitize
-  let file = fileName.trim();
-  if (!file.endsWith(".json")) file = file + ".json";
-  if (!file.startsWith("texel-")) file = "texel-" + file;
-  if (promptIndex.items.some(x=>x.file===file)) throw new Error("同名ファイルが既に存在します。");
-  const maxOrder = Math.max(0, ...promptIndex.items.map(x=>x.order||0));
-  promptIndex.items.push({ file, name: displayName?.trim()||prettifyNameFromFile(file), order:maxOrder+10, hidden:false });
-  await saveIndex();
-}
+
+
+let currentFilenameTarget = null;
+let currentEtag = null;
+let templateText = "";
+let loadedParams = {};
+let dirty = false;
 
 /* ---------- Tabs ---------- */
 function showTab(which){
@@ -220,38 +236,13 @@ function boot(){
   });
 
   els.promptEditor.addEventListener("input", markDirty);
-
-  els.btnAdd.addEventListener("click", async ()=>{
-    const fname = prompt("新しいプロンプトのファイル名（texel-*.jsonの*部分。拡張子不要）","custom");
-    if (!fname) return;
-    const dname = prompt("表示名（未入力なら自動生成）","");
-    try{
-      await ensurePromptIndex(els.clientId.value.trim().toUpperCase(), els.behavior.value.toUpperCase());
-      await addIndexItem(fname, dname);
-      await renderFileList();
-    }catch(e){ alert("追加に失敗: "+e.message); }
-  });
 }
 function markDirty(){ dirty = true; }
 function clearDirty(){ dirty = false; }
 window.addEventListener("beforeunload", (e)=>{ if (!dirty) return; e.preventDefault(); e.returnValue=""; });
 
 /* ---------- File List ---------- */
-function templateFromFilename(filename, behavior){
-  if (behavior === "TYPE-R") return filename.replace(/^texel-/, "texel-r-");
-  if (behavior === "TYPE-S") return filename.replace(/^texel-/, "texel-s-");
-  return filename;
-}
 
-async function tryLoad(filename){
-  const url = join(els.apiBase.value, "LoadPromptText") + `?filename=${encodeURIComponent(filename)}`;
-  const res = await fetch(url, { cache: "no-store" }).catch(()=>null);
-  if (!res || !res.ok) return null;
-  const etag = res.headers.get("etag") || null;
-  let data = {};
-  try { data = await res.json(); } catch { data = {}; }
-  return { data, etag };
-}
 
 async function renderFileList(){
   els.fileList.innerHTML = "";
@@ -260,11 +251,14 @@ async function renderFileList(){
 
   await ensurePromptIndex(clid, beh);
 
-  const rows = [...promptIndex.items]
+  const kinds = Object.keys(KIND_TO_NAME).filter(k=>FAMILY[beh].has(k));
+  const allowedFiles = new Set(kinds.map(k=>KIND_TO_NAME[k]));
+
+  const rows = [...((promptIndex && Array.isArray(promptIndex.items) ? promptIndex.items : []))]
     .filter(it => !it.hidden)
     .sort((a,b)=>(a.order??0)-(b.order??0));
 
-  // drag sort
+  // enable drag sort events on container
   els.fileList.addEventListener('dragover', (e)=>{
     e.preventDefault();
     const dragging = document.querySelector('.fileitem.dragging');
@@ -272,65 +266,64 @@ async function renderFileList(){
     if (!after) els.fileList.appendChild(dragging);
     else els.fileList.insertBefore(dragging, after);
   });
-  els.fileList.addEventListener('drop', async ()=>{
-    const lis = [...els.fileList.querySelectorAll('.fileitem')];
-    lis.forEach((el, i) => {
-      const f = el.dataset.file;
-      const it = promptIndex.items.find(x=>x.file===f);
-      if (it) it.order = (i+1)*10;
-    });
-    await saveIndex();
-  });
+  els.fileList.addEventListener('drop', async ()=>{ await saveOrderFromDOM(); });
 
   for (const it of rows){
     const name = it.name || prettifyNameFromFile(it.file);
     const li = document.createElement("div");
-    li.className = "fileitem" + (it.lock? " locked": "");
+    li.className = "fileitem";
     li.dataset.file = it.file;
-    li.draggable = !it.lock;
-
-    const lockIcon = it.lock ? `<span class="lock">🔒</span>` : "";
-
+    li.draggable = true;
     li.innerHTML = `<span class="drag">≡</span>
-                    <div class="name" title="${it.file}">${lockIcon}${name}</div>
+                    <div class="name" title="${it.file}">${name}</div>
                     <div class="meta">
-                      ${it.lock? "" : '<button class="rename" title="名称を変更">✎</button>'}
-                      ${it.lock? "" : '<button class="delete" title="削除">🗑</button>'}
+                      <button class="rename" title="名称を変更">✎</button>
+                      <span class="chip">checking…</span>
                     </div>`;
     els.fileList.appendChild(li);
 
-    if (!it.lock){
-      li.addEventListener('dragstart', ()=> li.classList.add('dragging'));
-      li.addEventListener('dragend', async ()=>{
-        li.classList.remove('dragging');
-        const lis = [...els.fileList.querySelectorAll('.fileitem')];
-        lis.forEach((el, i) => {
-          const f = el.dataset.file;
-          const it2 = promptIndex.items.find(x=>x.file===f);
-          if (it2) it2.order = (i+1)*10;
-        });
-        await saveIndex();
-      });
-    }
-
-    li.addEventListener("click", async (e)=>{
-      if (e.target.closest("button")) return; // handled by buttons
-      await openByFilename(it.file);
+    li.addEventListener('dragstart', ()=> li.classList.add('dragging'));
+    li.addEventListener('dragend', async ()=>{
+      li.classList.remove('dragging');
+      await saveOrderFromDOM();
     });
 
-    if (!it.lock){
-      li.querySelector(".rename").addEventListener("click", async (e)=>{
-        e.preventDefault(); e.stopPropagation();
-        const nv = prompt("表示名の変更", name);
-        if (nv!=null){ await renameIndexItem(it.file, nv.trim()); await renderFileList(); }
+    const clientPath = `client/${clid}/${it.file}`;
+    const legacyPath = `prompt/${clid}/${it.file}`;
+    const template   = templateFromFilename(it.file, beh);
+    const state = await resolveState([clientPath, legacyPath], template);
+    const chip  = li.querySelector(".chip");
+    if (state === "client") { chip.textContent = "Overridden"; chip.classList.add("ok"); }
+    else if (state === "legacy"){ chip.textContent = "Overridden (legacy)"; chip.classList.add("ok"); }
+    else if (state === "template"){ chip.textContent = "Template"; chip.classList.add("info"); }
+    else { chip.textContent = "Missing"; chip.classList.add("warn"); }
+
+    li.addEventListener("click", (e)=>{ if (!e.target.classList.contains("rename") && !e.target.classList.contains("drag")) openItem(it); });
+
+    li.querySelector(".rename").addEventListener("click", (e)=>{
+      e.preventDefault(); e.stopPropagation();
+      const nameDiv = li.querySelector(".name");
+      const current = nameDiv.textContent;
+      nameDiv.classList.add("editing");
+      nameDiv.innerHTML = `<input value="${current}" aria-label="name">`;
+      const input = nameDiv.querySelector("input");
+      const finish = async (commit)=>{
+        nameDiv.classList.remove("editing");
+        if (commit){
+          const nv = input.value.trim() || current;
+          nameDiv.textContent = nv;
+          await renameIndexItem(it.file, nv);
+        } else {
+          nameDiv.textContent = current;
+        }
+      };
+      input.addEventListener("keydown", (ev)=>{
+        if (ev.key==="Enter") finish(true);
+        else if (ev.key==="Escape") finish(false);
       });
-      li.querySelector(".delete").addEventListener("click", async (e)=>{
-        e.preventDefault(); e.stopPropagation();
-        if (!confirm(`「${name}」を一覧から削除します。ファイル自体は削除されません。よろしいですか？`)) return;
-        await deleteIndexItem(it.file);
-        await renderFileList();
-      });
-    }
+      input.addEventListener("blur", ()=>finish(true));
+      input.focus(); input.select();
+    });
   }
 }
 
@@ -343,34 +336,67 @@ function getDragAfterElement(container, y){
   }, { offset: Number.NEGATIVE_INFINITY }).element;
 }
 
-/* ---------- Open / Save ---------- */
-async function openByFilename(filename){
+
+function behaviorTemplatePath(beh, kind){
+  const base = KIND_TO_NAME[kind];
+  if (beh === "TYPE-R") return base.replace("texel-", "texel-r-");
+  if (beh === "TYPE-S") return base.replace("texel-", "texel-s-");
+  return base;
+}
+
+/* ---------- Load ---------- */
+async function tryLoad(filename){
+  const url = join(els.apiBase.value, "LoadPromptText") + `?filename=${encodeURIComponent(filename)}`;
+  const res = await fetch(url, { cache: "no-store" }).catch(()=>null);
+  if (!res || !res.ok) return null;
+  const etag = res.headers.get("etag") || null;
+  let data = {};
+  try { data = await res.json(); } catch { data = {}; }
+  return { data, etag };
+}
+async function resolveState(clientCandidates, templatePath){
+  for (const c of clientCandidates){
+    const r = await tryLoad(c);
+    if (r) return c.includes("/prompt/") ? "legacy" : "client";
+  }
+  if (await tryLoad(templatePath)) return "template";
+  return "missing";
+}
+
+
+async function openItem(it){
   if (dirty && !confirm("未保存の変更があります。破棄して読み込みますか？")) return;
 
   els.diffPanel.hidden = true;
-  [...els.fileList.children].forEach(n=>n.classList.toggle("active", n.dataset.file===filename));
+  [...els.fileList.children].forEach(n=>n.classList.toggle("active", n.dataset.file===it.file));
   setStatus("読込中…","orange");
 
   const clid = els.clientId.value.trim().toUpperCase();
   const beh  = els.behavior.value.toUpperCase();
+  const name = it.file;
 
-  const clientTarget = `client/${clid}/${filename}`;
-  document.getElementById("fileTitle").textContent = clientTarget;
+  currentFilenameTarget = `client/${clid}/${name}`;
+  document.getElementById("fileTitle").textContent = currentFilenameTarget;
 
-  const candidates = [ clientTarget, `prompt/${clid}/${filename}`, templateFromFilename(filename, beh) ];
+  const candidates = [
+    `client/${clid}/${name}`,
+    `prompt/${clid}/${name}`,
+    templateFromFilename(name, beh)
+  ];
 
   let loaded = null, used = null;
   for (const f of candidates){
     const r = await tryLoad(f);
     if (r) { loaded = r; used = f; break; }
   }
-  const templ = await tryLoad(templateFromFilename(filename, beh));
+  const templ = await tryLoad(templateFromFilename(name, beh));
   templateText = templ ? JSON.stringify(templ.data, null, 2) : "";
 
   if (!loaded){
     currentEtag = null;
     els.promptEditor.value = "";
-    writeParamUI({});
+    loadedParams = {};
+    writeParamUI(loadedParams);
     setBadges("Missing（新規）", null);
     setStatus("新規作成できます。右上の保存で client 配下に作成します。");
     clearDirty();
@@ -385,7 +411,68 @@ async function openByFilename(filename){
   else promptText = JSON.stringify(d, null, 2);
 
   els.promptEditor.value = promptText;
-  writeParamUI(d.params || {});
+  loadedParams = d.params || {};
+  writeParamUI(loadedParams);
+
+  currentEtag = (used.startsWith("client/") || used.startsWith("prompt/")) ? loaded.etag : null;
+
+  if (used.startsWith("client/")) setBadges("Overridden", currentEtag, "ok");
+  else if (used.startsWith("prompt/")) setBadges("Overridden (legacy)", currentEtag, "ok");
+  else setBadges("Template（未上書き）", loaded.etag || "—", "info");
+
+  setStatus("読み込み完了","green");
+  clearDirty();
+}
+async function openKind(kind){
+  if (dirty && !confirm("未保存の変更があります。破棄して読み込みますか？")) return;
+
+  currentKind = kind;
+  els.diffPanel.hidden = true;
+  [...els.fileList.children].forEach(n=>n.classList.toggle("active", n.dataset.kind===kind));
+  setStatus("読込中…","orange");
+
+  const clid = els.clientId.value.trim().toUpperCase();
+  const beh  = els.behavior.value.toUpperCase();
+  const name = KIND_TO_NAME[kind];
+
+  currentFilenameTarget = `client/${clid}/${name}`;
+  document.getElementById("fileTitle").textContent = currentFilenameTarget;
+
+  const candidates = [
+    `client/${clid}/${name}`,
+    `prompt/${clid}/${name}`,
+    behaviorTemplatePath(beh, kind)
+  ];
+
+  let loaded = null, used = null;
+  for (const f of candidates){
+    const r = await tryLoad(f);
+    if (r) { loaded = r; used = f; break; }
+  }
+  const templ = await tryLoad(behaviorTemplatePath(beh, kind));
+  templateText = templ ? JSON.stringify(templ.data, null, 2) : "";
+
+  if (!loaded){
+    currentEtag = null;
+    els.promptEditor.value = "";
+    loadedParams = {};
+    writeParamUI(loadedParams);
+    setBadges("Missing（新規）", null);
+    setStatus("新規作成できます。右上の保存で client 配下に作成します。");
+    clearDirty();
+    return;
+  }
+
+  const d = loaded.data || {};
+  let promptText = "";
+  if (typeof d.prompt === "string") promptText = d.prompt;
+  else if (d.prompt && typeof d.prompt.text === "string") promptText = d.prompt.text;
+  else if (typeof d === "string") promptText = d;
+  else promptText = JSON.stringify(d, null, 2);
+
+  els.promptEditor.value = promptText;
+  loadedParams = d.params || {};
+  writeParamUI(loadedParams);
 
   currentEtag = (used.startsWith("client/") || used.startsWith("prompt/")) ? loaded.etag : null;
 
@@ -397,20 +484,29 @@ async function openByFilename(filename){
   clearDirty();
 }
 
+/* ---------- Save ---------- */
 els.btnSave.addEventListener("click", saveCurrent);
 async function saveCurrent(){
-  const title = document.getElementById("fileTitle").textContent;
-  if (!title || title==="未選択") return;
-  const filename = title;
+  if (!currentFilenameTarget) return;
   const prompt = els.promptEditor.value;
   const params = readParamUI();
+  const body = { filename: currentFilenameTarget, prompt, params, etag: currentEtag || undefined };
+
   setStatus("保存中…","orange");
   try{
-    const res = await apiSaveText(filename, { prompt, params }, currentEtag || undefined);
-    currentEtag = res?.etag || currentEtag || null;
+    const r = await fetch(join(els.apiBase.value, "SavePromptText"), {
+      method:"POST",
+      headers:{ "Content-Type":"application/json; charset=utf-8" },
+      body: JSON.stringify(body)
+    });
+    const raw = await r.text(); let json={}; try{ json = raw?JSON.parse(raw):{} }catch{}
+    if (!r.ok) throw new Error(json?.error || raw || `HTTP ${r.status}`);
+
+    currentEtag = json?.etag || currentEtag || null;
     setBadges("Overridden", currentEtag, "ok");
     setStatus("保存完了","green");
     clearDirty();
+    renderFileList();
   }catch(e){
     setStatus("保存失敗: " + e.message, "red");
     if (String(e).includes("412")) alert("他の人が更新しました。再読み込みしてから保存してください。");
@@ -431,3 +527,116 @@ function setBadges(stateText, etag, mode){
   els.badgeState.className = "chip " + (mode||"");
   els.badgeEtag.textContent = etag || "—";
 }
+function join(base, path){ return (base||"").replace(/\/+$/,"") + "/" + String(path||"").replace(/^\/+/,""); }
+
+function templateFromFilename(filename, behavior){
+  if (behavior === "TYPE-R") return filename.replace(/^texel-/, "texel-r-");
+  if (behavior === "TYPE-S") return filename.replace(/^texel-/, "texel-s-");
+  return filename;
+}
+
+
+/* === Add Prompt (+追加) unified handler (safe append) ===================== */
+(function(){
+  if (window.__addPromptPatched) return; window.__addPromptPatched = true;
+
+  function findAddButton(){
+    // Try common selectors
+    let btn = document.querySelector('#btnAdd, [data-action="add-prompt"], .js-add-prompt');
+    if (btn) return btn;
+    // Fallback: scan buttons that contain '追加'
+    const candidates = Array.from(document.querySelectorAll('button, .button, .btn'));
+    return candidates.find(el => (el.textContent || '').replace(/\s/g,'').includes('追加')) || null;
+  }
+
+  function timestampId(){
+    const d = new Date();
+    const pad = n => String(n).padStart(2,'0');
+    return `${d.getFullYear()}${pad(d.getMonth()+1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
+  }
+  function sanitizeFileBase(s){
+    return (s||'').toLowerCase().replace(/[^\w\-]+/g,'-').replace(/\-+/g,'-').replace(/^\-|\-$/g,'');
+  }
+
+  async function ensurePromptIndexLoaded(){
+    if (window.state?.promptIndex?.prompts) return;
+    if (typeof window.loadPromptIndex === 'function'){
+      const idx = await window.loadPromptIndex(window.state.clientCode, window.state.behavior);
+      if (!idx || !Array.isArray(idx.prompts)) {
+        window.state.promptIndex = {version:1, client: window.state.clientCode, behavior: window.state.behavior, prompts:[], params:{}};
+      } else {
+        window.state.promptIndex = idx;
+      }
+      return;
+    }
+    // If there's a custom loader elsewhere, leave it; otherwise create empty.
+    if (!window.state) window.state = {};
+    if (!window.state.promptIndex) window.state.promptIndex = {version:1, client: window.state.clientCode, behavior: window.state.behavior, prompts:[], params:{}};
+  }
+
+  function ensureRoomPhotoPinned(){
+    const idx = window.state.promptIndex;
+    const fixedFile = 'texel-roomphoto.json';
+    const fixedName = '画像分析プロンプト';
+    let rp = idx.prompts.find(p => p.file === fixedFile);
+    if (!rp){
+      idx.prompts.unshift({ file: fixedFile, name: fixedName, order: 0, hidden: false, locked: true });
+    }else{
+      rp.name = fixedName; rp.locked = true; rp.order = 0;
+    }
+    idx.prompts.sort((a,b)=> (b.locked?1:0)-(a.locked?1:0) || a.order-b.order)
+      .forEach((p,i)=> p.order = i*10);
+  }
+
+  async function onAdd(){
+    try{
+      await ensurePromptIndexLoaded();
+      ensureRoomPhotoPinned();
+
+      const name = prompt('新しいプロンプトの表示名', 'おすすめ');
+      if (name === null) return;
+      const base = sanitizeFileBase(name || 'prompt');
+      const file = `${base}-${timestampId()}.json`;
+
+      const idx = window.state.promptIndex;
+      const insertAt = Math.min(1, idx.prompts.length);
+      const nextOrder = (idx.prompts.at(-1)?.order ?? 0) + 10;
+      idx.prompts.splice(insertAt, 0, { file, name: name || '新しいプロンプト', order: nextOrder, hidden: false });
+
+      if (typeof window.savePromptIndex === 'function'){
+        await window.savePromptIndex(window.state.clientCode, window.state.behavior, idx);
+      }
+
+      const template = [
+        'あなたは不動産向けのプロンプトです。',
+        '（ここにルールや出力形式を書いてください）'
+      ].join('\\n');
+      if (typeof window.savePromptText === 'function'){
+        await window.savePromptText(window.state.clientCode, file, template, { behavior: window.state.behavior });
+      }
+
+      if (typeof window.renderFileList === 'function') window.renderFileList();
+      if (typeof window.selectFileInList === 'function') window.selectFileInList(file);
+      if (typeof window.showToast === 'function') window.showToast('新しいプロンプトを追加しました');
+    }catch(e){
+      console.error(e);
+      if (typeof window.showError === 'function') window.showError('追加に失敗しました：'+(e?.message||e));
+    }
+  }
+
+  function wire(){
+    const btn = findAddButton();
+    if (btn && !btn.__wiredAdd){
+      btn.__wiredAdd = true;
+      btn.id ||= 'btnAdd';
+      btn.addEventListener('click', onAdd);
+    }
+  }
+
+  if (document.readyState === 'loading'){
+    document.addEventListener('DOMContentLoaded', wire);
+  } else {
+    wire();
+  }
+})();
+/* === / Add Prompt handler ================================================ */
