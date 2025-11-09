@@ -58,3 +58,48 @@
 .diff-head{padding:8px 12px;color:var(--muted);font-size:12px}
 .diff-cols{display:grid;grid-template-columns:1fr 1fr;gap:8px;padding:8px}
 .diff-cols textarea{height:260px}
+
+/* ==== Prompt list layout fix ==== */
+.ps-sidebar-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* 1行レイアウトを強制（ロック含む全項目） */
+.ps-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: #fff;
+  border: 1px solid var(--tx-border, #e6e6e6);
+  box-shadow: 0 1px 0 rgba(0,0,0,.02);
+}
+
+/* 文字が縦に崩れない対策（日本語） */
+.ps-item .ps-name {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  word-break: keep-all;
+}
+
+/* 並べ替えハンドル・操作ボタン */
+.ps-item .ps-drag { cursor: grab; opacity: .85; }
+.ps-item .ps-actions { display: flex; gap: 6px; }
+
+/* 🔒ロック行（画像分析プロンプト）はドラッグ不可・編集/削除を隠す */
+.ps-item.is-locked .ps-drag { opacity: .35; pointer-events: none; }
+.ps-item.is-locked .ps-actions { display: none; }
+/* 視認用アイコン（必要なら残す） */
+.ps-item.is-locked .ps-name::before { content: "🔒"; margin-right: 6px; }
+
+/* 旧スタイルが残っていたときの保険：縦書き/縦折返しを打ち消す */
+.ps-item, .ps-item * {
+  writing-mode: horizontal-tb !important;
+  text-orientation: mixed !important;
+}
