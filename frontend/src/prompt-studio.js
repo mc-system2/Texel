@@ -22,36 +22,21 @@ const els = {
 
 function join(base, path){ return base.replace(/\/+$/,'') + '/' + path.replace(/^\/+/,''); }
 
-// ===== API Base guard =====
+// ===== API Base (lenient) =====
 function resolveApiBase(){
   const u = new URL(location.href);
   const q = u.searchParams.get("api");
   if (q){ els.apiBase.value = q; localStorage.setItem("apiBase", q); }
-  else if (localStorage.getItem("apiBase")) els.apiBase.value = localStorage.getItem("apiBase");
-  els.apiBase.addEventListener("input", ()=>{
-    localStorage.setItem("apiBase", els.apiBase.value.trim());
-    updateApiWarn();
-  });
-  updateApiWarn();
-}
-function apiBaseOk(){
-  const v = (els.apiBase.value||"").trim();
-  return v && !v.includes("...");
-}
-function updateApiWarn(){
-  els.apiWarn.style.display = apiBaseOk() ? "none" : "inline-block";
+  else if (localStorage.getItem("apiBase")) { els.apiBase.value = localStorage.getItem("apiBase"); }
+  // 既定の input 値を尊重（ここでは何もしない）
+  els.apiBase.addEventListener("input", ()=> localStorage.setItem("apiBase", els.apiBase.value.trim()));
 }
 async function postJSON(url, body){
-  if (!apiBaseOk()) throw new Error("API Base 未設定");
-  const r = await fetch(url, {
-    method:"POST", headers:{ "Content-Type":"application/json; charset=utf-8" },
-    body: JSON.stringify(body||{})
-  });
+  const r = await fetch(url, { method:"POST", headers:{ "Content-Type":"application/json; charset=utf-8" }, body: JSON.stringify(body||{}) });
   if (!r.ok) throw new Error(await r.text()||`HTTP ${r.status}`);
   return r;
 }
-
-async function tryLoad(filename){
+async function tryLoadasync function tryLoad(filename){
   try{
     const r = await postJSON(join(els.apiBase.value, "LoadPromptText"), { filename });
     const j = await r.json().catch(()=>null);
@@ -386,7 +371,7 @@ async function boot(){
 
   const clid = els.clientId.value.trim().toUpperCase();
   const beh  = els.behavior.value.toUpperCase();
-  if (!apiBaseOk()){ setStatus("API Base を設定してください"); return; }
+  
   await ensurePromptIndex(clid, beh);
   await renderFileList();
   setStatus("準備完了");

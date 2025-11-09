@@ -13,25 +13,21 @@ const els = {
 
 function join(base, path){ return base.replace(/\/+$/,'') + '/' + path.replace(/^\/+/,''); }
 
-// ===== API Base guard =====
+// ===== API Base (lenient) =====
 function resolveApiBase(){
   const u = new URL(location.href);
   const q = u.searchParams.get("api");
   if (q){ els.apiBase.value = q; localStorage.setItem("apiBase", q); }
-  else if (localStorage.getItem("apiBase")) els.apiBase.value = localStorage.getItem("apiBase");
+  else if (localStorage.getItem("apiBase")) { els.apiBase.value = localStorage.getItem("apiBase"); }
+  // 既定の input 値を尊重（ここでは何もしない）
   els.apiBase.addEventListener("input", ()=> localStorage.setItem("apiBase", els.apiBase.value.trim()));
 }
-function apiBaseOk(){
-  const v = (els.apiBase.value||"").trim();
-  return v && !v.includes("...");
-}
 async function postJSON(url, body){
-  if (!apiBaseOk()) throw new Error("API Base 未設定");
   const r = await fetch(url, { method:"POST", headers:{ "Content-Type":"application/json; charset=utf-8" }, body: JSON.stringify(body||{}) });
   if (!r.ok) throw new Error(await r.text()||`HTTP ${r.status}`);
   return r;
 }
-function setStatus(s){ els.status.textContent = s; }
+function setStatusfunction setStatus(s){ els.status.textContent = s; }
 
 let clients = [];           // [{ code, name, behavior }]
 let previousCodes = new Set();
@@ -74,7 +70,7 @@ async function loadCatalog(){
 }
 
 async function saveCatalog(){
-  if (!apiBaseOk()){ setStatus("API Base を設定してください"); return; }
+  
   setStatus("保存中…");
   const payload = { clients };
   const text = JSON.stringify(payload, null, 2);
