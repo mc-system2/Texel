@@ -645,6 +645,7 @@ function templateFromFilename(filename, behavior){
   promptIndex = normalizeIndex(res?.data) || { version:1, clientId: clid, behavior: (els.behavior.value||'BASE'), items:[], params:{} };
 }
 
+})();
 /* === / Add Prompt handler ================================================ */
 
 
