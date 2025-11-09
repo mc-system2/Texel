@@ -120,12 +120,11 @@ async function ensurePromptIndex(clientId, behavior){
     }
   }
   // auto-generate from behavior kinds
-  const kinds = Object.keys(KIND_TO_NAME).filter(k=>FAMILY[behavior].has(k));
-  const items = kinds.map((k,i)=>{
-    const file = KIND_TO_NAME[k];
-    return { file, name: prettifyNameFromFile(file), order: (i+1)*10, hidden:false };
-  });
-  promptIndex = { version:1, clientId, behavior, updatedAt:new Date().toISOString(), items };
+  // 初期は roomphoto のみ固定で生成
+  const items = [
+    { file: "texel-roomphoto.json", name: "画像分析プロンプト", order: 10, hidden:false, fixed:true }
+  ];
+  promptIndex = { version:1, clientId, behavior, updatedAt:new Date().toISOString(), items, params:{} };
   promptIndexPath = path;
   promptIndexEtag = null;
   await saveIndex(promptIndexPath, promptIndex, null);
@@ -254,9 +253,15 @@ async function renderFileList(){
   const kinds = Object.keys(KIND_TO_NAME).filter(k=>FAMILY[beh].has(k));
   const allowedFiles = new Set(kinds.map(k=>KIND_TO_NAME[k]));
 
-  const rows = [...((promptIndex && Array.isArray(promptIndex.items) ? promptIndex.items : []))]
+  ensureRoomphotoFixed();
+  const list = (promptIndex && Array.isArray(promptIndex.items) ? promptIndex.items : []);
+  const rows = [...list]
     .filter(it => !it.hidden)
-    .sort((a,b)=>(a.order??0)-(b.order??0));
+    .sort((a,b)=>{
+      const af = (a.file==="texel-roomphoto.json"||a.fixed)?-1:0;
+      const bf = (b.file==="texel-roomphoto.json"||b.fixed)?-1:0;
+      if (af!==bf) return af-bf; return (a.order??0)-(b.order??0);
+    });
 
   // enable drag sort events on container
   els.fileList.addEventListener('dragover', (e)=>{
@@ -273,16 +278,16 @@ async function renderFileList(){
     const li = document.createElement("div");
     li.className = "fileitem";
     li.dataset.file = it.file;
-    li.draggable = true;
+    li.draggable = !isFixedItem(it);
     li.innerHTML = `<span class="drag">≡</span>
                     <div class="name" title="${it.file}">${name}</div>
                     <div class="meta">
-                      <button class="rename" title="名称を変更">✎</button>
+                      ${ (it.file==="texel-roomphoto.json"||it.fixed) ? '<span class="lock" title="固定">🔒</span>' : '<button class="dup" title="複製">⧉</button><button class="del" title="削除">🗑</button><button class="rename" title="名称を変更">✎</button>' }
                       <span class="chip">checking…</span>
                     </div>`;
     els.fileList.appendChild(li);
 
-    li.addEventListener('dragstart', ()=> li.classList.add('dragging'));
+    if (!isFixedItem(it)) li.addEventListener('dragstart', ()=> li.classList.add('dragging'));
     li.addEventListener('dragend', async ()=>{
       li.classList.remove('dragging');
       await saveOrderFromDOM();
@@ -298,7 +303,10 @@ async function renderFileList(){
     else if (state === "template"){ chip.textContent = "Template"; chip.classList.add("info"); }
     else { chip.textContent = "Missing"; chip.classList.add("warn"); }
 
-    li.addEventListener("click", (e)=>{ if (!e.target.classList.contains("rename") && !e.target.classList.contains("drag")) openItem(it); });
+    li.addEventListener("click", (e)=>{ if (!e.target.classList.contains("rename") && !e.target.classList.contains("drag") && !e.target.classList.contains('dup') && !e.target.classList.contains('del')) openItem(it); });
+
+    li.querySelector('.dup')?.addEventListener('click', (e)=>{ e.preventDefault(); e.stopPropagation(); duplicatePromptItem(it.file); });
+    li.querySelector('.del')?.addEventListener('click', (e)=>{ e.preventDefault(); e.stopPropagation(); deletePromptItem(it.file); });
 
     li.querySelector(".rename").addEventListener("click", (e)=>{
       e.preventDefault(); e.stopPropagation();
@@ -534,3 +542,104 @@ function templateFromFilename(filename, behavior){
   if (behavior === "TYPE-S") return filename.replace(/^texel-/, "texel-s-");
   return filename;
 }
+
+function ensureRoomphotoFixed(){
+  if (!promptIndex) return;
+  const has = (promptIndex.items||[]).some(it => it.file==="texel-roomphoto.json");
+  if (!has){
+    promptIndex.items = [{ file:"texel-roomphoto.json", name:"画像分析プロンプト", order:10, hidden:false, fixed:true }, ...(promptIndex.items||[])];
+  }else{
+    promptIndex.items = (promptIndex.items||[]).map(it => it.file==="texel-roomphoto.json" ? ({...it, name:"画像分析プロンプト", order:10, hidden:false, fixed:true}) : it);
+  }
+}
+
+async function addPromptItem(){
+  const clid = els.clientId.value.trim().toUpperCase();
+  const beh  = els.behavior.value.toUpperCase();
+  let filename = prompt("内部ファイル名（*.json）を入力してください", "texel-custom.json");
+  if (!filename) return;
+  filename = filename.trim();
+  if (!filename.endsWith(".json")) filename += ".json";
+  if (filename==="texel-roomphoto.json"){ alert("roomphoto は固定のため追加できません。"); return; }
+  if ((promptIndex.items||[]).some(it => it.file===filename)){ alert("同名のファイルが既に存在します。"); return; }
+  const display = prompt("表示名を入力してください", filename.replace(/\.json$/,''));
+  if (display===null) return;
+  const nextOrder = Math.max(10, ...((promptIndex.items||[]).map(it=>it.order||10))) + 10;
+  promptIndex.items.push({ file: filename, name: display||filename, order: nextOrder, hidden:false });
+  promptIndex.updatedAt = new Date().toISOString();
+  await saveIndex(promptIndexPath, promptIndex, promptIndexEtag);
+
+  // テンプレがあればコピー、なければ空雛形を作成
+  const templ = await tryLoad(templateFromFilename(filename, beh));
+  let text = "";
+  if (templ && templ.data){
+    if (typeof templ.data === "string") text = templ.data;
+    else if (typeof templ.data.prompt === "string") text = templ.data.prompt;
+    else text = JSON.stringify(templ.data, null, 2);
+  }else{
+    text = JSON.stringify({ prompt:"", params:{} }, null, 2);
+  }
+  await fetch(join(els.apiBase.value,"SavePromptText"),{
+    method:"POST",
+    headers:{ "Content-Type":"application/json; charset=utf-8" },
+    body: JSON.stringify({ filename:`client/${clid}/${filename}`, prompt:text })
+  });
+  await renderFileList();
+}
+
+async function duplicatePromptItem(file){
+  const clid = els.clientId.value.trim().toUpperCase();
+  const beh  = els.behavior.value.toUpperCase();
+  const base = file.replace(/\.json$/,'');
+  let newFile = base + "-copy.json";
+  let i=2;
+  while ((promptIndex.items||[]).some(it => it.file===newFile)){
+    newFile = `${base}-copy${i++}.json`;
+  }
+  const it = (promptIndex.items||[]).find(x=>x.file===file);
+  const newName = (it?.name||base) + "（コピー）";
+
+  // 既存の内容を取得（client → legacy → template）
+  const candidates = [
+    `client/${clid}/${file}`,
+    `prompt/${clid}/${file}`,
+    templateFromFilename(file, beh)
+  ];
+  let loaded=null;
+  for (const f of candidates){
+    const r = await tryLoad(f);
+    if (r){ loaded = r; break; }
+  }
+  let text = "";
+  if (loaded && loaded.data){
+    if (typeof loaded.data === "string") text = loaded.data;
+    else if (typeof loaded.data.prompt === "string") text = loaded.data.prompt;
+    else text = JSON.stringify(loaded.data, null, 2);
+  }else{
+    text = JSON.stringify({ prompt:"", params:{} }, null, 2);
+  }
+  await fetch(join(els.apiBase.value,"SavePromptText"),{
+    method:"POST",
+    headers:{ "Content-Type":"application/json; charset=utf-8" },
+    body: JSON.stringify({ filename:`client/${clid}/${newFile}`, prompt:text })
+  });
+  const nextOrder = Math.max(10, ...((promptIndex.items||[]).map(it=>it.order||10))) + 10;
+  promptIndex.items.push({ file:newFile, name:newName, order:nextOrder, hidden:false });
+  promptIndex.updatedAt = new Date().toISOString();
+  await saveIndex(promptIndexPath, promptIndex, promptIndexEtag);
+  await renderFileList();
+}
+
+async function deletePromptItem(file){
+  const it = (promptIndex.items||[]).find(x=>x.file===file);
+  if (!it) return;
+  if (it.fixed){ alert("roomphoto は削除できません。"); return; }
+  if (!confirm(`「${it.name||file}」をリストから削除します。よろしいですか？\n（注）ファイル自体の削除は行いません）`)) return;
+  promptIndex.items = (promptIndex.items||[]).filter(x=>x.file!==file);
+  promptIndex.updatedAt = new Date().toISOString();
+  await saveIndex(promptIndexPath, promptIndex, promptIndexEtag);
+  await renderFileList();
+}
+
+// Disable drag/rename for fixed (roomphoto)
+function isFixedItem(it){ return it && (it.file==="texel-roomphoto.json" || it.fixed===true); }

@@ -124,3 +124,8 @@ input[type="range"]{width:100%}
 .fileitem .drag { cursor:grab; user-select:none; opacity:0.6; padding:2px 4px; }
 .fileitem.dragging { opacity:0.6; }
 .fileitem .name { flex:1; min-width:0; }
+
+.fileitem .lock{ opacity:0.6; margin-right:6px; }
+.fileitem .dup, .fileitem .del, .fileitem .rename{ margin-left:6px; }
+.fileitem[draggable="false"] .drag{ opacity:0.2; cursor:not-allowed; }
+#btnAddPrompt{ margin-right:8px; }
