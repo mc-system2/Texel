@@ -251,6 +251,15 @@ function markDirty(){
   }catch(e){}
 }
 
+
+/* --- Hoisted utility: clearDirty (defined before boot) --- */
+function clearDirty(){
+  try{
+    window.__ps_dirty = false;
+    if (els && els.badgeState){ els.badgeState.textContent = ""; }
+  }catch(e){}
+}
+
 /* ---------- Boot ---------- */
 window.addEventListener("DOMContentLoaded", boot);
 function boot(){
@@ -858,6 +867,8 @@ function templateFromFilename(filename, behavior){
         await window.createClientFile(clid, file, "// Prompt template\n");
       }
 
+      // ensure file exists before open
+      if (typeof window.createClientFile === "function"){ await window.createClientFile(clid, file, "// Prompt template\n"); }
       if (typeof renderFileList === "function"){
         await renderFileList(); // regular render（ネット再読込があっても index は保存済みのため反映）
       }
@@ -933,3 +944,33 @@ function templateFromFilename(filename, behavior){
   }
 })();
 // === End Hotfix ==========================================================================
+
+/* --- Guard openItem: avoid crash when clearDirty missing or 404 on new file --- */
+(function(){
+  if (typeof window.openItem === "function" && !window.openItem.__ps_guarded){
+    const __origOpen = window.openItem;
+    window.openItem = async function(item){
+      try {
+        // ensure clearDirty exists
+        if (typeof window.clearDirty !== "function"){
+          window.clearDirty = function(){ try{ window.__ps_dirty=false; if (els && els.badgeState) els.badgeState.textContent=''; }catch(e){} };
+        }
+        return await __origOpen.apply(this, arguments);
+      } catch (e){
+        console.warn("openItem guarded:", e);
+        try{
+          const clid = (els.clientId && els.clientId.value || '').trim().toUpperCase();
+          if (window.createClientFile && item && item.file){
+            await window.createClientFile(clid, item.file, "// auto-created\n");
+          }
+          // fallback: show empty editor, keep list intact
+          if (els && els.promptEditor){ els.promptEditor.value = ''; }
+          if (els && els.fileTitle){ els.fileTitle.textContent = item && item.file ? item.file : '(new)'; }
+          if (els && els.badgeState){ els.badgeState.textContent = 'Missing（新規）'; }
+          return;
+        }catch(e2){ console.warn("openItem guard fallback failed:", e2); }
+      }
+    };
+    window.openItem.__ps_guarded = true;
+  }
+})();
