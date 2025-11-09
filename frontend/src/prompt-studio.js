@@ -85,7 +85,7 @@ async function saveIndex(path, idx, etag){
     headers:{ "Content-Type":"application/json; charset=utf-8" },
     body: JSON.stringify(payload)
   });
-  const raw = await r.text(); let j={}; try{ j = raw?JSON.parse(raw):{} }catch(e){}
+  const raw = await r.text(); let j={}; try{ j = raw?JSON.parse(raw):{} }catch{}
   if (!r.ok) throw new Error(j?.error || raw || `HTTP ${r.status}`);
   promptIndexEtag = j?.etag || promptIndexEtag || null;
   return j;
@@ -103,7 +103,7 @@ function normalizeIndex(obj){
       if (parsed.items) return parsed;
       if (parsed.prompt && parsed.prompt.items) return parsed.prompt;
     }
-  }catch(e){}
+  }catch{}
   return null;
 }
 
@@ -245,28 +245,6 @@ paramKeys.forEach(([k])=>{
 /* ---------- Boot ---------- */
 window.addEventListener("DOMContentLoaded", boot);
 function boot(){
-  // Hydrate els and delay parts until DOM is ready
-  if (!document.getElementById("fileList")){
-    document.addEventListener("DOMContentLoaded", ()=>{
-      try{ if (typeof __ps_hydrateEls==="function") __ps_hydrateEls(); }catch(e){}
-      try{ __ps_wireSearch(); }catch(e){}
-      try{ if (typeof renderFileList==="function") renderFileList(); }catch(e){}
-    }, { once:true });
-  }
-
-  // --- Safe wiring for search box (handles null on early boot) ---
-  function __ps_wireSearch(){
-    try{
-      if (!els || !els.search) els.search = document.getElementById("search");
-      if (els && els.search && !els.search.__wired){
-        els.search.__wired = true;
-        try { __ps_wireSearch(); } catch (e) {}});
-      }
-    }catch(e){ console.warn("wireSearch failed:", e); }
-  }
-    }catch(e){ console.warn("wireSearch failed:", e); }
-  }
-
   const q = new URLSearchParams(location.hash.replace(/^#\??/, ''));
   els.clientId.value = (q.get("client") || "").toUpperCase();
   els.behavior.value = (q.get("behavior") || "BASE").toUpperCase();
@@ -277,20 +255,30 @@ function boot(){
   window.addEventListener("keydown", (e)=>{
     if ((e.ctrlKey||e.metaKey) && e.key.toLowerCase()==="s"){ e.preventDefault(); saveCurrent(); }
   });
+  // --- safe wiring: search filter & editor dirty flag (ES5-safe) ---
+  (function(){
+    try{
+      var searchEl = document.getElementById('search');
+      if (searchEl && !searchEl.__wired){
+        searchEl.__wired = true;
+        searchEl.addEventListener('input', function(){
+          var kw = (searchEl.value||'').toLowerCase();
+          var list = (els && els.fileList && els.fileList.children) ? Array.prototype.slice.call(els.fileList.children) : [];
+          list.forEach(function(it){
+            var nameEl = it.querySelector('.name');
+            var t = nameEl ? String(nameEl.textContent||'').toLowerCase() : '';
+            it.style.display = t.indexOf(kw) !== -1 ? '' : 'none';
+          });
+        });
+      }
+    }catch(e){}
+  })();
 
-  els.search.addEventListener("input", ()=>{
-    const kw = els.search.value.toLowerCase();
-    [...els.fileList.children].forEach(it=>{
-      const t = it.querySelector(".name").textContent.toLowerCase();
-      it.style.display = t.includes(kw) ? "" : "none";
-    });
-  });
-
-  els.promptEditor.addEventListener("input", markDirty);
-}
-function markDirty(){ dirty = true; }
-function clearDirty(){ dirty = false; }
-window.addEventListener("beforeunload", (e)=>{ if (!dirty) return; e.preventDefault(); e.returnValue=""; });
+  }
+  if (els.promptEditor && !els.promptEditor.__wired) {
+    els.promptEditor.__wired = true;
+    els.promptEditor.addEventListener("input", markDirty);
+  }
 
 /* ---------- File List ---------- */
 
@@ -558,7 +546,7 @@ async function saveCurrent(){
       headers:{ "Content-Type":"application/json; charset=utf-8" },
       body: JSON.stringify(body)
     });
-    const raw = await r.text(); let json={}; try{ json = raw?JSON.parse(raw):{} }catch(e){}
+    const raw = await r.text(); let json={}; try{ json = raw?JSON.parse(raw):{} }catch{}
     if (!r.ok) throw new Error(json?.error || raw || `HTTP ${r.status}`);
 
     currentEtag = json?.etag || currentEtag || null;
@@ -717,7 +705,7 @@ function templateFromFilename(filename, behavior){
   function ts(){ const d=new Date(); const p=n=>String(n).padStart(2,'0'); return `${d.getFullYear()}${p(d.getMonth()+1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`; }
   function slug(s){ return String(s||'').toLowerCase().replace(/[^\w\-]+/g,'-').replace(/\-+/g,'-').replace(/^\-|\-$/g,''); }
 
-  window.createClientFile = async function(client, file, text){
+  async function createClientFile(client, file, text){
     const body = { filename: `client/${client}/${file}`, prompt: text ?? '' };
     const res = await fetch(join(els.apiBase.value, "SavePromptText"), {
       method:"POST",
@@ -776,7 +764,7 @@ function templateFromFilename(filename, behavior){
       "// Prompt template",
       "// ここにルールや出力形式を書いてください。"
     ].join("\n");
-    await window.createClientFile(clid, file, template);
+    await createClientFile(clid, file, template);
 
     // refresh list & open
     if (typeof window.renderFileList === "function") window.renderFileList();
@@ -801,412 +789,3 @@ function templateFromFilename(filename, behavior){
   };
 })();
 /* === /Patch =============================================================== */
-
-/* === Fix: Add button double-prompt & index overwrite (2025-11-09) =======================
-   - Prevent multiple click handlers by cloning the button before wiring.
-   - Ask for display name only once.
-   - Append new item to existing prompt-index.json (do not replace others).
-   - Create a unique filename and save both the index and the new prompt file.
-========================================================================================== */
-(function(){
-  function slugify(s){
-    s = (s||"").trim();
-    if (!s) return "prompt";
-    try{
-      // Keep letters/numbers/_-., collapse spaces to '-'
-      s = s.replace(/\s+/g, "-").replace(/[^0-9A-Za-z._\-一-龯ぁ-ゔァ-ヴー々〆〤]/g, "-");
-      // Remove consecutive dashes
-      s = s.replace(/-+/g, "-").replace(/^-|-$/g, "");
-      return s || "prompt";
-    }catch(_){ return "prompt"; }
-  }
-  function ts(){
-    const d = new Date();
-    const pad = (n)=> String(n).padStart(2,"0");
-    return d.getFullYear() + pad(d.getMonth()+1) + pad(d.getDate()) + "-" + pad(d.getHours()) + pad(d.getMinutes()) + pad(d.getSeconds());
-  }
-
-  async function addPromptUnified(){
-    const clid = (els.clientId?.value||"").trim().toUpperCase();
-    const beh  = (els.behavior?.value||"BASE").trim().toUpperCase();
-    if (!clid){ alert("クライアントコードを入力してください"); return; }
-
-    // Ensure existing index is loaded (client-root優先)
-    try{
-      await ensurePromptIndex(clid, beh);
-    }catch(e){
-      console.error("ensurePromptIndex failed:", e);
-      alert("インデックスの読み込みに失敗しました。"); 
-      return;
-    }
-
-    const display = prompt("新しいプロンプトの表示名", "おすすめ");
-    if (display === null) return; // cancelled
-
-    // Prepare unique filename
-    const base = slugify(display);
-    const existing = new Set((promptIndex?.items||[]).map(it=>it.file));
-    let file = `${base}-${ts()}.json`; let i=2;
-    while(existing.has(file)){ file = `${base}-${ts()}-${i++}.json`; }
-
-    // Append item (do not drop existing ones)
-    const maxOrder = Math.max(0, ...((promptIndex?.items||[]).map(it=>it.order||0)));
-    const item = { file, name: display.trim(), order: maxOrder + 10, hidden: false };
-    promptIndex.items.push(item);
-    promptIndex.updatedAt = new Date().toISOString();
-
-    // Save index, then create file
-    await saveIndex(promptIndexPath || `client/${clid}/prompt-index.json`, promptIndex, promptIndexEtag);
-    await window.createClientFile(clid, file, "// Prompt template\n");
-
-    // Refresh UI
-    if (typeof renderFileList === "function") renderFileList();
-    if (typeof openItem === "function") openItem(item);
-  }
-
-  // Override any previous handler and wire a single clean one
-  window.onAdd = addPromptUnified;
-  const btn = document.getElementById("btnAdd");
-  if (btn){
-    const clean = btn.cloneNode(true);            // removes all previous listeners
-    btn.parentNode.replaceChild(clean, btn);
-    clean.addEventListener("click", addPromptUnified, { once: false });
-  }
-})();
-// === End Fix ============================================================================
-
-/* === Fix v2: Strong interceptor & index sync (2025-11-09) ===============================
-   - Capture-phase click interceptor for #btnAdd to prevent legacy handlers firing.
-   - Reentrancy guard to avoid double prompts.
-   - Sync window.state.promptIndex (legacy 'prompts' schema) from promptIndex.items.
-========================================================================================== */
-(function(){
-  let ADD_LOCK = false;
-
-  function syncLegacyIndex(){
-    try{
-      if (!window.promptIndex || !Array.isArray(window.promptIndex.items)) return;
-      if (!window.state) window.state = {};
-      if (!window.state.promptIndex) window.state.promptIndex = {version:1, prompts:[]};
-      const prompts = window.promptIndex.items.map((it,i)=>({
-        file: it.file, name: it.name, order: it.order ?? (i+1)*10, hidden: !!it.hidden
-      }));
-      window.state.promptIndex.prompts = prompts;
-      window.state.promptIndex.updatedAt = window.promptIndex.updatedAt || new Date().toISOString();
-    }catch(e){ console.warn("syncLegacyIndex failed:", e); }
-  }
-
-  async function addFromInterceptor(ev){
-    if (ADD_LOCK) { ev.preventDefault(); ev.stopImmediatePropagation(); return; }
-    ADD_LOCK = true;
-    try{
-      ev.preventDefault(); ev.stopImmediatePropagation();
-
-      // Defer to the unified add
-      if (typeof window.addPromptUnified === "function"){
-        await window.addPromptUnified();
-      }else if (typeof window.onAdd === "function"){
-        await window.onAdd();
-      }
-
-      // Sync legacy structure for any code that still reads it
-      syncLegacyIndex();
-    } finally {
-      setTimeout(()=>{ ADD_LOCK = false; }, 800);
-    }
-  }
-
-  // Install capture-phase interceptor once
-  if (!document.__ps_add_interceptor_installed){
-    document.addEventListener("click", (e)=>{
-      const target = e.target && (e.target.closest ? e.target.closest("#btnAdd") : null);
-      if (target) addFromInterceptor(e);
-    }, true); // capture
-    document.__ps_add_interceptor_installed = true;
-  }
-
-  // Expose for other patches
-  window.__ps_syncLegacyIndex = syncLegacyIndex;
-})();
-// === End Fix v2 =========================================================================
-
-/* === Fix v3: One-shot local render after add (2025-11-09) ===============================
-   - Override ensurePromptIndex once to use in-memory promptIndex (skip network).
-   - addPromptUnified sets a flag so the next render uses local state immediately.
-========================================================================================== */
-(function(){
-  if (!window.__ps_ensurePatched && typeof window.ensurePromptIndex === "function"){
-    const __origEnsure = window.ensurePromptIndex;
-    window.ensurePromptIndex = async function(clientId, behavior){
-      if (window.__ps_useLocalIndexOnce && window.promptIndex && Array.isArray(window.promptIndex.items)){
-        window.__ps_useLocalIndexOnce = false;
-        return window.promptIndex; // skip reload, use local newest
-      }
-      return await __origEnsure(clientId, behavior);
-    };
-    window.__ps_ensurePatched = true;
-  }
-
-  // Hook into unified add to set the flag
-  const __origAdd = window.addPromptUnified || window.onAdd;
-  if (__origAdd && !__origAdd.__ps_hooked){
-    const wrapped = async function(){
-      const r = await __origAdd.apply(this, arguments);
-      window.__ps_useLocalIndexOnce = true;  // next render uses local
-      try{ if (typeof renderFileList === "function") renderFileList(); }catch(e){}
-      return r;
-    };
-    wrapped.__ps_hooked = true;
-    if (window.addPromptUnified) window.addPromptUnified = wrapped;
-    else window.onAdd = wrapped;
-  }
-})();
-// === End Fix v3 =========================================================================
-
-/* === Fix v4: Direct DOM append after add (2025-11-09) ==================================
-   - Append the new list item to #fileList immediately without reloading index.
-   - Uses the same markup/handlers as renderFileList for consistency.
-========================================================================================== */
-(function(){
-  function __ps_prettify(filename){
-    try{
-      if (typeof prettifyNameFromFile === "function") return prettifyNameFromFile(filename);
-    }catch(e){}
-    return filename.replace(/\.json$/i,'').replace(/[-_]/g,' ').trim();
-  }
-
-  window.__ps_appendListItem = function(it){
-    try{
-      if (!it || !it.file) return;
-      const clid = (els.clientId.value||"").trim().toUpperCase();
-      const name = it.name || __ps_prettify(it.file);
-
-      const li = document.createElement('div');
-      li.className = 'fileitem';
-      li.dataset.file = it.file;
-      li.draggable = true;
-      li.innerHTML = `<span class="drag">≡</span>
-                      <div class="name" title="${it.file}">${name}</div>
-                      <div class="meta">
-                        <button class="rename" title="名称を変更">✎</button>
-                        <button class="trash" title="削除">🗑</button>
-                      </div>`;
-      els.fileList.appendChild(li);
-
-      // drag events (same as render)
-      li.addEventListener('dragstart', ()=> li.classList.add('dragging'));
-      li.addEventListener('dragend', async ()=>{
-        li.classList.remove('dragging');
-        try{ await saveOrderFromDOM(); }catch(e){ console.warn(e); }
-      });
-
-      // click to open
-      li.addEventListener('click', async (e)=>{
-        if (e.target.closest('.rename') || e.target.closest('.trash')) return;
-        if (typeof openItem === "function"){
-          const item = (window.promptIndex?.items||[]).find(x=>x.file===it.file) || it;
-          openItem(item);
-        }
-      });
-
-      // rename
-      li.querySelector('.rename').addEventListener('click', async (e)=>{
-        e.stopPropagation();
-        const newName = prompt("表示名を入力", name);
-        if (newName === null) return;
-        const item = (window.promptIndex?.items||[]).find(x=>x.file===it.file);
-        if (item){ item.name = newName; }
-        li.querySelector('.name').textContent = newName;
-        try{ await saveIndex(promptIndexPath, promptIndex, promptIndexEtag); }catch(err){ console.error(err); }
-      });
-
-      // delete
-      li.querySelector('.trash').addEventListener('click', async (e)=>{
-        e.stopPropagation();
-        const ok = confirm(`「${name}」を一覧から削除します。\n※ BLOB 上のファイル自体は消えません。`);
-        if (!ok) return;
-        const blobPath = `client/${clid}/${it.file}`;
-        const okDel = await tryDelete(blobPath);
-        await deleteIndexItem(it.file);
-        setStatus(okDel?"削除しました（BLOBも削除）":"インデックスのみ削除しました（BLOB削除失敗）","green");
-        // remove from DOM
-        li.remove();
-        if (typeof renderFileList === "function") renderFileList();
-      });
-    }catch(e){
-      console.warn("appendListItem failed:", e);
-    }
-  };
-
-  // Hook add to append directly
-  if ((window.addPromptUnified || window.onAdd) && !window.__ps_hook_append_after_add){
-    const orig = window.addPromptUnified || window.onAdd;
-    const wrapped = async function(){
-      const before = (window.promptIndex?.items||[]).map(x=>x.file);
-      const r = await orig.apply(this, arguments);
-      // find the new item that is not in 'before'
-      const after = (window.promptIndex?.items||[]);
-      const newly = after.find(x=> !before.includes(x.file));
-      if (newly) window.__ps_appendListItem(newly);
-      window.__ps_hook_append_after_add = true;
-      return r;
-    };
-    if (window.addPromptUnified) window.addPromptUnified = wrapped;
-    else window.onAdd = wrapped;
-  }
-})();
-// === End Fix v4 ==========================================================================
-
-/* === Fix v5: renderFileList local-render path (2025-11-09) ==============================
-   - Override renderFileList to support a "local only" render without network reload.
-   - After add, set __ps_forceLocalRender so the next render uses in-memory promptIndex.
-========================================================================================== */
-(function(){
-  if (!window.__ps_render_override && typeof window.renderFileList === "function"){
-    const __origRender = window.renderFileList;
-    window.renderFileList = async function(options){
-      options = options || {};
-      const useLocal = options.local || window.__ps_forceLocalRender;
-      window.__ps_forceLocalRender = false;
-      if (!useLocal){
-        return await __origRender.apply(this, arguments);
-      }
-      // --- Local render branch: duplicate key parts of original, but skip ensurePromptIndex ---
-      try{
-        els.fileList.innerHTML = "";
-        const clid = (els.clientId.value||"").trim().toUpperCase();
-        const beh  = (els.behavior.value||"BASE").trim().toUpperCase();
-
-        const kinds = Object.keys(KIND_TO_NAME).filter(k=>FAMILY[beh].has(k));
-        const allowedFiles = new Set(kinds.map(k=>KIND_TO_NAME[k]));
-
-        const rows = [...((window.promptIndex && Array.isArray(window.promptIndex.items) ? window.promptIndex.items : []))]
-          .filter(it => !it.hidden)
-          .sort((a,b)=>(a.order??0)-(b.order??0));
-
-        // Build list items (subset of original)
-        for (const it of rows){
-          const name = it.name || (typeof prettifyNameFromFile==="function" ? prettifyNameFromFile(it.file) : it.file);
-          const li = document.createElement('div');
-          li.className = 'fileitem';
-          li.dataset.file = it.file;
-          li.draggable = true;
-          li.innerHTML = `<span class="drag">≡</span>
-                          <div class="name" title="${it.file}">${name}</div>
-                          <div class="meta">
-                            <button class="rename" title="名称を変更">✎</button>
-                            <button class="trash" title="削除">🗑</button>
-                          </div>`;
-          els.fileList.appendChild(li);
-
-          li.addEventListener('dragstart', ()=> li.classList.add('dragging'));
-          li.addEventListener('dragend', async ()=>{
-            li.classList.remove('dragging');
-            try{ await saveOrderFromDOM(); }catch(e){ console.warn(e); }
-          });
-
-          li.addEventListener('click', async (e)=>{
-            if (e.target.closest('.rename') || e.target.closest('.trash')) return;
-            if (typeof openItem === "function"){
-              const item = (window.promptIndex?.items||[]).find(x=>x.file===it.file) || it;
-              openItem(item);
-            }
-          });
-
-          li.querySelector('.rename').addEventListener('click', async (e)=>{
-            e.stopPropagation();
-            const newName = prompt("表示名を入力", name);
-            if (newName === null) return;
-            const item = (window.promptIndex?.items||[]).find(x=>x.file===it.file);
-            if (item){ item.name = newName; }
-            li.querySelector('.name').textContent = newName;
-            try{ await saveIndex(promptIndexPath, promptIndex, promptIndexEtag); }catch(err){ console.error(err); }
-          });
-
-          li.querySelector('.trash').addEventListener('click', async (e)=>{
-            e.stopPropagation();
-            const ok = confirm(`「${name}」を一覧から削除します。\n※ BLOB 上のファイル自体は消えません。`);
-            if (!ok) return;
-            const blobPath = `client/${clid}/${it.file}`;
-            const okDel = await tryDelete(blobPath);
-            await deleteIndexItem(it.file);
-            setStatus(okDel?"削除しました（BLOBも削除）":"インデックスのみ削除しました（BLOB削除失敗）","green");
-            // Update DOM
-            li.remove();
-            try{ await window.renderFileList({local:true}); }catch(e){}
-          });
-        }
-      }catch(e){
-        console.warn("renderFileList(local) failed:", e);
-        // fallback to original
-        return await __origRender.apply(this, arguments);
-      }
-    };
-    window.__ps_render_override = true;
-  }
-
-  // After add, force local render
-  const __origAddForRender = window.addPromptUnified || window.onAdd;
-  if (__origAddForRender && !__origAddForRender.__ps_forceLocal){
-    const wrapped = async function(){
-      const r = await __origAddForRender.apply(this, arguments);
-      window.__ps_forceLocalRender = true;
-      try{ await window.renderFileList({local:true}); }catch(e){}
-      return r;
-    };
-    wrapped.__ps_forceLocal = true;
-    if (window.addPromptUnified) window.addPromptUnified = wrapped;
-    else window.onAdd = wrapped;
-  }
-})();
-// === End Fix v5 =========================================================================
-
-/* === Fix: Hydrate els after DOM ready & guard nulls (2025-11-09) ======================== */
-(function(){
-  const __EL_IDS = {
-    clientId:"clientId", behavior:"behavior", apiBase:"apiBase", fileList:"fileList",
-    search:"search", fileTitle:"fileTitle", badgeState:"badgeState", badgeEtag:"badgeEtag",
-    tabPromptBtn:"tabPromptBtn", tabParamsBtn:"tabParamsBtn", promptTab:"promptTab", paramsTab:"paramsTab",
-    promptEditor:"promptEditor", btnSave:"btnSave", btnDiff:"btnDiff",
-    diffPanel:"diffPanel", diffLeft:"diffLeft", diffRight:"diffRight", status:"statusMessage"
-  };
-  window.__ps_hydrateEls = function(){
-    try{
-      for (const [k,id] of Object.entries(__EL_IDS)){
-        if (els && Object.prototype.hasOwnProperty.call(els,k)){
-          els[k] = document.getElementById(id);
-        }
-      }
-    }catch(e){ console.warn("hydrateEls failed:", e); }
-  };
-
-  // Patch boot to hydrate before using els
-  if (typeof window.boot === "function" && !window.boot.__ps_hydrated){
-    const orig = window.boot;
-    const wrapped = function(){
-      try{ window.__ps_hydrateEls(); }catch(e){}
-      return orig.apply(this, arguments);
-    };
-    wrapped.__ps_hydrated = true;
-    window.boot = wrapped;
-  }
-
-  // Guard: if renderFileList uses els.fileList, ensure it's available
-  if (typeof window.renderFileList === "function" && !window.renderFileList.__ps_guarded){
-    const origRender = window.renderFileList;
-    const guarded = async function(){
-      if (!els || !els.fileList){
-        try{ window.__ps_hydrateEls(); }catch(e){}
-      }
-      if (!els || !els.fileList){
-        console.warn("fileList element not ready; retrying shortly");
-        await new Promise(r=>setTimeout(r, 0));
-        try{ window.__ps_hydrateEls(); }catch(e){}
-      }
-      return await origRender.apply(this, arguments);
-    };
-    guarded.__ps_guarded = true;
-    window.renderFileList = guarded;
-  }
-})();
-// === End Fix ============================================================================
