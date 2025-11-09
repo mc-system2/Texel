@@ -242,6 +242,15 @@ paramKeys.forEach(([k])=>{
   }
 });
 
+
+/* --- Hoisted utility: markDirty (defined before boot) --- */
+function markDirty(){
+  try{
+    window.__ps_dirty = true;
+    if (els && els.badgeState){ els.badgeState.textContent = "● 編集中"; }
+  }catch(e){}
+}
+
 /* ---------- Boot ---------- */
 window.addEventListener("DOMContentLoaded", boot);
 function boot(){
