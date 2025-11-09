@@ -151,13 +151,7 @@ async function addIndexItem(fileName, displayName){
 }
 
 /* === auto filename generator & raw index append === */
-function generateAutoFilename(){
-  const d = new Date();
-  const pad = n => String(n).padStart(2,"0");
-  return `texel-custom-${d.getFullYear()}${pad(d.getMonth()+1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}.json`;
-}${pad(d.getMonth()+1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}.json`;
-}
-
+v
 async function addIndexItemRaw(filename, displayName){
   let file = (filename||"").trim();
   if (!file) throw new Error("filename is empty");
