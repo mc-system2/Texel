@@ -153,17 +153,20 @@ async function addIndexItem(fileName, displayName){
 /* === auto filename generator & raw index append === */
 function generateAutoFilename(){
   const d = new Date();
-  const pad = n => String(n).padStart(2, "0");
+  const pad = n => String(n).padStart(2,"0");
   return `texel-custom-${d.getFullYear()}${pad(d.getMonth()+1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}.json`;
+}${pad(d.getMonth()+1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}.json`;
 }
 
 async function addIndexItemRaw(filename, displayName){
   let file = (filename||"").trim();
   if (!file) throw new Error("filename is empty");
   if (!file.endsWith(".json")) file += ".json";
+  if (!/^texel-/.test(file)) file = "texel-" + file;
   if (promptIndex.items.some(x=>x.file===file)) throw new Error("同名ファイルが既に存在します。");
   const maxOrder = Math.max(0, ...promptIndex.items.map(x=>x.order||0));
-  promptIndex.items.push({ file, name: (displayName||'').trim() || prettifyNameFromFile(file), order:maxOrder+10, hidden:false });
+  const name = (displayName||'').trim() || prettifyNameFromFile(file);
+  promptIndex.items.push({ file, name, order:maxOrder+10, hidden:false });
   await saveIndex();
 }
 
@@ -221,6 +224,7 @@ paramKeys.forEach(([k])=>{
 /* ---------- Boot ---------- */
 window.addEventListener("DOMContentLoaded", boot);
 function boot(){
+  try{ if(els.search) els.search.style.display='none'; }catch{}
   const q = new URLSearchParams(location.hash.replace(/^#\??/, ''));
   els.clientId.value = (q.get("client") || "").toUpperCase();
   els.behavior.value = (q.get("behavior") || "BASE").toUpperCase();
@@ -242,7 +246,7 @@ function boot(){
 
   els.promptEditor.addEventListener("input", markDirty);
 
-  els.btnAdd.addEventListener("click", async ()=>{
+  els.els.btnAdd.addEventListener("click", async ()=>{
   try{
     const clid = els.clientId.value.trim().toUpperCase();
     const beh  = els.behavior.value.toUpperCase();
