@@ -1,429 +1,249 @@
-/* =========================================================
- * Client Catalog Editor
- *  - 重複IDの即時検知/警告（保存ボタン自動無効化）
- *  - ユニークなランダム発番（表内・既存スナップショットと衝突回避）
- *  - 保存後にクライアント別プロンプト同期（BASE / TYPE-R / TYPE-S 対応）
- *  - Prompt Studio（prompt-studio.html）を Studio ピル/行ダブルクリックで起動
- *  - 堅牢なレスポンス処理（Content-Typeを判定）
- * ========================================================= */
-const DEV_API  = "https://func-texel-api-dev-jpe-001-b2f6fec8fzcbdrc3.japaneast-01.azurewebsites.net/api/";
-const PROD_API = "https://func-texel-api-prod-jpe-001-dsgfhtafbfbxawdz.japaneast-01.azurewebsites.net/api/";
-const FILENAME = "texel-client-catalog.json";
+(() => {
+  'use strict';
 
-const els = {
-  apiBase:   document.getElementById("apiBase"),
-  load:      document.getElementById("loadBtn"),
-  save:      document.getElementById("saveBtn"),
-  addRow:    document.getElementById("addRowBtn"),
-  export:    document.getElementById("exportBtn"),
-  import:    document.getElementById("importFile"),
-  gridBody:  document.getElementById("gridBody"),
-  etag:      document.getElementById("etagBadge"),
-  status:    document.getElementById("status"),
-  alert:     document.getElementById("alert"),
-  dev:       document.getElementById("devPreset"),
-  prod:      document.getElementById("prodPreset"),
-  version:   document.getElementById("version"),
-  updatedAt: document.getElementById("updatedAt"),
-  count:     document.getElementById("count"),
-};
+  // ====== State ======
+  const CODE_RE = /^[A-Za-z0-9]{4}$/;               // RX78 等 OK
+  const state = { rows: [], apiBase: '' };
 
-const rowTmpl = document.getElementById("rowTmpl");
+  const $ = (s, el=document) => el.querySelector(s);
+  const $$ = (s, el=document) => Array.from(el.querySelectorAll(s));
+  const setStatus = (msg, cls='') => {
+    const el = $('#status'); el.textContent = msg; el.className = 'status ' + cls;
+  };
 
-// 直近ロード時スナップショット（保存後の差分検出に使用）: code -> behaviorView
-let previousCatalogCodes = new Map();
+  // ====== Utilities ======
+  const normApiBase = (v) => {
+    if (!v) return '';
+    v = v.trim();
+    if (!/\/api\/?$/.test(v)) v = v.replace(/\/?$/, '/api/');
+    return v;
+  };
 
-/* ---------- helpers ---------- */
-function updateEnvActive(which){
-  els.dev.classList.toggle("is-active", which === "dev");
-  els.prod.classList.toggle("is-active", which === "prod");
-}
-const showAlert = (msg, type="ok")=>{
-  els.alert.hidden = false;
-  els.alert.textContent = msg;
-  els.alert.style.background = type==="error" ? "var(--danger-weak)" : "var(--primary-weak)";
-  els.alert.style.color = type==="error" ? "var(--danger)" : "#0d5f3a";
-  clearTimeout(showAlert._t);
-  showAlert._t = setTimeout(()=>{ els.alert.hidden = true; }, 1800);
-};
-const setStatus = (txt="")=>{ els.status.textContent = txt; };
-
-const extractSheetId = (input)=>{
-  const v = (input||"").trim();
-  if (!v) return "";
-  let m = v.match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]{10,})/);
-  if (m) return m[1];
-  m = v.match(/[?&]id=([a-zA-Z0-9-_]{10,})/);
-  if (m) return m[1];
-  return /^[a-zA-Z0-9-_]{10,}$/.test(v) ? v : "";
-};
-
-const normalizeBehavior = (b)=>{
-  const v = String(b||"").toUpperCase();
-  return v==="R" ? "TYPE-R" : v==="S" ? "TYPE-S" : v==="TYPE-R" ? "TYPE-R" : v==="TYPE-S" ? "TYPE-S" : "BASE";
-};
-const behaviorToPayload = (v)=> v==="TYPE-R" ? "R" : v==="TYPE-S" ? "S" : "";
-
-/* ---------- 行生成 & 監視取付 ---------- */
-function makeRow(item = {code:"",name:"",behavior:"BASE",spreadsheetId:"",createdAt:""}) {
-  const tr = rowTmpl.content.firstElementChild.cloneNode(true);
-  tr.querySelector(".code").value  = item.code || "";
-  tr.querySelector(".name").value  = item.name || "";
-  tr.querySelector(".behavior").value = normalizeBehavior(item.behavior);
-  tr.querySelector(".sheet").value = item.spreadsheetId || "";
-  tr.querySelector(".created").value = item.createdAt || "";
-  attachCodeWatcher(tr); // コード入力監視（即時検証）
-  return tr;
-}
-function attachCodeWatcher(tr){
-  const codeInput = tr.querySelector(".code");
-  if (!codeInput) return;
-  // エラーヒントを行内に生成
-  let hint = tr.querySelector(".code-hint");
-  if (!hint) {
-    hint = document.createElement("div");
-    hint.className = "hint bad code-hint";
-    hint.style.display = "none";
-    codeInput.parentElement.appendChild(hint);
-  }
-  codeInput.addEventListener("input", ()=>{
-    // 英大文字・数字のみ 4桁に矯正
-    const raw = codeInput.value;
-    const norm = raw.toUpperCase().replace(/[^A-Z0-9]/g,"").slice(0,4);
-    if (raw !== norm) codeInput.value = norm;
-    validateGrid(); // 全体再評価
-  });
-}
-
-/* ---------- 読込 ---------- */
-async function loadCatalog() {
-  clearTable();
-  setStatus("読込中…");
-  try{
-    const url = join(els.apiBase.value, "LoadClientCatalog") + `?filename=${encodeURIComponent(FILENAME)}`;
-    const res = await fetch(url, { cache: "no-cache" });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-
-    const ctype = (res.headers.get("content-type")||"").toLowerCase();
-    const raw = ctype.includes("application/json") ? await res.json() : JSON.parse(await res.text());
-    const clients = Array.isArray(raw?.clients) ? raw.clients : [];
-
-    for (const c of clients) {
-      els.gridBody.appendChild(makeRow({
-        code: (c.code||"").toUpperCase(),
-        name: c.name||"",
-        behavior: c.behavior||"",
-        spreadsheetId: c.spreadsheetId || c.sheetId || "",
-        createdAt: c.createdAt || ""
-      }));
-    }
-    els.version.textContent   = String(raw?.version ?? 1);
-    els.updatedAt.textContent = raw?.updatedAt || "-";
-    els.count.textContent     = String(clients.length);
-    els.etag.dataset.etag     = raw?.etag || "";
-    els.etag.textContent      = raw?.etag ? `ETag: ${raw.etag}` : "";
-
-    // スナップショット更新（次回保存時の差分検出に使用）
-    previousCatalogCodes = new Map();
-    for (const c of clients) {
-      const code = String(c.code||"").toUpperCase();
-      if (!code) continue;
-      previousCatalogCodes.set(code, normalizeBehavior(c.behavior||""));
-    }
-
-    validateGrid(); // 初期状態の検証
-    showAlert("読み込み完了", "ok");
-  }catch(e){
-    showAlert(`読み込み失敗：${e.message||e}`, "error");
-  }finally{
-    setStatus("");
-  }
-}
-
-function clearTable(){ els.gridBody.innerHTML = ""; }
-function addRow(){
-  els.gridBody.appendChild(makeRow());
-  validateGrid();
-}
-
-/* ---------- 保存 ---------- */
-async function saveCatalog(){
-  // 直前検証（NGなら保存しない）
-  const v = validateGrid();
-  if (!v.ok) { showAlert(v.message || "入力エラーがあります。", "error"); return; }
-
-  const rows = [...els.gridBody.querySelectorAll("tr")];
-  const clients = [];
-
-  for (const tr of rows){
-    const code = tr.querySelector(".code").value.trim().toUpperCase();
-    const name = tr.querySelector(".name").value.trim();
-    const behaviorView = tr.querySelector(".behavior").value;
-    const sheetInput = tr.querySelector(".sheet").value.trim();
-    const createdAt = tr.querySelector(".created").value.trim();
-    const spreadsheetId = extractSheetId(sheetInput);
-
-    clients.push({ code, name, behavior: behaviorToPayload(behaviorView), spreadsheetId, createdAt });
-  }
-
-  const catalog = { version:1, updatedAt:new Date().toISOString(), clients };
-  const body = { filename: FILENAME, catalog, etag: els.etag.dataset.etag || undefined };
-
-  setStatus("保存中…");
-  try{
-    const url = join(els.apiBase.value, "SaveClientCatalog");
+  async function postJSON(url, body, expectJson=true) {
     const res = await fetch(url, {
-      method:"POST",
-      headers:{ "Content-Type":"application/json; charset=utf-8" },
-      body: JSON.stringify(body)
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body || {}),
     });
-    const rawText = await res.text();
-    let json = {}; try{ json = rawText ? JSON.parse(rawText) : {}; }catch{}
-
-    if (!res.ok) throw new Error(json?.error || rawText || `HTTP ${res.status}`);
-
-    els.updatedAt.textContent = catalog.updatedAt;
-    els.count.textContent     = String(clients.length);
-    if (json?.etag){ els.etag.dataset.etag = json.etag; els.etag.textContent = `ETag: ${json.etag}`; }
-    showAlert("保存完了", "ok");
-
-    // 保存成功後：クライアント別プロンプト 初期コピー/削除 を同期
-    await syncClientPromptsAfterSave(clients);
-
-    // スナップショットを最新に
-    previousCatalogCodes = new Map();
-    for (const c of clients) previousCatalogCodes.set(c.code, normalizeBehavior(c.behavior||""));
-
-  }catch(e){
-    showAlert(`保存に失敗しました： ${e.message||e}`, "error");
-  }finally{
-    setStatus("");
-  }
-}
-
-/* ---------- 重複/形式検証（即時） ---------- */
-function validateGrid(){
-  const inputs = [...els.gridBody.querySelectorAll("input.code")];
-  const codes = inputs.map(i => i.value.trim().toUpperCase());
-  const counts = new Map();
-  let hasError = false;
-  let duplicateList = [];
-
-  // カウント
-  for (const c of codes) counts.set(c, (counts.get(c)||0) + 1);
-
-  // 入力ごとに装飾＆ヒント
-  inputs.forEach((inp) => {
-    const v = inp.value.trim().toUpperCase();
-    const isFormatOk = /^[A-Z0-9]{4}$/.test(v);
-    const isDup = v && (counts.get(v) > 1);
-
-    const hint = inp.parentElement.querySelector(".code-hint");
-    inp.classList.toggle("is-invalid", !isFormatOk || isDup);
-    if (!isFormatOk) {
-      hint.textContent = "A〜Z/0〜9の4桁で入力してください";
-      hint.style.display = "block";
-      hasError = true;
-    } else if (isDup) {
-      hint.textContent = "このコードは重複しています";
-      hint.style.display = "block";
-      hasError = true;
-      if (!duplicateList.includes(v)) duplicateList.push(v);
-    } else {
-      hint.textContent = "";
-      hint.style.display = "none";
-    }
-  });
-
-  // Spreadsheet ID 空チェック（保存時は必須）
-  let sheetMissing = false;
-  for (const tr of els.gridBody.querySelectorAll("tr")) {
-    const sid = extractSheetId(tr.querySelector(".sheet").value);
-    if (!sid) { sheetMissing = true; }
-  }
-
-  // 保存ボタンの有効/無効
-  els.save.disabled = hasError || sheetMissing;
-
-  // ステータス表示
-  let message = "";
-  if (hasError) {
-    if (duplicateList.length) message += `重複: ${duplicateList.join(", ")} `;
-  }
-  if (sheetMissing) message += (message ? "/ " : "") + "Spreadsheet ID が未入力の行があります";
-
-  if (message) setStatus(message); else setStatus("");
-
-  return { ok: !(hasError || sheetMissing), message };
-}
-
-/* ---------- 行内操作 + Studio 起動 ---------- */
-els.gridBody.addEventListener("click", (e)=>{
-  const tr = e.target.closest("tr");
-  if (!tr) return;
-
-  // 削除
-  if (e.target.classList.contains("btn-del")) {
-    tr.remove();
-    els.count.textContent = String(els.gridBody.querySelectorAll("tr").length);
-    validateGrid();
-    return;
-  }
-  // 複製（ユニーク発番＋監視の付け直し）
-  if (e.target.classList.contains("btn-dup")) {
-    const copy = tr.cloneNode(true);
-    copy.querySelectorAll(".code-hint").forEach(h => h.remove());
-    els.gridBody.insertBefore(copy, tr.nextSibling);
-    attachCodeWatcher(copy);
-    copy.querySelector(".code").value = issueNewCode();
-    els.count.textContent = String(els.gridBody.querySelectorAll("tr").length);
-    validateGrid();
-    return;
-  }
-  // Studio ピルで Prompt Studio を開く
-  if (e.target.classList.contains("studio-link")) {
-    openPromptStudioForRow(tr);
-    return;
-  }
-});
-
-// 行ダブルクリックでも Studio を開く（入力上のダブルクリックは除外）
-els.gridBody.addEventListener("dblclick", (e)=>{
-  const tr = e.target.closest("tr");
-  if (!tr) return;
-  if (e.target.matches('input, select, textarea')) return;
-  openPromptStudioForRow(tr);
-});
-
-function openPromptStudioForRow(tr){
-  const code = tr.querySelector(".code").value.trim().toUpperCase();
-  if (!/^[A-Z0-9]{4}$/.test(code)) { showAlert("コードが不正です", "error"); return; }
-  const behavior = tr.querySelector(".behavior").value;
-  const api = (document.getElementById("apiBase").value || DEV_API).trim();
-  const url = `./prompt-studio.html#?client=${encodeURIComponent(code)}&behavior=${encodeURIComponent(behavior)}&api=${encodeURIComponent(api)}`;
-  window.open(url, "_blank");
-}
-
-/* ---------- ユニークなランダム発番 ---------- */
-function issueNewCode(){
-  // 表内＋前回ロード時スナップショットの両方に衝突しない
-  const used = new Set([
-    ...[...els.gridBody.querySelectorAll(".code")].map(i=>i.value.trim().toUpperCase()),
-    ...previousCatalogCodes.keys(),
-  ]);
-  const alph = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
-  for (let i=0; i<50000; i++){
-    const code = alph[Math.floor(Math.random()*alph.length)] + String(Math.floor(Math.random()*1000)).padStart(3,"0");
-    if (!used.has(code)) return code;
-  }
-  // フォールバック（理論上到達しにくい）
-  let n = 0;
-  while (used.has(`Z${String(n).padStart(3,"0")}`)) n++;
-  return `Z${String(n).padStart(3,"0")}`;
-}
-
-/* ---------- 環境切替 ---------- */
-els.dev.addEventListener("click", ()=>{
-  els.apiBase.value = DEV_API;
-  updateEnvActive("dev");
-  showAlert("DEVに切替","ok");
-});
-els.prod.addEventListener("click", ()=>{
-  els.apiBase.value = PROD_API;
-  updateEnvActive("prod");
-  showAlert("PRODに切替","ok");
-});
-
-/* ---------- ボタン ---------- */
-els.load.addEventListener("click", loadCatalog);
-els.save.addEventListener("click", saveCatalog);
-els.addRow.addEventListener("click", addRow);
-
-/* ---------- utilities ---------- */
-function join(base, path){
-  return (base||"").replace(/\/+$/,"") + "/" + String(path||"").replace(/^\/+/,"");
-}
-
-/* ===== プロンプト同期（保存後） =====
- * - adds: 現在行すべて（BASE/TYPE-R/TYPE-S）→ 初回コピーのみ（API側で存在チェック）
- * - deletes: 前回にあって今回ないコード → client/<CLID>/ と legacy prompt/<CLID>/ を削除（API側実装）
- */
-async function syncClientPromptsAfterSave(currentClients){
-  const nowMap = new Map(currentClients.map(c => [c.code, normalizeBehavior(c.behavior||"")]));
-
-  // 削除検出
-  const deletes = [];
-  for (const code of previousCatalogCodes.keys()) {
-    if (!nowMap.has(code)) deletes.push(code);
-  }
-
-  // 追加：全行（存在するものはAPI側でskip）
-  const adds = [];
-  for (const [code, behavior] of nowMap.entries()) {
-    adds.push({ code, behavior });
-  }
-
-  if (adds.length === 0 && deletes.length === 0) return;
-
-  setStatus("プロンプト同期中…");
-  const url = join(els.apiBase.value, "SyncClientPrompts");
-  const payload = { adds, deletes };
-
-  try {
-    const res = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type":"application/json; charset=utf-8" },
-      body: JSON.stringify(payload)
-    });
-
-    const ctype = (res.headers.get("content-type") || "").toLowerCase();
-    let result = {};
-    let rawText = "";
-    try {
-      if (ctype.includes("application/json")) {
-        result = await res.json();
-      } else {
-        rawText = await res.text();
-        try { result = JSON.parse(rawText); } catch {}
-      }
-    } catch {}
-
     if (!res.ok) {
-      const reason = result?.error || rawText || `HTTP ${res.status}`;
-      throw new Error(reason);
+      throw new Error(`HTTP ${res.status} @ ${url}`);
     }
-
-    const created = Array.isArray(result.created) ? result.created.length : 0;
-    const skipped = Array.isArray(result.skipped) ? result.skipped.length : 0;
-    const deleted = Array.isArray(result.deleted) ? result.deleted.length : 0;
-    const errors  = Array.isArray(result.errors)  ? result.errors.length  : 0;
-    showAlert(`プロンプト同期 完了（新規${created} / 既存${skipped} / 削除${deleted} / エラー${errors}）`, errors ? "error" : "ok");
-    if (errors && result.errors) console.table(result.errors);
-  } catch (err) {
-    showAlert(`プロンプト同期 失敗：${err.message||err}`, "error");
-  } finally {
-    setStatus("");
+    return expectJson ? res.json() : res.text();
   }
-}
 
-/* ===== 起動時の自動読込 ===== */
-window.addEventListener("DOMContentLoaded", async ()=>{
-  if (!els.apiBase.value) els.apiBase.value = DEV_API;
-  updateEnvActive(els.apiBase.value.includes("-dev-") ? "dev" : "prod");
-  try { await loadCatalog(); } catch {}
-});
+  function validate() {
+    const codes = new Set();
+    for (const r of state.rows) {
+      if (!CODE_RE.test(r.code || '')) throw new Error(`コードは英数字4桁で入力: ${r.code || '(未入力)'}`);
+      const key = r.code.toUpperCase();
+      if (codes.has(key)) throw new Error(`コード重複: ${key}`);
+      codes.add(key);
+    }
+  }
 
-// --- Texel: ensure roomphoto exists for a client when saving catalog ---
-async function ensureRoomphotoFor(clientCode){
-  try{
-    const apiBase = (document.getElementById('apiBase')||{}).value || '';
-    const loadUrl = (apiBase.replace(/\/+$/,'') + '/LoadPromptText') + '?filename=' + encodeURIComponent('texel-roomphoto.json');
-    const r = await fetch(loadUrl);
-    const json = r.ok ? await r.json() : { prompt: '' };
-    const body = { filename: `client/${clientCode}/texel-roomphoto.json`, prompt: JSON.stringify(json, null, 2) };
-    await fetch(apiBase.replace(/\/+$/,'') + '/SavePromptText', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
-    // also write prompt-index.json with only roomphoto if missing
-    const idxBody = { version:1, client:clientCode, items:[{file:'texel-roomphoto.json', name:'画像分析プロンプト', order:1, fixed:true, hidden:false}], params:{} };
-    await fetch(apiBase.replace(/\/+$/,'') + '/SavePromptText', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ filename:`client/${clientCode}/prompt-index.json`, prompt: JSON.stringify(idxBody, null, 2) }) });
-  }catch(err){ console.warn('ensureRoomphotoFor failed', err); }
-}
+  // ====== API calls ======
+  async function listClientFolders() {
+    const api = normApiBase($('#apiBase').value);
+    state.apiBase = api;
+    const url = api + 'ListBLOB';
+    const body = { container: 'prompts', prefix: 'client/', recursive: false, foldersOnly: true };
+    const json = await postJSON(url, body);
+    // items: [{name:"client/A001/"}, ...]
+    const codes = (json.items || [])
+      .map(x => (x.name || '').replace(/^client\/|\/$/g, ''))
+      .filter(code => CODE_RE.test(code))
+      .sort();
+    return codes;
+  }
+
+  async function loadClientCatalog(code) {
+    const url = state.apiBase + 'LoadBLOB';
+    const body = { container: 'prompts', filename: `client/${code}/texel-client-catalog.json` };
+    try {
+      const text = await postJSON(url, body, false);
+      try { return JSON.parse(text); } catch { return { code, name: '' }; }
+    } catch (e) {
+      // 404 等 → 未作成とみなす
+      return { code, name: '' };
+    }
+  }
+
+  async function saveCatalog(code, name) {
+    const url = state.apiBase + 'SaveBLOB';
+    const payload = {
+      container: 'prompts',
+      filename: `client/${code}/texel-client-catalog.json`,
+      text: JSON.stringify({
+        version: 1, code, name: name || '', updatedAt: new Date().toISOString()
+      }, null, 2),
+      contentType: 'application/json; charset=utf-8'
+    };
+    await postJSON(url, payload);
+  }
+
+  async function ensurePromptIndex(code) {
+    // prompt-index.json がなければ roomphoto 固定の初期値を作る
+    const loadUrl = state.apiBase + 'LoadBLOB';
+    const fname = `client/${code}/prompt-index.json`;
+    try {
+      await postJSON(loadUrl, { container:'prompts', filename: fname }, false);
+    } catch {
+      const saveUrl = state.apiBase + 'SaveBLOB';
+      const indexJson = {
+        prompt: [
+          { file: 'texel-roomphoto.json', name: '画像分析プロンプト', order: 10, locked: true }
+        ],
+        params: {}
+      };
+      await postJSON(saveUrl, {
+        container: 'prompts',
+        filename: fname,
+        text: JSON.stringify(indexJson, null, 2),
+        contentType: 'application/json; charset=utf-8'
+      });
+      // roomphoto テンプレも同時に用意（空でOK）
+      await postJSON(saveUrl, {
+        container: 'prompts',
+        filename: `client/${code}/texel-roomphoto.json`,
+        text: '// roomphoto default',
+        contentType: 'text/plain; charset=utf-8'
+      });
+    }
+  }
+
+  // ====== Rendering ======
+  function renderRows() {
+    const root = $('#clientList');
+    root.innerHTML = '';
+    state.rows.forEach((r, i) => {
+      const row = document.createElement('div');
+      row.className = 'client-row';
+      row.innerHTML = `
+        <input class="row-code-input code-badge" data-index="${i}" maxlength="4" value="${r.code||''}" placeholder="CODE(4)">
+        <input class="row-name-input" data-index="${i}" value="${r.name||''}" placeholder="名称">
+        <button class="icon-btn dup" data-index="${i}" title="複製">複製</button>
+        <button class="icon-btn danger del" data-index="${i}" title="削除">削除</button>
+      `;
+      root.appendChild(row);
+    });
+
+    // bind
+    $$('.row-code-input', root).forEach(inp => {
+      inp.addEventListener('input', e => {
+        const ix = +e.target.dataset.index;
+        state.rows[ix].code = e.target.value.toUpperCase();
+        if (state.rows[ix].state !== 'new') state.rows[ix].state = 'dirty';
+      });
+    });
+    $$('.row-name-input', root).forEach(inp => {
+      inp.addEventListener('input', e => {
+        const ix = +e.target.dataset.index;
+        state.rows[ix].name = e.target.value;
+        if (state.rows[ix].state !== 'new') state.rows[ix].state = 'dirty';
+      });
+    });
+    $$('.dup', root).forEach(btn => {
+      btn.addEventListener('click', e => {
+        const ix = +e.currentTarget.dataset.index;
+        const src = state.rows[ix];
+        state.rows.push({ code:'', name: src.name, state:'new' });
+        renderRows();
+        setStatus('複製しました。コードを入力してください。');
+      });
+    });
+    $$('.del', root).forEach(btn => {
+      btn.addEventListener('click', e => {
+        const ix = +e.currentTarget.dataset.index;
+        state.rows.splice(ix,1);
+        renderRows();
+      });
+    });
+  }
+
+  // ====== Events ======
+  $('#addRowBtn').addEventListener('click', () => {
+    state.rows.push({ code:'', name:'', state:'new' });
+    renderRows();
+    setStatus('新しい行を追加しました。コードと名称を入力してください。');
+    queueMicrotask(() => {
+      const inputs = $$('.row-code-input');
+      if (inputs.length) inputs[inputs.length-1].focus();
+    });
+  });
+
+  $('#loadBtn').addEventListener('click', async () => {
+    try {
+      setStatus('読込中…');
+      const codes = await listClientFolders();
+      const rows = [];
+      for (const code of codes) {
+        const cat = await loadClientCatalog(code);
+        rows.push({ code, name: cat.name || '', state:'clean' });
+      }
+      state.rows = rows;
+      renderRows();
+      setStatus(`読込完了（${rows.length}件）`, 'good');
+    } catch (e) {
+      console.error(e);
+      setStatus('読込に失敗しました: ' + e.message, 'bad');
+    }
+  });
+
+  $('#saveBtn').addEventListener('click', async () => {
+    try {
+      validate();
+      setStatus('保存中…');
+      for (const r of state.rows) {
+        if (r.state === 'new' || r.state === 'dirty') {
+          await saveCatalog(r.code, r.name);
+          await ensurePromptIndex(r.code);
+          r.state = 'clean';
+        }
+      }
+      setStatus('保存しました。', 'good');
+    } catch (e) {
+      console.error(e);
+      setStatus('保存に失敗: ' + e.message, 'bad');
+    }
+  });
+
+  // JSON 出力 / 取込（任意）
+  $('#exportBtn').addEventListener('click', () => {
+    const blob = new Blob([JSON.stringify(state.rows, null, 2)], {type:'application/json'});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = 'client-catalog-export.json'; a.click();
+    URL.revokeObjectURL(url);
+  });
+  $('#importBtn').addEventListener('click', () => $('#importFile').click());
+  $('#importFile').addEventListener('change', async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    try {
+      const text = await file.text();
+      const arr = JSON.parse(text);
+      if (!Array.isArray(arr)) throw new Error('不正なJSON');
+      state.rows = arr.map(x => ({
+        code: String(x.code||'').toUpperCase(),
+        name: String(x.name||''),
+        state: 'new'
+      }));
+      renderRows();
+      setStatus('インポートしました。保存で反映されます。');
+    } catch (err) {
+      setStatus('取込失敗: ' + err.message, 'bad');
+    } finally {
+      e.target.value = '';
+    }
+  });
+
+  // 初期：localStorage から API Base を復元
+  const KEY = 'clientEditor.apiBase';
+  const saved = localStorage.getItem(KEY);
+  if (saved) $('#apiBase').value = saved;
+  $('#apiBase').addEventListener('change', () => {
+    localStorage.setItem(KEY, $('#apiBase').value.trim());
+  });
+
+  setStatus('ready');
+})();
