@@ -940,3 +940,97 @@ function templateFromFilename(filename, behavior){
   }
 })();
 // === End Fix v3 =========================================================================
+
+/* === Fix v4: Direct DOM append after add (2025-11-09) ==================================
+   - Append the new list item to #fileList immediately without reloading index.
+   - Uses the same markup/handlers as renderFileList for consistency.
+========================================================================================== */
+(function(){
+  function __ps_prettify(filename){
+    try{
+      if (typeof prettifyNameFromFile === "function") return prettifyNameFromFile(filename);
+    }catch{}
+    return filename.replace(/\.json$/i,'').replace(/[-_]/g,' ').trim();
+  }
+
+  window.__ps_appendListItem = function(it){
+    try{
+      if (!it || !it.file) return;
+      const clid = (els.clientId.value||"").trim().toUpperCase();
+      const name = it.name || __ps_prettify(it.file);
+
+      const li = document.createElement('div');
+      li.className = 'fileitem';
+      li.dataset.file = it.file;
+      li.draggable = true;
+      li.innerHTML = `<span class="drag">≡</span>
+                      <div class="name" title="${it.file}">${name}</div>
+                      <div class="meta">
+                        <button class="rename" title="名称を変更">✎</button>
+                        <button class="trash" title="削除">🗑</button>
+                      </div>`;
+      els.fileList.appendChild(li);
+
+      // drag events (same as render)
+      li.addEventListener('dragstart', ()=> li.classList.add('dragging'));
+      li.addEventListener('dragend', async ()=>{
+        li.classList.remove('dragging');
+        try{ await saveOrderFromDOM(); }catch(e){ console.warn(e); }
+      });
+
+      // click to open
+      li.addEventListener('click', async (e)=>{
+        if (e.target.closest('.rename') || e.target.closest('.trash')) return;
+        if (typeof openItem === "function"){
+          const item = (window.promptIndex?.items||[]).find(x=>x.file===it.file) || it;
+          openItem(item);
+        }
+      });
+
+      // rename
+      li.querySelector('.rename').addEventListener('click', async (e)=>{
+        e.stopPropagation();
+        const newName = prompt("表示名を入力", name);
+        if (newName === null) return;
+        const item = (window.promptIndex?.items||[]).find(x=>x.file===it.file);
+        if (item){ item.name = newName; }
+        li.querySelector('.name').textContent = newName;
+        try{ await saveIndex(promptIndexPath, promptIndex, promptIndexEtag); }catch(err){ console.error(err); }
+      });
+
+      // delete
+      li.querySelector('.trash').addEventListener('click', async (e)=>{
+        e.stopPropagation();
+        const ok = confirm(`「${name}」を一覧から削除します。\n※ BLOB 上のファイル自体は消えません。`);
+        if (!ok) return;
+        const blobPath = `client/${clid}/${it.file}`;
+        const okDel = await tryDelete(blobPath);
+        await deleteIndexItem(it.file);
+        setStatus(okDel?"削除しました（BLOBも削除）":"インデックスのみ削除しました（BLOB削除失敗）","green");
+        // remove from DOM
+        li.remove();
+        if (typeof renderFileList === "function") renderFileList();
+      });
+    }catch(e){
+      console.warn("appendListItem failed:", e);
+    }
+  };
+
+  // Hook add to append directly
+  if ((window.addPromptUnified || window.onAdd) && !window.__ps_hook_append_after_add){
+    const orig = window.addPromptUnified || window.onAdd;
+    const wrapped = async function(){
+      const before = (window.promptIndex?.items||[]).map(x=>x.file);
+      const r = await orig.apply(this, arguments);
+      // find the new item that is not in 'before'
+      const after = (window.promptIndex?.items||[]);
+      const newly = after.find(x=> !before.includes(x.file));
+      if (newly) window.__ps_appendListItem(newly);
+      window.__ps_hook_append_after_add = true;
+      return r;
+    };
+    if (window.addPromptUnified) window.addPromptUnified = wrapped;
+    else window.onAdd = wrapped;
+  }
+})();
+// === End Fix v4 ==========================================================================
