@@ -393,7 +393,7 @@ li.addEventListener("click", (e)=>{ if (!e.target.classList.contains("rename") &
 
     li.querySelector(".trash").addEventListener("click", async (e)=>{
       e.preventDefault(); e.stopPropagation();
-      const ok = confirm(`「${name}」を一覧から削除します。\n※ BLOB 上のファイル自体は消えません。`);
+      const ok = confirm(`「${name}」を一覧から削除します。\n※ BLOB の実ファイルも削除します。`);
       if (!ok) return;
       // 先に BLOB を削除（失敗しても index は進める）
       const blobPath = `client/${clid}/${it.file}`;
@@ -401,8 +401,8 @@ li.addEventListener("click", (e)=>{ if (!e.target.classList.contains("rename") &
       // read-back verification (best-effort)
       const still = await tryLoad(blobPath);
       await deleteIndexItem(it.file);
-      const ok = okDel && !still;
-      setStatus(ok?"削除しました（BLOBも削除）":"インデックスのみ削除しました（BLOB削除失敗）","green");
+      const done = okDel && !still;
+      setStatus(done?"削除しました（BLOBも削除）":"インデックスのみ削除しました（BLOB削除失敗）","green");
       await renderFileList();
       // もし削除したアイテムを編集中ならエディタをリセット
       if (currentFilenameTarget && currentFilenameTarget.endsWith(`/${it.file}`)){
