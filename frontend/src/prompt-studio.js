@@ -226,16 +226,16 @@ async function renderFileList(){
     const li = document.createElement("div");
     li.className = "fileitem";
     li.dataset.file = it.file;
-    li.innerHTML = \`<div class="name" title="\${it.file}">\${name}</div>
+    li.innerHTML = `<div class="name" title="${it.file}">${name}</div>
                      <div class="meta">
                        <button class="rename" title="名称を変更">✎</button>
                        <span class="chip">checking…</span>
-                     </div>\`;
+                     </div>`;
     els.fileList.appendChild(li);
 
     // State check (client/legacy/template)
-    const clientPath = \`client/\${clid}/\${it.file}\`;
-    const legacyPath = \`prompt/\${clid}/\${it.file}\`;
+    const clientPath = `client/${clid}/${it.file}`;
+    const legacyPath = `prompt/${clid}/${it.file}`;
     const template   = templateFromFilename(it.file, beh);
 
     const state = await resolveState([clientPath, legacyPath], template);
@@ -259,7 +259,7 @@ async function renderFileList(){
       const nameDiv = li.querySelector(".name");
       const current = nameDiv.textContent;
       nameDiv.classList.add("editing");
-      nameDiv.innerHTML = \`<input value="\${current}" aria-label="name">\`;
+      nameDiv.innerHTML = `<input value="${current}" aria-label="name">`;
       const input = nameDiv.querySelector("input");
       const finish = async (commit)=>{
         nameDiv.classList.remove("editing");
@@ -319,12 +319,12 @@ async function openItem(item){
   const beh  = els.behavior.value.toUpperCase();
 
   currentKind = null; // kind概念は使わない（ファイル基準）
-  currentFilenameTarget = \`client/\${clid}/\${item.file}\`;
+  currentFilenameTarget = `client/${clid}/${item.file}`;
   document.getElementById("fileTitle").textContent = currentFilenameTarget;
 
   const candidates = [
-    \`client/\${clid}/\${item.file}\`,
-    \`prompt/\${clid}/\${item.file}\`,
+    `client/${clid}/${item.file}`,
+    `prompt/${clid}/${item.file}`,
     templateFromFilename(item.file, beh)
   ];
 
