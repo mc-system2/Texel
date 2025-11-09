@@ -907,3 +907,36 @@ function templateFromFilename(filename, behavior){
   window.__ps_syncLegacyIndex = syncLegacyIndex;
 })();
 // === End Fix v2 =========================================================================
+
+/* === Fix v3: One-shot local render after add (2025-11-09) ===============================
+   - Override ensurePromptIndex once to use in-memory promptIndex (skip network).
+   - addPromptUnified sets a flag so the next render uses local state immediately.
+========================================================================================== */
+(function(){
+  if (!window.__ps_ensurePatched && typeof window.ensurePromptIndex === "function"){
+    const __origEnsure = window.ensurePromptIndex;
+    window.ensurePromptIndex = async function(clientId, behavior){
+      if (window.__ps_useLocalIndexOnce && window.promptIndex && Array.isArray(window.promptIndex.items)){
+        window.__ps_useLocalIndexOnce = false;
+        return window.promptIndex; // skip reload, use local newest
+      }
+      return await __origEnsure(clientId, behavior);
+    };
+    window.__ps_ensurePatched = true;
+  }
+
+  // Hook into unified add to set the flag
+  const __origAdd = window.addPromptUnified || window.onAdd;
+  if (__origAdd && !__origAdd.__ps_hooked){
+    const wrapped = async function(){
+      const r = await __origAdd.apply(this, arguments);
+      window.__ps_useLocalIndexOnce = true;  // next render uses local
+      try{ if (typeof renderFileList === "function") renderFileList(); }catch{}
+      return r;
+    };
+    wrapped.__ps_hooked = true;
+    if (window.addPromptUnified) window.addPromptUnified = wrapped;
+    else window.onAdd = wrapped;
+  }
+})();
+// === End Fix v3 =========================================================================
