@@ -245,6 +245,26 @@ paramKeys.forEach(([k])=>{
 /* ---------- Boot ---------- */
 window.addEventListener("DOMContentLoaded", boot);
 function boot(){
+  // Hydrate els and delay parts until DOM is ready
+  if (!document.getElementById("fileList")){
+    document.addEventListener("DOMContentLoaded", ()=>{
+      try{ if (typeof __ps_hydrateEls==="function") __ps_hydrateEls(); }catch{}
+      try{ __ps_wireSearch(); }catch{}
+      try{ if (typeof renderFileList==="function") renderFileList(); }catch{}
+    }, { once:true });
+  }
+
+  // --- Safe wiring for search box (handles null on early boot) ---
+  function __ps_wireSearch(){
+    try{
+      if (!els || !els.search) els.search = document.getElementById("search");
+      if (els && els.search && !els.search.__wired){
+        els.search.__wired = true;
+        try{ __ps_wireSearch(); }catch{}});
+      }
+    }catch(e){ console.warn("wireSearch failed:", e); }
+  }
+
   const q = new URLSearchParams(location.hash.replace(/^#\??/, ''));
   els.clientId.value = (q.get("client") || "").toUpperCase();
   els.behavior.value = (q.get("behavior") || "BASE").toUpperCase();
@@ -695,7 +715,7 @@ function templateFromFilename(filename, behavior){
   function ts(){ const d=new Date(); const p=n=>String(n).padStart(2,'0'); return `${d.getFullYear()}${p(d.getMonth()+1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`; }
   function slug(s){ return String(s||'').toLowerCase().replace(/[^\w\-]+/g,'-').replace(/\-+/g,'-').replace(/^\-|\-$/g,''); }
 
-  async function createClientFile(client, file, text){
+  window.createClientFile = async function(client, file, text){
     const body = { filename: `client/${client}/${file}`, prompt: text ?? '' };
     const res = await fetch(join(els.apiBase.value, "SavePromptText"), {
       method:"POST",
@@ -754,7 +774,7 @@ function templateFromFilename(filename, behavior){
       "// Prompt template",
       "// ここにルールや出力形式を書いてください。"
     ].join("\n");
-    await createClientFile(clid, file, template);
+    await window.createClientFile(clid, file, template);
 
     // refresh list & open
     if (typeof window.renderFileList === "function") window.renderFileList();
@@ -835,7 +855,7 @@ function templateFromFilename(filename, behavior){
 
     // Save index, then create file
     await saveIndex(promptIndexPath || `client/${clid}/prompt-index.json`, promptIndex, promptIndexEtag);
-    await createClientFile(clid, file, "// Prompt template\n");
+    await window.createClientFile(clid, file, "// Prompt template\n");
 
     // Refresh UI
     if (typeof renderFileList === "function") renderFileList();
