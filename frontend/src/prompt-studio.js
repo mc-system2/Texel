@@ -1565,3 +1565,184 @@ function templateFromFilename(filename, behavior){
   window.__ps_filePath = filePath;
 })();
 // === End API Adaptor Shim ================================================================
+
+/* === Ultra-Compat BLOB API Adapter (2025-11-09) =========================================
+   Purpose:
+   - Works with various Azure Functions backends you've used before:
+     SaveBLOB / SaveBLOBText / SavePromptText / SaveText and LoadBLOB / LoadPromptText
+   - Tries multiple endpoints + parameter shapes until one succeeds (HTTP 2xx).
+   - Normalizes path to: container=prompts, key=client/{CLID}/{file}
+=========================================================================================== */
+(function(){
+  const ROOT = "prompts";
+  const pad = n => String(n).padStart(2,'0');
+  const ts  = () => { const d=new Date(); return d.getFullYear()+pad(d.getMonth()+1)+pad(d.getDate())+"-"+pad(d.getHours())+pad(d.getMinutes())+pad(d.getSeconds()); };
+  const asciiName = () => `prompt-${ts()}.json`;
+  const clid = () => { try { return (els && els.clientId ? (els.clientId.value||"") : "").trim().toUpperCase(); } catch(e){ return ""; } };
+  const idxPath = (c) => `${ROOT}/client/${c}/prompt-index.json`;
+  const fileKey = (c,f) => `client/${c}/${f}`;              // key under container
+  const fullPath = (c,f) => `${ROOT}/${fileKey(c,f)}`;      // prompts/client/...
+
+  const apiBase = () => (els && els.apiBase ? els.apiBase.value : "").replace(/\/+$/,"");
+
+  async function tryFetch(url, init){
+    const res = await fetch(url, init);
+    if (!res.ok) throw new Error(`${init?.method||'GET'} ${url} -> ${res.status}`);
+    return res;
+  }
+
+  async function trySaveCandidates(container, key, text){
+    const base = apiBase();
+    const bodyTxt = (typeof text === "string" ? text : "");
+    const headersTxt = {"Content-Type":"text/plain;charset=UTF-8"};
+    const headersJson = {"Content-Type":"application/json;charset=UTF-8"};
+
+    const tries = [
+      // 1) SaveBLOB (JSON body: {container, filename, text})
+      { url:`${base}/api/SaveBLOB`,       init:{ method:"POST", headers:headersJson, body:JSON.stringify({container, filename:key, text:bodyTxt}) } },
+      // 2) SaveBLOBText (query + raw text)
+      { url:`${base}/api/SaveBLOBText?container=${encodeURIComponent(container)}&filename=${encodeURIComponent(key)}`, init:{ method:"POST", headers:headersTxt, body:bodyTxt } },
+      // 3) SavePromptText (filename=prompts/client/..., raw text)
+      { url:`${base}/api/SavePromptText?filename=${encodeURIComponent(`${container}/${key}`)}`, init:{ method:"POST", headers:headersTxt, body:bodyTxt } },
+      // 4) SaveText (filename=prompts/client/..., raw text)
+      { url:`${base}/api/SaveText?filename=${encodeURIComponent(`${container}/${key}`)}`, init:{ method:"POST", headers:headersTxt, body:bodyTxt } },
+    ];
+    let lastErr;
+    for (const t of tries){
+      try{ await tryFetch(t.url, t.init); return true; }catch(e){ lastErr = e; }
+    }
+    throw lastErr || new Error("All save attempts failed.");
+  }
+
+  async function tryLoadCandidates(container, key){
+    const base = apiBase();
+    const tries = [
+      // 1) LoadBLOB (query container+filename)
+      `${base}/api/LoadBLOB?container=${encodeURIComponent(container)}&filename=${encodeURIComponent(key)}`,
+      // 2) LoadPromptText (filename=prompts/client/...)
+      `${base}/api/LoadPromptText?filename=${encodeURIComponent(`${container}/${key}`)}`,
+      // 3) LoadText (filename=prompts/client/...)
+      `${base}/api/LoadText?filename=${encodeURIComponent(`${container}/${key}`)}`,
+    ];
+    let lastErr, lastText;
+    for (const url of tries){
+      try{
+        const res = await tryFetch(url, { method:"GET" });
+        return await res.text();
+      }catch(e){ lastErr = e; }
+    }
+    throw lastErr || new Error("All load attempts failed.");
+  }
+
+  // Export shims (overwrite if not present, wrap if present)
+  window.__ps_blob = { idxPath, fileKey, fullPath };
+
+  // Load
+  (function(){
+    const name = "LoadPromptText";
+    const orig = window[name];
+    if (typeof orig === "function"){
+      window[name] = async function(filename){
+        // accept both prompts/client/... and client/... forms
+        const f = String(filename||"");
+        if (f.startsWith("prompts/")) return await orig.call(this, f);
+        // convert "client/.../file" to container+key
+        // when underlying orig expects full path, pass fullPath
+        try{ return await orig.call(this, `prompts/${f}`);}catch(_){}
+        const c = "prompts";
+        const txt = await tryLoadCandidates(c, f.replace(/^client\//,""));
+        return txt;
+      };
+    } else {
+      window[name] = async function(filename){
+        const f = String(filename||"").replace(/^prompts\//,"");
+        const c = "prompts";
+        return await tryLoadCandidates(c, f.replace(/^client\//,""));
+      };
+    }
+  })();
+
+  // Save
+  (function(){
+    const name = "SavePromptText";
+    const orig = window[name];
+    if (typeof orig === "function"){
+      window[name] = async function(filename, text){
+        const f = String(filename||"").replace(/^prompts\//,"");
+        try{ return await orig.call(this, `prompts/${f}`, text);}catch(_){}
+        return await trySaveCandidates("prompts", f.replace(/^client\//,""), text);
+      };
+    } else {
+      window[name] = async function(filename, text){
+        const f = String(filename||"").replace(/^prompts\//,"");
+        return await trySaveCandidates("prompts", f.replace(/^client\//,""), text);
+      };
+    }
+  })();
+
+  // ensureFileExists used by other shims
+  window.__ps_ensure = async function(fullOrKey){
+    const c = "prompts";
+    const f = String(fullOrKey||"").replace(/^prompts\//,"");
+    try{
+      await tryLoadCandidates(c, f.replace(/^client\//,""));
+      return true;
+    }catch(_){}
+    await trySaveCandidates(c, f.replace(/^client\//,""), "// Prompt template\n");
+    return true;
+  };
+
+  // Patch openItem to ensure existence before read
+  if (typeof window.openItem === "function" && !window.openItem.__ps_exist){
+    const orig = window.openItem;
+    window.openItem = async function(item){
+      try{
+        const c = clid();
+        if (item && item.file){
+          await window.__ps_ensure(`prompts/${fileKey(c, item.file)}`);
+        }
+      }catch(e){ console.warn("ensure before open failed:", e); }
+      return await orig.apply(this, arguments);
+    };
+    window.openItem.__ps_exist = true;
+  }
+
+  // Patch +追加ボタンのフロー（index保存→本体作成→描画→open）
+  function installAddFlow(){
+    const btn = document.getElementById("btnAdd");
+    if (!btn || btn.__ps_add2) return;
+    btn.__ps_add2 = true;
+    btn.addEventListener("click", async (ev)=>{
+      try{
+        ev.preventDefault(); ev.stopPropagation(); ev.stopImmediatePropagation();
+        const c = clid(); if (!c) return;
+        if (typeof ensurePromptIndex === "function"){
+          await ensurePromptIndex(c, (els && els.behavior ? els.behavior.value : "BASE"));
+        }
+        const disp = window.prompt("新しいプロンプトの表示名", "新規プロンプト");
+        if (disp === null) return;
+        if (!window.promptIndex) window.promptIndex = { items:[], updatedAt:new Date().toISOString() };
+        const items = window.promptIndex.items || [];
+        const maxOrder = items.length ? Math.max.apply(null, items.map(it => it.order || 0)) : 0;
+        const file = asciiName();
+        const item = { file, name: (disp||"").trim() || "新規プロンプト", order: maxOrder + 10, hidden:false };
+        items.push(item);
+        window.promptIndex.updatedAt = new Date().toISOString();
+        if (typeof saveIndex === "function"){
+          await saveIndex(idxPath(c), window.promptIndex, (typeof promptIndexEtag!=="undefined"?promptIndexEtag:null));
+        }
+        // create blob BEFORE open
+        await window.__ps_ensure(`prompts/${fileKey(c, file)}`);
+        // refresh + open
+        try{ await (window.renderFileList ? window.renderFileList({local:true}) : null); }catch(_){}
+        try{ if (typeof openItem === "function") openItem(item); }catch(_){}
+      }catch(e){
+        console.warn("add flow failed:", e);
+        alert("追加に失敗しました: " + (e && e.message ? e.message : e));
+      }
+    }, true);
+  }
+  if (document.readyState === "loading"){ document.addEventListener("DOMContentLoaded", installAddFlow, { once:true }); }
+  else { installAddFlow(); }
+})();
+// === End Ultra-Compat Adapter ============================================================
