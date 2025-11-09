@@ -1,53 +1,43 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="ja">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Prompt Studio</title>
-  <link rel="stylesheet" href="prompt-studio.css">
+  <link rel="stylesheet" href="prompt-studio.css" />
 </head>
 <body>
-  <header class="ps-header">
-    <div class="left">
-      <!-- 戻るボタンは不要 -->
-      <strong>Prompt Studio</strong>
-    </div>
+  <header class="header">
+    <div class="left"><strong>Prompt Studio</strong></div>
     <div class="right">
-      <label>Client <input id="clientId" value="A001" maxlength="4"></label>
+      <label>Client <input id="clientId" value="A001" maxlength="4" /></label>
       <label>Behavior 
-        <select id="behavior">
-          <option value="BASE">BASE</option>
-          <option value="R">R</option>
-          <option value="S">S</option>
-        </select>
+        <select id="behavior"><option value="BASE" selected>BASE</option><option value="R">R</option><option value="S">S</option></select>
       </label>
-      <label>API Base <input id="apiBase" placeholder="https://.../api"></label>
-      <button id="btnDiff" class="btn ghost">差分</button>
+      <label>API Base <input id="apiBase" placeholder="https://.../api" /></label>
+      <button id="btnDiff" class="btn">差分</button>
       <button id="btnSave" class="btn primary">保存 (Ctrl+S)</button>
     </div>
   </header>
 
-  <main class="grid">
-    <aside class="leftpane">
-      <div class="toolbar">
-        <input id="search" class="input" placeholder="ファイル検索…">
-        <button id="btnAddPrompt" class="btn ghost">＋追加</button>
+  <main class="layout">
+    <aside class="sidebar">
+      <div class="side-tools">
+        <input id="search" class="text" placeholder="ファイル検索…" />
+        <button id="btnAddPrompt" class="btn">＋追加</button>
       </div>
-      <div id="fileList" class="filelist"></div>
+      <div id="fileList" class="list"></div>
     </aside>
 
-    <section class="editorpane">
-      <div class="badges">
+    <section class="editor">
+      <div class="chips">
         <span id="statusChip" class="chip">—</span>
         <span id="etagChip" class="chip">ETag: —</span>
         <span id="fileTitle" class="path">ファイル: 未選択</span>
       </div>
-      <div class="cols">
+      <div class="columns">
         <textarea id="promptEditor" spellcheck="false" placeholder="ここにプロンプトが読み込まれます…"></textarea>
-        <div class="params">
-          <h3>パラメータ</h3>
-          <div id="paramList"></div>
-        </div>
+        <div class="params"><h3>パラメータ</h3><div id="paramList"></div></div>
       </div>
     </section>
   </main>
