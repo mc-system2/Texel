@@ -43,6 +43,38 @@ function renderClientList(){
 
 // ==== 読込/保存 ====
 // カタログの読み書きは prompts/client/catalog.json を仮定（既存環境に合わせて修正可）
+
+// ---- fallback: enumerate client folders when catalog.json is missing ----
+async function listClientFoldersFallback(){
+  try{
+    // Expect Azure Function: ListBLOB.js 仕様（container:'prompts', folder:'client'）
+    const r = await postJSON(join(els.apiBase.value, "ListBLOB"), { container: "prompts", folder: "client" });
+    const j = await r.json().catch(()=>null);
+    // 返却想定: { prefixes: ["client/A001/","client/J594/",...], files:[...] } または items[]
+    let codes = [];
+    if (j?.prefixes?.length){
+      codes = j.prefixes.map(x => String(x).split("/")[1]).filter(Boolean);
+    } else if (Array.isArray(j?.items)){
+      // items がフルパスのとき "client/<code>/" を抽出
+      const set = new Set();
+      j.items.forEach(it=>{
+        const m = String(it.name||it.path||"").match(/^client\/([A-Za-z0-9]{1,10})\//);
+        if (m) set.add(m[1]);
+      });
+      codes = [...set];
+    }
+    // prompt-index.json を持つフォルダを優先的に並べる（任意）
+    codes.sort();
+    clients = codes.map(c=>({ code: (c||"").toUpperCase(), name: "", behavior:"BASE" }));
+    previousCodes = new Set(clients.map(x=>x.code));
+    renderClientList();
+    setStatus(clients.length ? "フォルダ一覧から読込" : "クライアントなし");
+  }catch(e){
+    console.warn("ListBLOB fallback failed:", e);
+    setStatus("読込エラー");
+  }
+}
+
 async function loadCatalog(){
   setStatus("読込中…");
   try{
@@ -54,10 +86,8 @@ async function loadCatalog(){
     renderClientList();
     setStatus("読込完了");
   }catch(e){
-    clients = [];
-    previousCodes = new Set();
-    renderClientList();
-    setStatus("新規作成");
+    // catalog.json が無ければフォルダ列挙にフォールバック
+    await listClientFoldersFallback();
   }
 }
 
