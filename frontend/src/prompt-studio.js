@@ -260,8 +260,16 @@ function boot(){
       if (!els || !els.search) els.search = document.getElementById("search");
       if (els && els.search && !els.search.__wired){
         els.search.__wired = true;
-        try{ __ps_wireSearch(); }catch{}});
+        els.search.addEventListener("input", ()=>{
+          const kw = (els.search.value||"").toLowerCase();
+          [...(els.fileList?.children||[])].forEach(it=>{
+            const t = it.querySelector(".name")?.textContent?.toLowerCase() || "";
+            it.style.display = t.includes(kw) ? "" : "none";
+          });
+        });
       }
+    }catch(e){ console.warn("wireSearch failed:", e); }
+  }
     }catch(e){ console.warn("wireSearch failed:", e); }
   }
 
