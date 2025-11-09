@@ -119,8 +119,8 @@ input[type="range"]{width:100%}
   .ps-main{grid-template-columns: clamp(240px, 22vw, 320px) 1fr}
 }
 
-/* --- Prompt index rename UI --- */
-.fileitem .rename{color:#6b7785; background:transparent; border:none; cursor:pointer; padding:4px 6px; border-radius:8px}
-.fileitem .rename:hover{background:#f1f5f9}
-.fileitem .rename:active{transform: translateY(1px);}
-.fileitem .name.editing input{width:100%; font:inherit; border:1px solid var(--line); border-radius:6px; padding:4px 6px;}
+/* drag sort visuals */
+.fileitem { display:flex; align-items:center; gap:8px; }
+.fileitem .drag { cursor:grab; user-select:none; opacity:0.6; padding:2px 4px; }
+.fileitem.dragging { opacity:0.6; }
+.fileitem .name { flex:1; min-width:0; }

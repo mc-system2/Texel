@@ -39,6 +39,110 @@ const els = {
 };
 
 let currentKind = null;
+
+/* ---------- Prompt Index (order & display name) ---------- */
+let promptIndex = null;      // {version, clientId, behavior, updatedAt, items:[{file,name,order,hidden}]}
+let promptIndexPath = null;  // BLOB path
+let promptIndexEtag = null;  // ETag
+
+function indexBehaviorPath(clientId, behavior){
+  return `client/${clientId}/${behavior}/prompt-index.json`;
+}
+function indexClientPath(clientId){
+  return `client/${clientId}/prompt-index.json`;
+}
+function prettifyNameFromFile(filename){
+  return filename.replace(/\.json$/i,'')
+                 .replace(/^texel[-_]?/i,'')
+                 .replace(/[-_]+/g,' ')
+                 .replace(/\b\w/g, s=>s.toUpperCase());
+}
+
+// load if exists
+async function tryLoad(path){
+  try{
+    const r = await fetch(join(els.apiBase.value, "LoadPromptText"), {
+      method:"POST",
+      headers:{ "Content-Type":"application/json; charset=utf-8" },
+      body: JSON.stringify({ filename: path })
+    });
+    if (!r.ok) return null;
+    const json = await r.json();
+    const dataText = json?.text ?? json?.prompt ?? null;
+    const data = dataText ? JSON.parse(dataText) : (json?.json ?? null);
+    return { etag: json?.etag ?? null, data };
+  }catch{ return null; }
+}
+
+// Save index json via SavePromptText
+async function saveIndex(path, idx, etag){
+  const payload = { filename: path, prompt: JSON.stringify(idx, null, 2) };
+  if (etag) payload.etag = etag;
+  const r = await fetch(join(els.apiBase.value, "SavePromptText"), {
+    method:"POST",
+    headers:{ "Content-Type":"application/json; charset=utf-8" },
+    body: JSON.stringify(payload)
+  });
+  const raw = await r.text(); let j={}; try{ j = raw?JSON.parse(raw):{} }catch{}
+  if (!r.ok) throw new Error(j?.error || raw || `HTTP ${r.status}`);
+  promptIndexEtag = j?.etag || promptIndexEtag || null;
+  return j;
+}
+
+// ensure index exists (client-root preferred), else auto-generate
+async function ensurePromptIndex(clientId, behavior){
+  const tryPaths = [ indexClientPath(clientId), indexBehaviorPath(clientId, behavior) ];
+  let usedPath = null, idx = null, etag = null;
+
+  for (const p of tryPaths){
+    const s = await tryLoad(p);
+    if (s && s.data){ usedPath = p; idx = s.data; etag = s.etag; break; }
+  }
+
+  if (!idx){
+    // generate from known kinds allowed for this behavior
+    const kinds = Object.keys(KIND_TO_NAME).filter(k=>FAMILY[behavior].has(k));
+    const items = kinds.map((k,i)=>{
+      const file = KIND_TO_NAME[k];
+      return { file, name: prettifyNameFromFile(file), order: (i+1)*10, hidden:false };
+    });
+    idx = { version:1, clientId, behavior, updatedAt:new Date().toISOString(), items };
+    usedPath = indexClientPath(clientId);
+    await saveIndex(usedPath, idx, null);
+    const s = await tryLoad(usedPath);
+    etag = s ? s.etag : null;
+  }
+
+  promptIndex = idx;
+  promptIndexPath = usedPath;
+  promptIndexEtag = etag || null;
+  return idx;
+}
+
+// Rename an item and save index
+async function renameIndexItem(file, newName){
+  if (!promptIndex) return;
+  const it = promptIndex.items.find(x=>x.file===file);
+  if (!it) return;
+  it.name = newName || it.name;
+  promptIndex.updatedAt = new Date().toISOString();
+  await saveIndex(promptIndexPath, promptIndex, promptIndexEtag);
+}
+
+// Update orders from current DOM list and save
+async function saveOrderFromDOM(){
+  if (!promptIndex) return;
+  const lis = [...els.fileList.querySelectorAll('.fileitem')];
+  lis.forEach((el, i) => {
+    const f = el.dataset.file;
+    const it = promptIndex.items.find(x=>x.file===f);
+    if (it) it.order = (i+1)*10;
+  });
+  promptIndex.updatedAt = new Date().toISOString();
+  await saveIndex(promptIndexPath, promptIndex, promptIndexEtag);
+}
+
+
 let currentFilenameTarget = null;
 let currentEtag = null;
 let templateText = "";
@@ -125,40 +229,54 @@ window.addEventListener("beforeunload", (e)=>{ if (!dirty) return; e.preventDefa
 
 /* ---------- File List ---------- */
 
+
 async function renderFileList(){
   els.fileList.innerHTML = "";
   const clid = els.clientId.value.trim().toUpperCase();
   const beh  = els.behavior.value.toUpperCase();
 
-  // ensure/load index (client-root preferred)
   await ensurePromptIndex(clid, beh);
 
-  // allowed file set for this behavior
   const kinds = Object.keys(KIND_TO_NAME).filter(k=>FAMILY[beh].has(k));
   const allowedFiles = new Set(kinds.map(k=>KIND_TO_NAME[k]));
 
-  // build rows from index
   const rows = [...(promptIndex.items||[])]
-    .filter(it => !it.hidden && (allowedFiles.size===0 || allowedFiles.has(it.file)))
+    .filter(it => !it.hidden && allowedFiles.has(it.file))
     .sort((a,b)=>(a.order??0)-(b.order??0));
+
+  // enable drag sort events on container
+  els.fileList.addEventListener('dragover', (e)=>{
+    e.preventDefault();
+    const dragging = document.querySelector('.fileitem.dragging');
+    const after = getDragAfterElement(els.fileList, e.clientY);
+    if (!after) els.fileList.appendChild(dragging);
+    else els.fileList.insertBefore(dragging, after);
+  });
+  els.fileList.addEventListener('drop', async ()=>{ await saveOrderFromDOM(); });
 
   for (const it of rows){
     const name = it.name || prettifyNameFromFile(it.file);
     const li = document.createElement("div");
     li.className = "fileitem";
     li.dataset.file = it.file;
-    li.innerHTML = `<div class="name" title="${it.file}">${name}</div>
+    li.draggable = true;
+    li.innerHTML = `<span class="drag">≡</span>
+                    <div class="name" title="${it.file}">${name}</div>
                     <div class="meta">
                       <button class="rename" title="名称を変更">✎</button>
                       <span class="chip">checking…</span>
                     </div>`;
     els.fileList.appendChild(li);
 
-    // check where the file is coming from
+    li.addEventListener('dragstart', ()=> li.classList.add('dragging'));
+    li.addEventListener('dragend', async ()=>{
+      li.classList.remove('dragging');
+      await saveOrderFromDOM();
+    });
+
     const clientPath = `client/${clid}/${it.file}`;
     const legacyPath = `prompt/${clid}/${it.file}`;
     const template   = templateFromFilename(it.file, beh);
-
     const state = await resolveState([clientPath, legacyPath], template);
     const chip  = li.querySelector(".chip");
     if (state === "client") { chip.textContent = "Overridden"; chip.classList.add("ok"); }
@@ -166,13 +284,8 @@ async function renderFileList(){
     else if (state === "template"){ chip.textContent = "Template"; chip.classList.add("info"); }
     else { chip.textContent = "Missing"; chip.classList.add("warn"); }
 
-    // open handler
-    li.addEventListener("click", (e)=>{
-      if (e.target && e.target.classList.contains("rename")) return;
-      openItem(it);
-    });
+    li.addEventListener("click", (e)=>{ if (!e.target.classList.contains("rename") && !e.target.classList.contains("drag")) openItem(it); });
 
-    // rename handler
     li.querySelector(".rename").addEventListener("click", (e)=>{
       e.preventDefault(); e.stopPropagation();
       const nameDiv = li.querySelector(".name");
@@ -199,6 +312,16 @@ async function renderFileList(){
     });
   }
 }
+
+function getDragAfterElement(container, y){
+  const els = [...container.querySelectorAll('.fileitem:not(.dragging)')];
+  return els.reduce((closest, child)=>{
+    const box = child.getBoundingClientRect();
+    const offset = y - box.top - box.height/2;
+    return (offset < 0 && offset > closest.offset) ? { offset, element: child } : closest;
+  }, { offset: Number.NEGATIVE_INFINITY }).element;
+}
+
 
 function behaviorTemplatePath(beh, kind){
   const base = KIND_TO_NAME[kind];
