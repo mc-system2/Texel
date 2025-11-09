@@ -99,3 +99,35 @@ main{padding:18px}
 }
 tr:hover .studio-link{ display: inline-block; }
 .code-cell .studio-link:hover{ filter: brightness(0.98); }
+
+/* ↓ 追加：新規行のテキスト入力など、プレースホルダーを薄く見せる */
+.client-table input[type="text"]::placeholder,
+.client-table input[type="url"]::placeholder,
+.client-table input[type="search"]::placeholder,
+.client-table textarea::placeholder {
+  color: #9AA4B2;   /* グレイッシュな薄色 */
+  opacity: 0.48;    /* さらに薄く */
+}
+
+/* ベンダープレフィックス（Safari/旧Edge対策） */
+.client-table input[type="text"]::-webkit-input-placeholder,
+.client-table input[type="url"]::-webkit-input-placeholder,
+.client-table input[type="search"]::-webkit-input-placeholder,
+.client-table textarea::-webkit-input-placeholder {
+  color: #9AA4B2;
+  opacity: 0.48;
+}
+.client-table input[type="text"]::-moz-placeholder,
+.client-table input[type="url"]::-moz-placeholder,
+.client-table input[type="search"]::-moz-placeholder,
+.client-table textarea::-moz-placeholder {
+  color: #9AA4B2;
+  opacity: 0.48;
+}
+.client-table input[type="text"]:-ms-input-placeholder,
+.client-table input[type="url"]:-ms-input-placeholder,
+.client-table input[type="search"]:-ms-input-placeholder,
+.client-table textarea:-ms-input-placeholder {
+  color: #9AA4B2;
+  opacity: 1;       /* IEはopacity未対応なので色だけで薄く */
+}
