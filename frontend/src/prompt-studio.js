@@ -1229,3 +1229,157 @@ function templateFromFilename(filename, behavior){
   }
 })();
 // === End Strong Shim v2 ==================================================================
+
+/* === Prompt Studio Robust Normalization Shim (2025-11-09 final) =========================
+   What this does:
+   1) Forces every API call path to be "prompts/client/{CLID}/{file}"
+   2) Auto-migrates non-ASCII file names in the index to ASCII: "prompt-YYYYMMDD-HHMMSS.json"
+   3) Guarantees file creation before open (to avoid 404) and never clears the list on failure
+========================================================================================== */
+(function(){
+  // ---------- helpers ----------
+  const ROOT = "prompts";
+  const asc = s => /^[\x00-\x7F]+$/.test(s);
+  const pad = n => String(n).padStart(2, "0");
+  const ts  = () => { const d=new Date(); return d.getFullYear()+pad(d.getMonth()+1)+pad(d.getDate())+"-"+pad(d.getHours())+pad(d.getMinutes())+pad(d.getSeconds()); };
+  const asciiName = () => `prompt-${ts()}.json`;
+  const clid = () => { try { return (els?.clientId?.value || "").trim().toUpperCase(); } catch { return ""; } };
+  const idxPath = (c) => `${ROOT}/client/${c}/prompt-index.json`;
+  const fullPath = (c, f) => `${ROOT}/client/${c}/${f}`;
+
+  function ensurePaths(){
+    const c = clid(); if (c) window.promptIndexPath = idxPath(c);
+  }
+
+  // ---------- index migration (once per boot) ----------
+  async function migrateIndex(){
+    try{
+      ensurePaths();
+      const c = clid(); if (!c) return;
+      if (!window.promptIndex || !Array.isArray(window.promptIndex.items)) return;
+      let changed = false;
+      for (const it of window.promptIndex.items){
+        if (!asc(it.file)){
+          it.file = asciiName();
+          changed = true;
+        }
+      }
+      if (changed && typeof saveIndex === "function"){
+        window.promptIndex.updatedAt = new Date().toISOString();
+        await saveIndex(idxPath(c), window.promptIndex, (typeof promptIndexEtag!=="undefined"?promptIndexEtag:null));
+      }
+    }catch(e){ console.warn("migrateIndex failed:", e); }
+  }
+
+  // ---------- API wrappers (path normalization) ----------
+  function wrap1(name){
+    const orig = window[name];
+    if (typeof orig !== "function" || orig.__ps_norm) return;
+    window[name] = async function(a,b,c){
+      try{
+        const cId = clid();
+        // normalize single 'filename' param (string) usage
+        let fn = a;
+        if (typeof fn === "string"){
+          if (!fn.startsWith(`${ROOT}/`)){
+            fn = fullPath(cId, fn);
+          }
+        }
+        return await orig.call(this, fn, b, c);
+      }catch(e){
+        console.warn(`${name} norm failed`, e);
+        return await orig.apply(this, arguments);
+      }
+    };
+    window[name].__ps_norm = true;
+  }
+  ["LoadPromptText", "SavePromptText", "DeletePromptText"].forEach(wrap1);
+
+  // create wrapper (signature may be (clientId, filename, text) or (filename, text))
+  (function(){
+    const name = "createClientFile";
+    const orig = window[name];
+    if (typeof orig !== "function" || orig.__ps_norm) return;
+    window[name] = async function(a,b,c){
+      const cId = clid();
+      let clientArg = a, fileArg = b, textArg = c;
+      if (typeof b === "undefined"){
+        // pattern: (filename, text)
+        fileArg = a; textArg = b; clientArg = cId;
+      }
+      if (typeof fileArg === "string" && !fileArg.startsWith(`${ROOT}/`)){
+        fileArg = fullPath(cId, fileArg);
+      }
+      return await orig.call(this, clientArg, fileArg, textArg);
+    };
+    window[name].__ps_norm = true;
+  })();
+
+  // ---------- openItem guard: create if missing, don't clear list ----------
+  if (typeof window.openItem === "function" && !window.openItem.__ps_norm){
+    const orig = window.openItem;
+    window.openItem = async function(item){
+      ensurePaths();
+      try {
+        // ensure ascii filename for this item
+        if (item && item.file && !asc(item.file)){
+          item.file = asciiName();
+          if (window.promptIndex){
+            window.promptIndex.updatedAt = new Date().toISOString();
+            await saveIndex(idxPath(clid()), window.promptIndex, (typeof promptIndexEtag!=="undefined"?promptIndexEtag:null));
+          }
+        }
+        // pre-create file to avoid 404
+        if (item && item.file && typeof window.createClientFile === "function"){
+          await window.createClientFile(clid(), item.file, "// init\n");
+        }
+        return await orig.apply(this, arguments);
+      } catch (e){
+        console.warn("openItem fallback:", e);
+        try{
+          if (item && item.file && typeof window.createClientFile === "function"){
+            await window.createClientFile(clid(), item.file, "// created by fallback\n");
+          }
+        }catch(_){}
+        if (els && els.promptEditor) els.promptEditor.value = "";
+        if (els && els.fileTitle) els.fileTitle.textContent = `client/${clid()}/${item?.file || "(new)"}`;
+        if (els && els.badgeState) els.badgeState.textContent = "Missing（新規）";
+      }
+    };
+    window.openItem.__ps_norm = true;
+  }
+
+  // ---------- add button: enforce ascii + precreate ----------
+  function installAddFix(){
+    const btn = document.getElementById("btnAdd");
+    if (!btn || btn.__ps_norm) return;
+    btn.__ps_norm = true;
+    btn.addEventListener("click", async (ev)=>{
+      try{
+        ensurePaths();
+        await (window.ensurePromptIndex ? window.ensurePromptIndex(clid()) : null);
+        const disp = window.prompt("新しいプロンプトの表示名", "新規プロンプト");
+        if (disp === null) return;
+        const items = (window.promptIndex?.items)||[];
+        const maxOrder = items.length ? Math.max.apply(null, items.map(it=>it.order||0)) : 0;
+        const item = { file: asciiName(), name: (disp||"").trim() || "新規プロンプト", order: maxOrder+10, hidden:false };
+        if (!window.promptIndex) window.promptIndex = { items:[] };
+        window.promptIndex.items.push(item);
+        window.promptIndex.updatedAt = new Date().toISOString();
+        await saveIndex(idxPath(clid()), window.promptIndex, (typeof promptIndexEtag!=="undefined"?promptIndexEtag:null));
+        if (typeof window.createClientFile === "function"){
+          await window.createClientFile(clid(), item.file, "// Prompt template\n");
+        }
+        try{ await (window.renderFileList ? window.renderFileList({local:true}) : null); }catch{}
+        try{ if (typeof openItem==="function") openItem(item); }catch{}
+      }catch(e){
+        console.warn("Add fix failed:", e);
+      }
+    }, true);
+  }
+  if (document.readyState === "loading"){ document.addEventListener("DOMContentLoaded", installAddFix, {once:true}); } else { installAddFix(); }
+
+  // run migration once
+  (async ()=>{ await migrateIndex(); })();
+})();
+// === End Robust Normalization Shim =======================================================
