@@ -188,7 +188,7 @@ async function saveCatalog(){
     showAlert("保存完了", "ok");
 
     // 保存成功後：クライアント別プロンプト 初期コピー/削除 を同期
-    await initPromptsForNewClients(clients);
+    await syncClientPromptsAfterSave(clients);
 
     // スナップショットを最新に
     previousCatalogCodes = new Map();
@@ -348,7 +348,64 @@ function join(base, path){
  * - adds: 現在行すべて（BASE/TYPE-R/TYPE-S）→ 初回コピーのみ（API側で存在チェック）
  * - deletes: 前回にあって今回ないコード → client/<CLID>/ と legacy prompt/<CLID>/ を削除（API側実装）
  */
-/* (deprecated) syncClientPromptsAfterSave removed in roomphoto-only init spec */
+async function syncClientPromptsAfterSave(currentClients){
+  const nowMap = new Map(currentClients.map(c => [c.code, normalizeBehavior(c.behavior||"")]));
+
+  // 削除検出
+  const deletes = [];
+  for (const code of previousCatalogCodes.keys()) {
+    if (!nowMap.has(code)) deletes.push(code);
+  }
+
+  // 追加：全行（存在するものはAPI側でskip）
+  const adds = [];
+  for (const [code, behavior] of nowMap.entries()) {
+    adds.push({ code, behavior });
+  }
+
+  if (adds.length === 0 && deletes.length === 0) return;
+
+  setStatus("プロンプト同期中…");
+  const url = join(els.apiBase.value, "SyncClientPrompts");
+  const payload = { adds, deletes };
+
+  try {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type":"application/json; charset=utf-8" },
+      body: JSON.stringify(payload)
+    });
+
+    const ctype = (res.headers.get("content-type") || "").toLowerCase();
+    let result = {};
+    let rawText = "";
+    try {
+      if (ctype.includes("application/json")) {
+        result = await res.json();
+      } else {
+        rawText = await res.text();
+        try { result = JSON.parse(rawText); } catch {}
+      }
+    } catch {}
+
+    if (!res.ok) {
+      const reason = result?.error || rawText || `HTTP ${res.status}`;
+      throw new Error(reason);
+    }
+
+    const created = Array.isArray(result.created) ? result.created.length : 0;
+    const skipped = Array.isArray(result.skipped) ? result.skipped.length : 0;
+    const deleted = Array.isArray(result.deleted) ? result.deleted.length : 0;
+    const errors  = Array.isArray(result.errors)  ? result.errors.length  : 0;
+    showAlert(`プロンプト同期 完了（新規${created} / 既存${skipped} / 削除${deleted} / エラー${errors}）`, errors ? "error" : "ok");
+    if (errors && result.errors) console.table(result.errors);
+  } catch (err) {
+    showAlert(`プロンプト同期 失敗：${err.message||err}`, "error");
+  } finally {
+    setStatus("");
+  }
+}
+
 /* ===== 起動時の自動読込 ===== */
 window.addEventListener("DOMContentLoaded", async ()=>{
   if (!els.apiBase.value) els.apiBase.value = DEV_API;
@@ -357,84 +414,52 @@ window.addEventListener("DOMContentLoaded", async ()=>{
 });
 
 
-/* ===== プロンプト初期化（新規クライアントのみ・roomphoto固定） ===== */
-async function initPromptsForNewClients(currentClients){
-  const nowMap = new Map(currentClients.map(c => [c.code.toUpperCase(), normalizeBehavior(c.behavior||"")]));
-  // 新規追加検出
-  const newOnes = [];
-  for (const [code, beh] of nowMap.entries()){
-    if (!previousCatalogCodes.has(code)) newOnes.push({ code, behavior: beh });
-  }
-  // 削除検出（既存ロジックを流用）
-  const deletes = [];
-  for (const code of previousCatalogCodes.keys()) {
-    if (!nowMap.has(code)) deletes.push(code);
-  }
-  if (newOnes.length===0 && deletes.length===0) return;
-
-  setStatus("クライアント初期化中…");
-  try{
-    // 1) 新規：index生成 + roomphotoテンプレ複製
-    for (const {code, behavior} of newOnes){
-      const idx = {
-        version: 1,
-        clientId: code,
-        behavior: behavior,
-        updatedAt: new Date().toISOString(),
-        items: [
-          { file: "texel-roomphoto.json", name: "画像分析プロンプト", order: 10, hidden: false, fixed: true }
-        ],
-        params: {}
-      };
-      // a) index 保存
-      await savePromptText(`client/${code}/prompt-index.json`, JSON.stringify(idx, null, 2));
-      // b) roomphoto テンプレ取得 → クライアント配下へ保存（存在しなくてもOK）
-      try {
-        const templFile = templateFromFilename("texel-roomphoto.json", behavior);
-        const t = await loadPromptText(templFile);
-        if (t) await savePromptText(`client/${code}/texel-roomphoto.json`, t);
-      } catch {}
-    }
-
-    // 2) 削除：従来のAPIでフォルダ掃除（存在しなければスキップされる想定）
-    if (deletes.length){
-      const url = join(els.apiBase.value, "SyncClientPrompts");
-      const payload = { adds: [], deletes };
-      await fetch(url, {
-        method:"POST",
-        headers:{ "Content-Type":"application/json; charset=utf-8" },
-        body: JSON.stringify(payload)
-      });
-    }
-  } finally {
-    setStatus("");
-  }
+function addClientRow(code="", name=""){
+  clients.push({ code, name, behavior: "BASE" });
+  renderClientList();
+}
+function deleteClientRow(idx){
+  clients.splice(idx,1);
+  renderClientList();
 }
 
-/* --- API helpers: 個別ファイルの保存/取得 --- */
-async function savePromptText(filename, promptText){
-  const body = { filename, prompt: promptText };
-  const r = await fetch(join(els.apiBase.value, "SavePromptText"), {
-    method:"POST",
-    headers:{ "Content-Type":"application/json; charset=utf-8" },
-    body: JSON.stringify(body)
+
+function renderClientList(){
+  const box = document.getElementById("list");
+  box.innerHTML = "";
+  clients.forEach((c, idx)=>{
+    const row = document.createElement("div");
+    row.className = "client-row";
+    row.innerHTML = \`
+      <input class="code" maxlength="4" placeholder="CODE" value="\${c.code||""}">
+      <input class="name" placeholder="名称" value="\${c.name||""}">
+      <button class="btn row-del" title="削除">🗑</button>
+    \`;
+    const [codeEl, nameEl] = row.querySelectorAll("input");
+    codeEl.addEventListener("input", (e)=>{
+      clients[idx].code = e.target.value.toUpperCase().replace(/[^A-Z0-9]/g,"").slice(0,4);
+      e.target.value = clients[idx].code;
+    });
+    nameEl.addEventListener("input", (e)=> clients[idx].name = e.target.value );
+    row.querySelector(".row-del").addEventListener("click", ()=> deleteClientRow(idx));
+    box.appendChild(row);
   });
-  if (!r.ok){ const tx = await r.text(); throw new Error(tx || `HTTP ${r.status}`); }
-}
-async function loadPromptText(filename){
-  const r = await fetch(join(els.apiBase.value, "LoadPromptText"), {
-    method:"POST",
-    headers:{ "Content-Type":"application/json; charset=utf-8" },
-    body: JSON.stringify({ filename })
-  });
-  if (!r.ok) return "";
-  const j = await r.json().catch(()=> ({}));
-  const raw = typeof j.text === "string" ? j.text : (typeof j.prompt === "string" ? j.prompt : "");
-  return raw;
 }
 
-function templateFromFilename(filename, behavior){
-  if (behavior === "TYPE-R") return filename.replace(/^texel-/, "texel-r-");
-  if (behavior === "TYPE-S") return filename.replace(/^texel-/, "texel-s-");
-  return filename;
+
+document.getElementById("btnAddClientRow")?.addEventListener("click", ()=> addClientRow());
+
+
+let clients = [];
+function hydrateFromDOM(){
+  clients = Array.from(document.querySelectorAll("#list .client-row")).map(r=>{
+    const [codeEl, nameEl] = r.querySelectorAll("input");
+    return { code: (codeEl?.value||"").toUpperCase(), name: nameEl?.value||"", behavior:"BASE" };
+  });
 }
+
+
+window.addEventListener("DOMContentLoaded", ()=>{
+  if (clients.length===0) clients = [];
+  renderClientList();
+});

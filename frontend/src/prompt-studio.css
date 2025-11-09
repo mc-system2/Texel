@@ -118,14 +118,3 @@ input[type="range"]{width:100%}
   .ps-header{grid-template-columns: 1fr; height:auto; row-gap:8px; padding:8px 14px}
   .ps-main{grid-template-columns: clamp(240px, 22vw, 320px) 1fr}
 }
-
-/* drag sort visuals */
-.fileitem { display:flex; align-items:center; gap:8px; }
-.fileitem .drag { cursor:grab; user-select:none; opacity:0.6; padding:2px 4px; }
-.fileitem.dragging { opacity:0.6; }
-.fileitem .name { flex:1; min-width:0; }
-
-.fileitem .lock{ opacity:0.6; margin-right:6px; }
-.fileitem .dup, .fileitem .del, .fileitem .rename{ margin-left:6px; }
-.fileitem[draggable="false"] .drag{ opacity:0.2; cursor:not-allowed; }
-#btnAddPrompt{ margin-right:8px; }

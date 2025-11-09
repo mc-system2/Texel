@@ -99,3 +99,9 @@ main{padding:18px}
 }
 tr:hover .studio-link{ display: inline-block; }
 .code-cell .studio-link:hover{ filter: brightness(0.98); }
+
+.row-del{ margin-left:8px; opacity:.7 }
+.row-del:hover{ opacity:1 }
+.client-row{ display:flex; align-items:center; gap:8px; margin:8px 0; }
+.client-row input.code{ width:90px; }
+.client-row input.name{ flex:1; }
