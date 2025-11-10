@@ -1,4 +1,5 @@
-/* ===== Prompt Studio – logic (with index & add/remove) ===== */
+/* build:ps-20251110-214727 */
+/* ===== Prompt Studio – logic (index-safe add) ===== */
 const DEV_API  = "https://func-texel-api-dev-jpe-001-b2f6fec8fzcbdrc3.japaneast-01.azurewebsites.net/api/";
 const PROD_API = "https://func-texel-api-prod-jpe-001-dsgfhtafbfbxawdz.japaneast-01.azurewebsites.net/api/";
 
@@ -39,13 +40,37 @@ const els = {
   status:    document.getElementById("statusMessage"),
   btnAdd:    document.getElementById("btnAdd"),
 };
-// /*hideSearch*/ remove/disable search UI
-try{ if (els.search){ els.search.style.display='none'; } }catch{}
-
 
 let currentEtag = null;
 let templateText = "";
 let dirty = false;
+/* ---- Guard helpers ---- */
+function sanitizeSegment(s){
+  s = (s||"").trim();
+  s = s.replace(/[\/\\]+/g, ""); // no slashes
+  return s;
+}
+function requireClient(){
+  const raw = (els.clientId.value||"").toUpperCase();
+  const client = sanitizeSegment(raw);
+  if (!client){
+    setStatus("クライアントIDを入力してください（例：A001）","red");
+    els.clientId.focus();
+    throw new Error("CLIENT_ID_REQUIRED");
+  }
+  if (client === "<NO NAME>" || client === "NO NAME"){
+    setStatus("'<no name>' は使用できません。正しいクライアントIDを入力してください。","red");
+    els.clientId.focus();
+    throw new Error("CLIENT_ID_INVALID");
+  }
+  return client;
+}
+function requireBehavior(){
+  let b = (els.behavior.value||"BASE").toUpperCase();
+  if (!FAMILY[b]) b = "BASE";
+  return b;
+}
+
 
 /* ---------- Prompt Index (order & display name) ---------- */
 let promptIndex = null;      // {version, clientId, behavior, updatedAt, items:[{file,name,order,hidden,lock?}]}
@@ -67,7 +92,8 @@ async function apiLoadText(filename){
   let data = null;
   const t = j?.text ?? j?.prompt ?? null;
   if (typeof t === "string"){ try{ data = JSON.parse(t) }catch{ data = t } }
-  else if (j?.prompt) data = j;
+  else if (j?.prompt) data = j.prompt;
+  else if (j && typeof j === "object") data = j;
   return { etag: j?.etag ?? null, data };
 }
 async function apiSaveText(filename, payload, etag){
@@ -84,6 +110,7 @@ async function apiSaveText(filename, payload, etag){
 function normalizeIndex(x){
   try{
     if (!x) return null;
+    // allow {items:[...]} or {prompt:{items:[...]}} or raw string JSON
     if (x.items) return x;
     if (x.prompt?.items) return x.prompt;
     if (typeof x === "string"){ const p=JSON.parse(x); return p.items? p : (p.prompt?.items? p.prompt : null); }
@@ -98,7 +125,7 @@ async function ensurePromptIndex(clientId, behavior){
     const idx = normalizeIndex(r.data);
     if (idx){ promptIndex=idx; promptIndexPath=path; promptIndexEtag=r.etag||null; return promptIndex; }
   }
-  // auto-generate: roomphoto locked at top
+  // not found → bootstrap (do NOT overwrite if exists)
   const kinds = [...FAMILY[behavior]];
   const items = [];
   let order = 10;
@@ -121,8 +148,27 @@ async function ensurePromptIndex(clientId, behavior){
 async function saveIndex(){
   if (!promptIndex) return;
   promptIndex.updatedAt = new Date().toISOString();
-  const res = await apiSaveText(promptIndexPath, promptIndex, promptIndexEtag);
-  promptIndexEtag = res?.etag || promptIndexEtag || null;
+  try{
+    const res = await apiSaveText(promptIndexPath, promptIndex, promptIndexEtag);
+    promptIndexEtag = res?.etag || promptIndexEtag || null;
+  }catch(e){
+    const msg = String(e||"");
+    if (msg.includes("412")){
+      const latest = await apiLoadText(promptIndexPath);
+      const idx = normalizeIndex(latest?.data);
+      if (idx){
+        promptIndexEtag = latest?.etag || null;
+        const known = new Set(idx.items.map(x=>x.file));
+        for (const it of promptIndex.items){ if (!known.has(it.file)) idx.items.push(it); }
+        idx.items.sort((a,b)=>(a.order??0)-(b.order??0)).forEach((x,i)=>x.order=(i+1)*10);
+        promptIndex = idx;
+      }
+      const res2 = await apiSaveText(promptIndexPath, promptIndex, promptIndexEtag);
+      promptIndexEtag = res2?.etag || null;
+    } else {
+      throw e;
+    }
+  }
 }
 
 async function renameIndexItem(file, newName){
@@ -135,40 +181,27 @@ async function deleteIndexItem(file){
   const i = promptIndex.items.findIndex(x=>x.file===file);
   if (i<0 || promptIndex.items[i].lock) return;
   promptIndex.items.splice(i,1);
-  // 再採番
+  // re-number
   promptIndex.items.sort((a,b)=>(a.order??0)-(b.order??0)).forEach((x,i)=>x.order=(i+1)*10);
   await saveIndex();
 }
-async function addIndexItem(fileName, displayName){
-  // sanitize
+async function addIndexItemRaw(fileName, displayName){
+  // append only (never reconstruct)
   let file = fileName.trim();
   if (!file.endsWith(".json")) file = file + ".json";
   if (!file.startsWith("texel-")) file = "texel-" + file;
   if (promptIndex.items.some(x=>x.file===file)) throw new Error("同名ファイルが既に存在します。");
   const maxOrder = Math.max(0, ...promptIndex.items.map(x=>x.order||0));
-  promptIndex.items.push({ file, name: displayName?.trim()||prettifyNameFromFile(file), order:maxOrder+10, hidden:false });
+  promptIndex.items.push({ file, name:(displayName||'').trim()||prettifyNameFromFile(file), order:maxOrder+10, hidden:false });
   await saveIndex();
 }
 
-/* === auto filename generator & raw index append === */
+/* === auto filename generator === */
 function generateAutoFilename(){
   const d = new Date();
   const pad = n => String(n).padStart(2, "0");
   return `texel-custom-${d.getFullYear()}${pad(d.getMonth()+1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}.json`;
 }
-
-async function addIndexItemRaw(filename, displayName){
-  let file = (filename||"").trim();
-  if (!file) throw new Error("filename is empty");
-  if (!file.endsWith(".json")) file += ".json";
-  if (!/^texel-/.test(file)) file = "texel-" + file;
-  if (promptIndex.items.some(x=>x.file===file)) throw new Error("同名ファイルが既に存在します。");
-  const maxOrder = Math.max(0, ...promptIndex.items.map(x=>x.order||0));
-  const name = (displayName||'').trim() || prettifyNameFromFile(file);
-  promptIndex.items.push({ file, name, order:maxOrder+10, hidden:false });
-  await saveIndex();
-}
-
 
 /* ---------- Tabs ---------- */
 function showTab(which){
@@ -223,62 +256,75 @@ paramKeys.forEach(([k])=>{
 /* ---------- Boot ---------- */
 window.addEventListener("DOMContentLoaded", boot);
 function boot(){
-  try{ if(els.search) els.search.style.display='none'; }catch{}
   const q = new URLSearchParams(location.hash.replace(/^#\??/, ''));
   els.clientId.value = (q.get("client") || "").toUpperCase();
   els.behavior.value = (q.get("behavior") || "BASE").toUpperCase();
   els.apiBase.value  = q.get("api") || DEV_API;
 
+  if (els.search){ els.search.style.display='none'; }
+  function toggleActions(){
+    const ok = !!sanitizeSegment((els.clientId.value||'').trim());
+    if (els.btnAdd) els.btnAdd.disabled = !ok;
+    if (els.btnSave) els.btnSave.disabled = !ok;
+  }
+  toggleActions();
+  els.clientId.addEventListener("input", ()=>{ els.clientId.value = sanitizeSegment(els.clientId.value.toUpperCase()); toggleActions(); });
+  function syncHash(){
+    const params = new URLSearchParams();
+    params.set("client", (els.clientId.value||"").toUpperCase());
+    params.set("behavior", (els.behavior.value||"BASE").toUpperCase());
+    params.set("api", els.apiBase.value||"");
+    location.hash = params.toString();
+  }
+  els.clientId.addEventListener("change", syncHash);
+  els.behavior.addEventListener("change", syncHash);
+  els.apiBase.addEventListener("change", syncHash);
+  if (sanitizeSegment((els.clientId.value||'').trim())){
+    renderFileList();
+  } else {
+    setStatus("クライアントIDを入力してから開始してください。","orange");
+  }
+
+
+  // keep uppercase and sanitize
+  els.clientId.addEventListener("input", ()=>{
+    els.clientId.value = sanitizeSegment(els.clientId.value.toUpperCase());
+  });
+  // persist in hash for reloads
+  function syncHash(){
+    const params = new URLSearchParams();
+    params.set("client", (els.clientId.value||"").toUpperCase());
+    params.set("behavior", (els.behavior.value||"BASE").toUpperCase());
+    params.set("api", els.apiBase.value||"");
+    location.hash = params.toString();
+  }
+  els.clientId.addEventListener("change", syncHash);
+  els.behavior.addEventListener("change", syncHash);
+  els.apiBase.addEventListener("change", syncHash);
   renderFileList();
 
   window.addEventListener("keydown", (e)=>{
     if ((e.ctrlKey||e.metaKey) && e.key.toLowerCase()==="s"){ e.preventDefault(); saveCurrent(); }
   });
 
-  els.search.addEventListener("input", ()=>{
-    const kw = els.search.value.toLowerCase();
-    [...els.fileList.children].forEach(it=>{
-      const t = it.querySelector(".name").textContent.toLowerCase();
-      it.style.display = t.includes(kw) ? "" : "none";
+  if (els.search){
+    els.search.addEventListener("input", ()=>{
+      const kw = els.search.value.toLowerCase();
+      [...els.fileList.children].forEach(it=>{
+        const t = it.querySelector(".name").textContent.toLowerCase();
+        it.style.display = t.includes(kw) ? "" : "none";
+      });
     });
-  });
+  }
 
   els.promptEditor.addEventListener("input", markDirty);
 
-  els.els.btnAdd.addEventListener("click", async ()=>{
-  try{
-    const clid = els.clientId.value.trim().toUpperCase();
-    const beh  = els.behavior.value.toUpperCase();
-    await ensurePromptIndex(clid, beh);
-
-    // 名称のみ入力（ファイル名は自動採番）
-    const dname = prompt("新しいプロンプトの名称を入力してください", "新規プロンプト");
-    if (dname === null) return;
-
-    // 重複しないファイル名の生成
-    let file = generateAutoFilename();
-    const existing = new Set(promptIndex.items.map(x=>x.file));
-    let salt = 0;
-    while (existing.has(file)){
-      salt++;
-      file = file.replace(/\.json$/, `-${salt}.json`);
-    }
-
-    // client/{clid}/ にプレースホルダを先に作成
-    const clientPath = `client/${clid}/${file}`;
-    await apiSaveText(clientPath, { prompt: "", params: {} }, null);
-
-    // インデックスに追記（再構築しない）
-    await addIndexItemRaw(file, dname);
-
-    // リスト更新＆当該ファイルを開く
-    await renderFileList();
-    await openByFilename(file);
-  }catch(e){
-    alert("追加に失敗: " + (e?.message || e));
+  // ✅ fixed: bind correctly (was els.els.btnAdd)
+  if (els.btnAdd){
+    els.btnAdd.addEventListener("click", (e)=>{ if (els.btnAdd.disabled) { e.preventDefault(); return; } onClickAdd(); });
   }
-});
 }
+
 function markDirty(){ dirty = true; }
 function clearDirty(){ dirty = false; }
 window.addEventListener("beforeunload", (e)=>{ if (!dirty) return; e.preventDefault(); e.returnValue=""; });
@@ -302,8 +348,8 @@ async function tryLoad(filename){
 
 async function renderFileList(){
   els.fileList.innerHTML = "";
-  const clid = els.clientId.value.trim().toUpperCase();
-  const beh  = els.behavior.value.toUpperCase();
+  const clid = requireClient();
+  const beh  = requireBehavior();
 
   await ensurePromptIndex(clid, beh);
 
@@ -382,8 +428,8 @@ async function renderFileList(){
 }
 
 function getDragAfterElement(container, y){
-  const els = [...container.querySelectorAll('.fileitem:not(.dragging)')];
-  return els.reduce((closest, child)=>{
+  const els2 = [...container.querySelectorAll('.fileitem:not(.dragging)')];
+  return els2.reduce((closest, child)=>{
     const box = child.getBoundingClientRect();
     const offset = y - box.top - box.height/2;
     return (offset < 0 && offset > closest.offset) ? { offset, element: child } : closest;
@@ -398,8 +444,8 @@ async function openByFilename(filename){
   [...els.fileList.children].forEach(n=>n.classList.toggle("active", n.dataset.file===filename));
   setStatus("読込中…","orange");
 
-  const clid = els.clientId.value.trim().toUpperCase();
-  const beh  = els.behavior.value.toUpperCase();
+  const clid = requireClient();
+  const beh  = requireBehavior();
 
   const clientTarget = `client/${clid}/${filename}`;
   document.getElementById("fileTitle").textContent = clientTarget;
@@ -459,7 +505,7 @@ async function saveCurrent(){
     setStatus("保存完了","green");
     clearDirty();
   }catch(e){
-    setStatus("保存失敗: " + e.message, "red");
+    setStatus("保存失敗: " + (e.message||e), "red");
     if (String(e).includes("412")) alert("他の人が更新しました。再読み込みしてから保存してください。");
   }
 }
@@ -479,98 +525,64 @@ function setBadges(stateText, etag, mode){
   els.badgeEtag.textContent = etag || "—";
 }
 
-/* ===== Prompt Studio: Safe Add Button Wrapper (no breaking changes) ===== */
+/* ===== Add Button handler (asks name, creates blob, appends to index, updates UI) ===== */
+async function onClickAdd(){
+  const clid = requireClient();
+  try{
+    const clid = requireClient();
+    const beh  = requireBehavior();
+    await ensurePromptIndex(clid, beh); // load existing index (do not reconstruct)
+
+    // ask only display name; filename auto
+    const dname = prompt("新しいプロンプトの名称を入力してください", "新規プロンプト");
+    if (dname === null) return;
+
+    // unique filename
+    let file = generateAutoFilename();
+    const existing = new Set(promptIndex.items.map(x=>x.file));
+    let salt = 0;
+    while (existing.has(file)){
+      salt++;
+      file = file.replace(/\.json$/, `-${salt}.json`);
+    }
+
+    // create placeholder at client/
+    const clientPath = `client/${clid}/${file}`;
+    await apiSaveText(clientPath, { prompt: "", params: {} }, null);
+
+    // append to *existing* index
+    await addIndexItemRaw(file, dname);
+
+    // refresh list and open it
+    await renderFileList();
+    await openByFilename(file);
+    setStatus("新しいプロンプトを追加しました。","green");
+  }catch(e){
+    alert("追加に失敗: " + (e?.message || e));
+    console.error(e);
+  }
+}
+
+/* ===== Optional Safe Wrapper (kept for compatibility) ===== */
 (function(){
-  const g = (typeof window !== 'undefined') ? window : globalThis;
-  const els = {};
   function $q(sel){ return document.querySelector(sel); }
-
-  function cacheEls(){
-    els.btnAdd   = $q('#btnAdd, [data-role="btn-add"]');
-    els.clientId = $q('#client, #Client, select[name="client"], [data-role="client"]');
-    els.behavior = $q('#behavior, #Behavior, select[name="behavior"], [data-role="behavior"]');
-  }
-
-  function pad2(n){ return String(n).padStart(2,'0'); }
-  function generateAutoFilename(){
-    const d = new Date();
-    return `texel-custom-${d.getFullYear()}${pad2(d.getMonth()+1)}${pad2(d.getDate())}-${pad2(d.getHours())}${pad2(d.getMinutes())}${pad2(d.getSeconds())}.json`;
-  }
-
-  async function addIndexItemRaw(filename, displayName){
-    if (!g.promptIndex) g.promptIndex = { items: [], params: {}, updatedAt: new Date().toISOString() };
-    let file = (filename||'').trim();
-    if (!file) throw new Error('filename is empty');
-    if (!file.endsWith('.json')) file += '.json';
-    if (!/^texel-/.test(file)) file = 'texel-' + file;
-    const items = g.promptIndex.items || (g.promptIndex.items = []);
-    if (items.some(x => x.file === file)) throw new Error('同名ファイルが既に存在します。');
-    const maxOrder = Math.max(0, ...items.map(x => x.order || 0));
-    const name = (displayName||'').trim() || file.replace(/\.json$/,'').replace(/^texel-/, '').replace(/[-_]/g, ' ');
-    items.push({ file, name, order: maxOrder + 10, hidden: false });
-    g.promptIndex.updatedAt = new Date().toISOString();
-    if (typeof g.saveIndex === 'function') {
-      await g.saveIndex();
-    }
-  }
-
-  async function onClickAdd(){
-    try{
-      cacheEls();
-      const clid = (els.clientId && els.clientId.value || '').trim().toUpperCase();
-      const beh  = (els.behavior && els.behavior.value || '').trim().toUpperCase();
-      if (typeof g.ensurePromptIndex === 'function') {
-        await g.ensurePromptIndex(clid, beh);
-      }
-      const dname = prompt('新しいプロンプトの名称を入力してください', '新規プロンプト');
-      if (dname === null) return;
-
-      let file = generateAutoFilename();
-      const existing = new Set(((g.promptIndex && g.promptIndex.items) || []).map(x=>x.file));
-      let salt = 0;
-      while (existing.has(file)){
-        salt++;
-        file = file.replace(/\.json$/, `-${salt}.json`);
-      }
-
-      const clientPath = `client/${clid}/${file}`;
-      if (typeof g.apiSaveText === 'function'){
-        await g.apiSaveText(clientPath, { prompt: '', params: {} }, null);
-      } else {
-        console.warn('[PromptStudio] apiSaveText is not defined; skipping blob create.');
-      }
-
-      await addIndexItemRaw(file, dname);
-
-      if (typeof g.renderFileList === 'function') await g.renderFileList();
-      if (typeof g.openByFilename === 'function') await g.openByFilename(file);
-    }catch(e){
-      alert('追加に失敗: ' + (e && e.message ? e.message : e));
-      console.error(e);
-    }
-  }
-
   function bind(){
-    cacheEls();
-    if (els.btnAdd){
-      els.btnAdd.addEventListener('click', onClickAdd, { once: false });
-    } else {
-      console.warn('[PromptStudio] #btnAdd not found. Waiting for DOM...');
-      const mo = new MutationObserver(() => {
-        cacheEls();
-        if (els.btnAdd){
-          els.btnAdd.addEventListener('click', onClickAdd, { once: false });
-          mo.disconnect();
-        }
-      });
-      mo.observe(document.documentElement, { childList:true, subtree:true });
-    }
+    const btn = $q('#btnAdd, [data-role="btn-add"]');
+    if (btn) btn.removeEventListener('click', onClickAdd), btn.addEventListener('click', onClickAdd);
   }
-
   if (document.readyState === 'loading'){
     document.addEventListener('DOMContentLoaded', bind);
   } else {
     bind();
   }
 })();
-/* ===== End of Safe Wrapper ===== */
+
+
+;(function(){
+  try{
+    const ver = window.__APP_BUILD__ || document.body?.dataset?.build || "(none)";
+    console.log("%cPrompt Studio build:", "font-weight:bold", ver);
+    const badge = document.getElementById("buildBadge");
+    if (badge) badge.textContent = ver;
+  }catch(e){}
+})();
