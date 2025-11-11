@@ -118,12 +118,27 @@ function normalizeIndex(x){
   return null;
 }
 
+function dedupeIndexItems(idx){
+  try{
+    if (!idx || !Array.isArray(idx.items)) return idx;
+    const seen = new Set();
+    idx.items = idx.items.filter(it => {
+      if (!it || !it.file) return false;
+      if (seen.has(it.file)) return false;
+      seen.add(it.file);
+      return true;
+    });
+    idx.items.sort((a,b)=>(a.order??0)-(b.order??0)).forEach((x,i)=> x.order=(i+1)*10);
+  }catch(e){}
+  return idx;
+}
+
 async function ensurePromptIndex(clientId, behavior){
   const path = indexClientPath(clientId);
   const r = await apiLoadText(path);
   if (r){
     const idx = normalizeIndex(r.data);
-    if (idx){ promptIndex=idx; promptIndexPath=path; promptIndexEtag=r.etag||null; return promptIndex; }
+    if (idx){ promptIndex=dedupeIndexItems(idx); promptIndexPath=path; promptIndexEtag=r.etag||null; return promptIndex; }
   }
   // not found → bootstrap (do NOT overwrite if exists)
   const kinds = [...FAMILY[behavior]];
@@ -147,6 +162,7 @@ async function ensurePromptIndex(clientId, behavior){
 
 async function saveIndex(){
   if (!promptIndex) return;
+  promptIndex = dedupeIndexItems(promptIndex);
   promptIndex.updatedAt = new Date().toISOString();
   try{
     const res = await apiSaveText(promptIndexPath, promptIndex, promptIndexEtag);
@@ -190,6 +206,7 @@ async function addIndexItemRaw(fileName, displayName){
   let file = fileName.trim();
   if (!file.endsWith(".json")) file = file + ".json";
   if (!file.startsWith("texel-")) file = "texel-" + file;
+  if (!promptIndex || !Array.isArray(promptIndex.items)) promptIndex = {items:[]};
   if (promptIndex.items.some(x=>x.file===file)) throw new Error("同名ファイルが既に存在します。");
   const maxOrder = Math.max(0, ...promptIndex.items.map(x=>x.order||0));
   promptIndex.items.push({ file, name:(displayName||'').trim()||prettifyNameFromFile(file), order:maxOrder+10, hidden:false });
@@ -284,26 +301,7 @@ function boot(){
   } else {
     setStatus("クライアントIDを入力してから開始してください。","orange");
   }
-
-
-  // keep uppercase and sanitize
-  els.clientId.addEventListener("input", ()=>{
-    els.clientId.value = sanitizeSegment(els.clientId.value.toUpperCase());
-  });
-  // persist in hash for reloads
-  function syncHash(){
-    const params = new URLSearchParams();
-    params.set("client", (els.clientId.value||"").toUpperCase());
-    params.set("behavior", (els.behavior.value||"BASE").toUpperCase());
-    params.set("api", els.apiBase.value||"");
-    location.hash = params.toString();
-  }
-  els.clientId.addEventListener("change", syncHash);
-  els.behavior.addEventListener("change", syncHash);
-  els.apiBase.addEventListener("change", syncHash);
-  renderFileList();
-
-  window.addEventListener("keydown", (e)=>{
+window.addEventListener("keydown", (e)=>{
     if ((e.ctrlKey||e.metaKey) && e.key.toLowerCase()==="s"){ e.preventDefault(); saveCurrent(); }
   });
 
@@ -347,7 +345,7 @@ async function tryLoad(filename){
 }
 
 async function renderFileList(){
-  els.fileList.innerHTML = "";
+  const __newList = els.fileList.cloneNode(false); els.fileList.parentNode.replaceChild(__newList, els.fileList); els.fileList = __newList; els.fileList.innerHTML = "";
   const clid = requireClient();
   const beh  = requireBehavior();
 
