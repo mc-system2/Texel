@@ -56,48 +56,28 @@ function prettifyNameFromFile(filename){
 }
 function join(base, path){ return (base||"").replace(/\/+$/,"") + "/" + String(path||"").replace(/^\/+/, ""); }
 
-const LOAD_CANDIDATES = ["LoadPromptText","LoadBLOB","LoadPrompt","LoadText"];
-const SAVE_CANDIDATES = ["SavePromptText","SaveBLOB","SavePrompt","SaveText"];
-
 async function apiLoadText(filename){
-  // Prefer GET (no-store) to avoid 404 noise when POST function name differs
-  const getRes = await tryLoad(filename);
-  if (getRes) { getRes.used = "GET"; return { etag: getRes.etag ?? null, data: getRes.data, used: "GET" }; }
-
-  // Try POST with multiple function names
-  for (const fn of LOAD_CANDIDATES){
-    try{
-      const r = await fetch(join(els.apiBase.value, fn), {
-        method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify({ filename })
-      });
-      if (!r.ok) continue;
-      const j = await r.json().catch(()=>null);
-      let data = null;
-      const t = j?.text ?? j?.prompt ?? null;
-      if (typeof t === "string"){ try{ data = JSON.parse(t) }catch{ data = t } }
-      else if (j?.prompt) data = j.prompt;
-      else if (j && typeof j === "object") data = j;
-      return { etag: j?.etag ?? null, data, used: fn };
-    }catch{ /* ignore and try next */ }
-  }
-  return null;
+  const r = await fetch(join(els.apiBase.value,"LoadPromptText"),{
+    method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify({ filename })
+  }).catch(()=>null);
+  if (!r || !r.ok) return null;
+  const j = await r.json().catch(()=>null);
+  let data = null;
+  const t = j?.text ?? j?.prompt ?? null;
+  if (typeof t === "string"){ try{ data = JSON.parse(t) }catch{ data = t } }
+  else if (j?.prompt) data = j.prompt;
+  else if (j && typeof j === "object") data = j;
+  return { etag: j?.etag ?? null, data };
 }
 async function apiSaveText(filename, payload, etag){
   const body = { filename, prompt: typeof payload==="string"? payload : JSON.stringify(payload,null,2) };
   if (etag) body.etag = etag;
-
-  for (const fn of SAVE_CANDIDATES){
-    try{
-      const r = await fetch(join(els.apiBase.value, fn), {
-        method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify(body)
-      });
-      const raw = await r.text(); let j={}; try{ j = raw?JSON.parse(raw):{} }catch{}
-      if (!r.ok) continue;
-      if (els.badgeEtag) els.badgeEtag.title = "via " + fn; // show which endpoint succeeded
-      return j;
-    }catch{ /* try next */ }
-  }
-  throw new Error("保存APIが見つかりません（候補: " + SAVE_CANDIDATES.join(",") + "）");
+  const r = await fetch(join(els.apiBase.value,"SavePromptText"),{
+    method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify(body)
+  });
+  const raw = await r.text(); let j={}; try{ j = raw?JSON.parse(raw):{} }catch{}
+  if (!r.ok) throw new Error(j?.error || raw || `HTTP ${r.status}`);
+  return j;
 }
 
 function normalizeIndex(x){
