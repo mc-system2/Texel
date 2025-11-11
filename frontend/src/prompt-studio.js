@@ -118,29 +118,12 @@ function normalizeIndex(x){
   return null;
 }
 
-
-function dedupeIndexItems(idx){
-  if (!idx || !Array.isArray(idx.items)) return idx;
-  const seen = new Map();
-  const out = [];
-  for (const it of idx.items){
-    if (!it || !it.file) continue;
-    if (!seen.has(it.file)){
-      seen.set(it.file, true);
-      out.push(it);
-    }
-  }
-  out.sort((a,b)=>(a.order??0)-(b.order??0)).forEach((x,i)=> x.order = (i+1)*10);
-  idx.items = out;
-  return idx;
-}
-
 async function ensurePromptIndex(clientId, behavior){
   const path = indexClientPath(clientId);
   const r = await apiLoadText(path);
   if (r){
     const idx = normalizeIndex(r.data);
-    if (idx){ promptIndex=dedupeIndexItems(idx); promptIndexPath=path; promptIndexEtag=r.etag||null; return promptIndex; }
+    if (idx){ promptIndex=idx; promptIndexPath=path; promptIndexEtag=r.etag||null; return promptIndex; }
   }
   // not found → bootstrap (do NOT overwrite if exists)
   const kinds = [...FAMILY[behavior]];
@@ -164,7 +147,6 @@ async function ensurePromptIndex(clientId, behavior){
 
 async function saveIndex(){
   if (!promptIndex) return;
-  promptIndex = dedupeIndexItems(promptIndex);
   promptIndex.updatedAt = new Date().toISOString();
   try{
     const res = await apiSaveText(promptIndexPath, promptIndex, promptIndexEtag);
@@ -179,7 +161,7 @@ async function saveIndex(){
         const known = new Set(idx.items.map(x=>x.file));
         for (const it of promptIndex.items){ if (!known.has(it.file)) idx.items.push(it); }
         idx.items.sort((a,b)=>(a.order??0)-(b.order??0)).forEach((x,i)=>x.order=(i+1)*10);
-        promptIndex = dedupeIndexItems(idx);
+        promptIndex = idx;
       }
       const res2 = await apiSaveText(promptIndexPath, promptIndex, promptIndexEtag);
       promptIndexEtag = res2?.etag || null;
@@ -279,62 +261,8 @@ function boot(){
   els.behavior.value = (q.get("behavior") || "BASE").toUpperCase();
   els.apiBase.value  = q.get("api") || DEV_API;
 
-  // disable search UI for now
   if (els.search){ els.search.style.display='none'; }
-
-  // enable/disable actions
   function toggleActions(){
-    const ok = !!sanitizeSegment((els.clientId.value||'').trim());
-    if (els.btnAdd) els.btnAdd.disabled = !ok;
-    if (els.btnSave) els.btnSave.disabled = !ok;
-  }
-  els.clientId.addEventListener("input", ()=>{
-    els.clientId.value = sanitizeSegment((els.clientId.value||'').toUpperCase());
-    toggleActions();
-  });
-  toggleActions();
-
-  // persist in hash for reloads
-  function syncHash(){
-    const params = new URLSearchParams();
-    params.set("client", (els.clientId.value||"").toUpperCase());
-    params.set("behavior", (els.behavior.value||"BASE").toUpperCase());
-    params.set("api", els.apiBase.value||"");
-    location.hash = params.toString();
-  }
-  els.clientId.addEventListener("change", syncHash);
-  els.behavior.addEventListener("change", syncHash);
-  els.apiBase.addEventListener("change", syncHash);
-
-  // initial render (only once)
-  if (sanitizeSegment((els.clientId.value||'').trim())){
-    renderFileList();
-  } else {
-    setStatus("クライアントIDを入力してから開始してください。","orange");
-  }
-
-  // save shortcut
-  window.addEventListener("keydown", (e)=>{
-    if ((e.ctrlKey||e.metaKey) && e.key.toLowerCase()==="s"){ e.preventDefault(); saveCurrent(); }
-  });
-
-  if (els.search){
-    els.search.addEventListener("input", ()=>{
-      const kw = els.search.value.toLowerCase();
-      [...els.fileList.children].forEach(it=>{
-        const t = it.querySelector(".name").textContent.toLowerCase();
-        it.style.display = t.includes(kw) ? "" : "none";
-      });
-    });
-  }
-
-  els.promptEditor.addEventListener("input", markDirty);
-
-  if (els.btnAdd){
-    els.btnAdd.addEventListener("click", (e)=>{ if (els.btnAdd.disabled) { e.preventDefault(); return; } onClickAdd(); });
-  }
-}
-function toggleActions(){
     const ok = !!sanitizeSegment((els.clientId.value||'').trim());
     if (els.btnAdd) els.btnAdd.disabled = !ok;
     if (els.btnSave) els.btnSave.disabled = !ok;
@@ -419,7 +347,7 @@ async function tryLoad(filename){
 }
 
 async function renderFileList(){
-  const newList = els.fileList.cloneNode(false); els.fileList.parentNode.replaceChild(newList, els.fileList); els.fileList = newList; els.fileList.innerHTML = "";
+  els.fileList.innerHTML = "";
   const clid = requireClient();
   const beh  = requireBehavior();
 
