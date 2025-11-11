@@ -1,4 +1,4 @@
-/* build:ps-20251112-idxfix */
+/* build:ps-20251112-idxfix+autoboot */
 /* ===== Prompt Studio – logic (index-safe add, robust reload) ===== */
 const DEV_API  = "https://func-texel-api-dev-jpe-001-b2f6fec8fzcbdrc3.japaneast-01.azurewebsites.net/api/";
 const PROD_API = "https://func-texel-api-prod-jpe-001-dsgfhtafbfbxawdz.japaneast-01.azurewebsites.net/api/";
@@ -198,7 +198,7 @@ async function renameIndexItem(file, newName){
   if (!promptIndexPath || !promptIndex){
     const clid = (els.clientId?.value||"").trim().toUpperCase();
     const beh  = (els.behavior?.value||"BASE").toUpperCase();
-    await ensurePromptIndex(clid, beh, false);
+    await ensurePromptIndex(clid, beh, true);
   }
   const it = promptIndex?.items?.find(x=>x.file===file);
   if (!it) throw new Error("対象が見つかりません。");
@@ -346,7 +346,7 @@ async function renderFileList(){
   const clid = (els.clientId?.value||"").trim().toUpperCase();
   const beh  = (els.behavior?.value||"BASE").toUpperCase();
 
-  await ensurePromptIndex(clid, beh, false);
+  await ensurePromptIndex(clid, beh, true);
 
   const rows = [...(promptIndex.items||[])]
     .filter(it => !it.hidden)
@@ -546,7 +546,7 @@ async function onClickAdd(){
     const clid = (els.clientId?.value||"").trim().toUpperCase();
     const beh  = (els.behavior?.value||"BASE").toUpperCase();
     if (!clid){ alert("Client ID が未設定です。左上で選択してください。"); return; }
-    await ensurePromptIndex(clid, beh, false); // load existing index or bootstrap
+    await ensurePromptIndex(clid, beh, true); // load existing index or bootstrap
 
     // ask only display name; filename auto
     const dname = prompt("新しいプロンプトの名称を入力してください", "新規プロンプト");
