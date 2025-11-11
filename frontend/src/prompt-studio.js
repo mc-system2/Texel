@@ -123,7 +123,7 @@ async function ensurePromptIndex(clientId, behavior){
   const r = await apiLoadText(path);
   if (r){
     const idx = normalizeIndex(r.data);
-    if (idx){ promptIndex = dedupeIndexItems(idx); promptIndexPath=path; promptIndexEtag=r.etag||null; return promptIndex; }
+    if (idx){ promptIndex=idx; promptIndexPath=path; promptIndexEtag=r.etag||null; return promptIndex; }
   }
   // not found → bootstrap (do NOT overwrite if exists)
   const kinds = [...FAMILY[behavior]];
@@ -147,7 +147,6 @@ async function ensurePromptIndex(clientId, behavior){
 
 async function saveIndex(){
   if (!promptIndex) return;
-  promptIndex = dedupeIndexItems(promptIndex);
   promptIndex.updatedAt = new Date().toISOString();
   try{
     const res = await apiSaveText(promptIndexPath, promptIndex, promptIndexEtag);
@@ -257,21 +256,17 @@ paramKeys.forEach(([k])=>{
 /* ---------- Boot ---------- */
 window.addEventListener("DOMContentLoaded", boot);
 
-// --- Single-flight render guard ---
-let __PS_RENDER_LOCK = false;
+/* === Hardening: render coalescing & notes ===
+ * - Do NOT call renderFileList() directly. Use scheduleRender().
+ * - We coalesce multiple render requests into one microtask.
+ */
 let __PS_RENDER_QUEUED = false;
-/** Call instead of renderFileList() directly. Coalesces multiple calls in the same tick. */
 function scheduleRender(){
-  if (__PS_RENDER_LOCK){ __PS_RENDER_QUEUED = true; return; }
   if (__PS_RENDER_QUEUED) return;
   __PS_RENDER_QUEUED = true;
-  queueMicrotask(()=>{
-    __PS_RENDER_QUEUED = false;
-    scheduleRender();
-  });
+  queueMicrotask(()=>{ __PS_RENDER_QUEUED = false; try{ renderFileList(); }catch(e){ console.error(e);} });
 }
 
-/** DO NOT call renderFileList() directly. Use scheduleRender(). */
 function boot(){
   const q = new URLSearchParams(location.hash.replace(/^#\??/, ''));
   els.clientId.value = (q.get("client") || "").toUpperCase();
@@ -297,7 +292,7 @@ function boot(){
   els.behavior.addEventListener("change", syncHash);
   els.apiBase.addEventListener("change", syncHash);
   if (sanitizeSegment((els.clientId.value||'').trim())){
-    scheduleRender();
+    renderFileList();
   } else {
     setStatus("クライアントIDを入力してから開始してください。","orange");
   }
@@ -318,7 +313,7 @@ function boot(){
   els.clientId.addEventListener("change", syncHash);
   els.behavior.addEventListener("change", syncHash);
   els.apiBase.addEventListener("change", syncHash);
-  scheduleRender();
+  renderFileList();
 
   window.addEventListener("keydown", (e)=>{
     if ((e.ctrlKey||e.metaKey) && e.key.toLowerCase()==="s"){ e.preventDefault(); saveCurrent(); }
@@ -363,17 +358,7 @@ async function tryLoad(filename){
   return { data, etag };
 }
 
-async function renderFileList(){/*__WRAPPED_RENDER_START*/
-  if (__PS_RENDER_LOCK) return;
-  __PS_RENDER_LOCK = true;
-  try{
-    // Drop old listeners by replacing the node entirely before building
-    if (els.fileList){
-      const fresh = els.fileList.cloneNode(false);
-      if (els.fileList.parentNode){ els.fileList.parentNode.replaceChild(fresh, els.fileList); }
-      els.fileList = fresh;
-    }
-
+async function renderFileList(){
   els.fileList.innerHTML = "";
   const clid = requireClient();
   const beh  = requireBehavior();
@@ -442,13 +427,13 @@ async function renderFileList(){/*__WRAPPED_RENDER_START*/
       li.querySelector(".rename").addEventListener("click", async (e)=>{
         e.preventDefault(); e.stopPropagation();
         const nv = prompt("表示名の変更", name);
-        if (nv!=null){ await renameIndexItem(it.file, nv.trim()); await scheduleRender(); }
+        if (nv!=null){ await renameIndexItem(it.file, nv.trim()); await renderFileList(); }
       });
       li.querySelector(".delete").addEventListener("click", async (e)=>{
         e.preventDefault(); e.stopPropagation();
         if (!confirm(`「${name}」を一覧から削除します。ファイル自体は削除されません。よろしいですか？`)) return;
         await deleteIndexItem(it.file);
-        await scheduleRender();
+        await renderFileList();
       });
     }
   }
@@ -581,7 +566,7 @@ async function onClickAdd(){
     await addIndexItemRaw(file, dname);
 
     // refresh list and open it
-    await scheduleRender();
+    await renderFileList();
     await openByFilename(file);
     setStatus("新しいプロンプトを追加しました。","green");
   }catch(e){
@@ -592,17 +577,10 @@ async function onClickAdd(){
 
 /* ===== Optional Safe Wrapper (kept for compatibility) ===== */
 (function(){
-/*
- * === Prompt Studio hardening notes ===
- * [1] renderFileList() must be invoked ONCE per tick. Use scheduleRender() instead of direct calls.
- * [2] Do not rebind events on existing nodes; we clone/replace nodes before attaching listeners.
- * [3] Index writes are deduped by `file` and re-ordered 10,20,30... on every save.
- */
-
   function $q(sel){ return document.querySelector(sel); }
   function bind(){
     const btn = $q('#btnAdd, [data-role="btn-add"]');
-    if (btn) btn.removeEventListener('click', onClickAdd), btn.addEventListener('click', onClickAdd);
+    if (btn) btn.removeEventListener('click', onClickAdd), btn.addEventListener('click', onClickAddGuarded);
   }
   if (document.readyState === 'loading'){
     document.addEventListener('DOMContentLoaded', bind);
@@ -621,10 +599,13 @@ async function onClickAdd(){
   }catch(e){}
 })();
 
-function dedupeIndexItems(idx){
-  if (!idx || !Array.isArray(idx.items)) return idx;
-  const seen = new Set();
-  idx.items = idx.items.filter(it=> it && it.file && !seen.has(it.file) && (seen.add(it.file), true));
-  idx.items.sort((a,b)=>(a.order??0)-(b.order??0)).forEach((x,i)=> x.order=(i+1)*10);
-  return idx;
+// Guard wrapper to avoid double prompt/save
+let __PS_ADDING = false;
+const onClickAddOriginal = typeof onClickAdd === 'function' ? onClickAdd : null;
+function onClickAddGuarded(){
+  if (__PS_ADDING) return;
+  __PS_ADDING = true;
+  Promise.resolve().then(()=> onClickAddOriginal && onClickAddOriginal()).finally(()=>{ __PS_ADDING=false; });
 }
+// replace binding if exists
+try{ if (els && els.btnAdd){ els.btnAdd.replaceWith(els.btnAdd); els.btnAdd.addEventListener('click', onClickAddGuarded); } }catch(e){}
