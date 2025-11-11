@@ -133,15 +133,37 @@ async function reloadIndex(){
 async function saveIndex(){
   if (!promptIndex) return;
   promptIndex.updatedAt = new Date().toISOString();
-  const res = await apiSaveText(promptIndexPath, promptIndex, promptIndexEtag);
-  promptIndexEtag = res?.etag || promptIndexEtag || null;
+  try{
+    const res = await apiSaveText(promptIndexPath, promptIndex, promptIndexEtag);
+    promptIndexEtag = res?.etag || promptIndexEtag || null;
+  }catch(e){
+    // If ETag precondition failed, reload and retry once
+    const msg = String(e||"");
+    if (msg.includes("412")){
+      await reloadIndex();
+      const res2 = await apiSaveText(promptIndexPath, promptIndex, promptIndexEtag);
+      promptIndexEtag = res2?.etag || promptIndexEtag || null;
+    }else{
+      throw e;
+    }
+  }
 }
 
 async function renameIndexItem(file, newName){
-  const it = promptIndex.items.find(x=>x.file===file);
-  if (!it || it.lock) return;
-  it.name = newName || it.name;
+  if (!promptIndexPath || !promptIndex){
+    const clid = (els.clientId?.value||"").trim().toUpperCase();
+    const beh  = (els.behavior?.value||"BASE").toUpperCase();
+    await ensurePromptIndex(clid, beh);
+  }
+  const it = promptIndex?.items?.find(x=>x.file===file);
+  if (!it) throw new Error("対象が見つかりません。");
+  if (it.lock) throw new Error("ロックされている項目は名称変更できません。");
+  const nv = (newName||"").trim();
+  if (!nv) throw new Error("名称が空です。");
+  it.name = nv;
   await saveIndex();
+  await reloadIndex();
+  return true;
 }
 async function deleteIndexItem(file){
   const i = promptIndex.items.findIndex(x=>x.file===file);
@@ -348,7 +370,21 @@ async function renderFileList(){
       li.querySelector(".rename")?.addEventListener("click", async (e)=>{
         e.preventDefault(); e.stopPropagation();
         const nv = prompt("表示名の変更", name);
-        if (nv!=null){ await renameIndexItem(it.file, nv.trim()); await reloadIndex(); await renderFileList(); }
+        if (nv!=null){
+          try{
+            // optimistic update in UI
+            li.querySelector('.name').innerHTML = (it.lock? '<span class="lock">🔒</span>' : '') + nv.trim();
+            setStatus('名称を変更中…','orange');
+            await renameIndexItem(it.file, nv.trim());
+            setStatus('名称を変更しました。','green');
+            await renderFileList();
+          }catch(err){
+            console.error(err);
+            setStatus('名称変更に失敗: ' + (err?.message||err),'red');
+            await reloadIndex();
+            await renderFileList();
+          }
+        }
       });
       li.querySelector(".delete")?.addEventListener("click", async (e)=>{
         e.preventDefault(); e.stopPropagation();
