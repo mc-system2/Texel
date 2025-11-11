@@ -60,11 +60,7 @@ const LOAD_CANDIDATES = ["LoadPromptText","LoadBLOB","LoadPrompt","LoadText"];
 const SAVE_CANDIDATES = ["SavePromptText","SaveBLOB","SavePrompt","SaveText"];
 
 async function apiLoadText(filename){
-  // Prefer GET (no-store) to avoid 404 noise when POST function name differs
-  const getRes = await tryLoad(filename);
-  if (getRes) { getRes.used = "GET"; return { etag: getRes.etag ?? null, data: getRes.data, used: "GET" }; }
-
-  // Try POST with multiple function names
+  // Try POST with multiple function names first (avoid GET 404 noise)
   for (const fn of LOAD_CANDIDATES){
     try{
       const r = await fetch(join(els.apiBase.value, fn), {
@@ -80,6 +76,11 @@ async function apiLoadText(filename){
       return { etag: j?.etag ?? null, data, used: fn };
     }catch{ /* ignore and try next */ }
   }
+
+  // If all POST candidates failed, try GET (no-store) as a last resort
+  const getRes = await tryLoad(filename);
+  if (getRes) { getRes.used = "GET"; return { etag: getRes.etag ?? null, data: getRes.data, used: "GET" }; }
+
   return null;
 }
 async function apiSaveText(filename, payload, etag){
@@ -165,14 +166,14 @@ async function ensurePromptIndex(clientId, behavior, bootstrap=true){
 
 async function reloadIndex(){
   if (!promptIndexPath) return;
-  // Use GET-based loader with cache:no-store to avoid stale reads
-  const res = await tryLoad(promptIndexPath);
-  if (!res) return;
-  const idx = normalizeIndex(res.data);
+  const r = await apiLoadText(promptIndexPath);
+  if (!r) return;
+  const idx = normalizeIndex(r.data);
   if (idx){
     promptIndex = idx;
-    promptIndexEtag = res.etag || null;
+    promptIndexEtag = r.etag || null;
   }
+}
 }
 
 async function saveIndex(){
@@ -466,15 +467,26 @@ async function openByFilename(filename){
   const titleEl = document.getElementById("fileTitle");
   if (titleEl) titleEl.textContent = clientTarget;
 
-  const candidates = [ clientTarget, `prompt/${clid}/${filename}`, templateFromFilename(filename, beh) ];
+  // Compose candidates without issuing a bare-filename GET (which produced 404 noise)
+  const candidates = [ clientTarget, `prompt/${clid}/${filename}` ];
+  const tmpl = templateFromFilename(filename, beh);
+  // only push 3rd candidate if it looks like a namespaced path
+  if (/^(client|prompt|templates)\//.test(tmpl)) candidates.push(tmpl);
 
   let loaded = null, used = null;
   for (const f of candidates){
-    const r = await tryLoad(f);
-    if (r) { loaded = r; used = f; break; }
+    const r = await apiLoadText(f);
+    if (r && r.data) { loaded = r; used = f; break; }
   }
-  const templ = await tryLoad(templateFromFilename(filename, beh));
-  templateText = templ ? JSON.stringify(templ.data, null, 2) : "";
+
+  // Try template as pure template load (no network unless necessary)
+  if (!loaded){
+    const templ = await apiLoadText(templateFromFilename(filename, beh));
+    templateText = templ ? JSON.stringify(templ.data, null, 2) : "";
+  }else{
+    const templ = await apiLoadText(templateFromFilename(filename, beh));
+    templateText = templ ? JSON.stringify(templ.data, null, 2) : "";
+  }
 
   if (!loaded){
     currentEtag = null;
