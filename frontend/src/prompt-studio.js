@@ -124,10 +124,15 @@ async function ensurePromptIndex(clientId, behavior){
 
 async function reloadIndex(){
   if (!promptIndexPath) return;
-  const r = await apiLoadText(promptIndexPath);
-  if (!r) return;
-  const idx = normalizeIndex(r.data);
-  if (idx){ promptIndex = idx; promptIndexEtag = r.etag || null; }
+  // Use GET-based loader with cache:no-store to avoid stale reads
+  const res = await tryLoad(promptIndexPath);
+  if (!res) return;
+  const idx = normalizeIndex(res.data);
+  if (idx){
+    promptIndex = idx;
+    promptIndexEtag = res.etag || null;
+  }
+}
 }
 
 async function saveIndex(){
