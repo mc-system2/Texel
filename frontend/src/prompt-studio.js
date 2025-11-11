@@ -18,15 +18,6 @@ const FAMILY = {
   "TYPE-S": new Set(["roomphoto","suumo-catch","suumo-comment","suggestion"])
 };
 
-
-/* ==== Adaptive API strategy to avoid repeated 404 noise ==== */
-let LOAD_STRATEGY = localStorage.getItem("ps.load.strategy") || "AUTO"; // "GET" or "POST:Fn"
-let SAVE_STRATEGY = localStorage.getItem("ps.save.strategy") || "AUTO"; // "POST:Fn"
-function rememberStrategy(kind, value){
-  if (kind==="LOAD"){ LOAD_STRATEGY = value; localStorage.setItem("ps.load.strategy", value); }
-  if (kind==="SAVE"){ SAVE_STRATEGY = value; localStorage.setItem("ps.save.strategy", value); }
-}
-
 const els = {
   clientId:  document.getElementById("clientId"),
   behavior:  document.getElementById("behavior"),
@@ -69,32 +60,7 @@ const LOAD_CANDIDATES = ["LoadPromptText","LoadBLOB","LoadPrompt","LoadText"];
 const SAVE_CANDIDATES = ["SavePromptText","SaveBLOB","SavePrompt","SaveText"];
 
 async function apiLoadText(filename){
-  // 1) If strategy locked, use it
-  if (LOAD_STRATEGY.startsWith("POST:")){
-    const fn = LOAD_STRATEGY.split(":")[1];
-    try{
-      const r = await fetch(join(els.apiBase.value, fn), {
-        method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify({ filename })
-      });
-      if (r.ok){
-        const j = await r.json().catch(()=>null);
-        let data = null;
-        const t = j?.text ?? j?.prompt ?? null;
-        if (typeof t === "string"){ try{ data = JSON.parse(t) }catch{ data = t } }
-        else if (j?.prompt) data = j.prompt;
-        else if (j && typeof j === "object") data = j;
-        return { etag: j?.etag ?? null, data, used: fn };
-      }
-    }catch{}
-    // if failed, fall back to AUTO
-    rememberStrategy("LOAD","AUTO");
-  } else if (LOAD_STRATEGY === "GET"){
-    const g = await tryLoad(filename);
-    if (g){ g.used="GET"; return { etag: g.etag ?? null, data: g.data, used: "GET" }; }
-    rememberStrategy("LOAD","AUTO");
-  }
-
-  // 2) AUTO detection: try POST candidates quickly; on first success, remember
+  // Try POST with multiple function names first (avoid GET 404 noise)
   for (const fn of LOAD_CANDIDATES){
     try{
       const r = await fetch(join(els.apiBase.value, fn), {
@@ -107,18 +73,13 @@ async function apiLoadText(filename){
       if (typeof t === "string"){ try{ data = JSON.parse(t) }catch{ data = t } }
       else if (j?.prompt) data = j.prompt;
       else if (j && typeof j === "object") data = j;
-      rememberStrategy("LOAD", "POST:"+fn);
       return { etag: j?.etag ?? null, data, used: fn };
-    }catch{}
+    }catch{ /* ignore and try next */ }
   }
 
-  // 3) Finally GET; remember GET if succeeded
+  // If all POST candidates failed, try GET (no-store) as a last resort
   const getRes = await tryLoad(filename);
-  if (getRes) {
-    rememberStrategy("LOAD","GET");
-    getRes.used = "GET";
-    return { etag: getRes.etag ?? null, data: getRes.data, used: "GET" };
-  }
+  if (getRes) { getRes.used = "GET"; return { etag: getRes.etag ?? null, data: getRes.data, used: "GET" }; }
 
   return null;
 }
@@ -126,20 +87,6 @@ async function apiSaveText(filename, payload, etag){
   const body = { filename, prompt: typeof payload==="string"? payload : JSON.stringify(payload,null,2) };
   if (etag) body.etag = etag;
 
-  // 1) If we already know which function works, use it
-  if (SAVE_STRATEGY.startsWith("POST:")){
-    const fn = SAVE_STRATEGY.split(":")[1];
-    try{
-      const r = await fetch(join(els.apiBase.value, fn), {
-        method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify(body)
-      });
-      const raw = await r.text(); let j={}; try{ j = raw?JSON.parse(raw):{} }catch{}
-      if (r.ok){ if (els.badgeEtag) els.badgeEtag.title = "via " + fn; return j; }
-    }catch{}
-    rememberStrategy("SAVE","AUTO");
-  }
-
-  // 2) AUTO scan candidates; on first success, remember
   for (const fn of SAVE_CANDIDATES){
     try{
       const r = await fetch(join(els.apiBase.value, fn), {
@@ -147,12 +94,10 @@ async function apiSaveText(filename, payload, etag){
       });
       const raw = await r.text(); let j={}; try{ j = raw?JSON.parse(raw):{} }catch{}
       if (!r.ok) continue;
-      if (els.badgeEtag) els.badgeEtag.title = "via " + fn;
-      rememberStrategy("SAVE","POST:"+fn);
+      if (els.badgeEtag) els.badgeEtag.title = "via " + fn; // show which endpoint succeeded
       return j;
-    }catch{}
+    }catch{ /* try next */ }
   }
-
   throw new Error("保存APIが見つかりません（候補: " + SAVE_CANDIDATES.join(",") + "）");
 }
 
@@ -173,7 +118,9 @@ function normalizeIndex(x){
 
 async function ensurePromptIndex(clientId, behavior, bootstrap=true){
   const path = indexClientPath(clientId);
+  // 1) Try POST loader
   let r = await apiLoadText(path);
+  // 2) Fallback to GET (no-store)
   if (!r) {
     const g = await tryLoad(path);
     if (g) r = g;
@@ -182,12 +129,14 @@ async function ensurePromptIndex(clientId, behavior, bootstrap=true){
     const idx = normalizeIndex(r.data);
     if (idx){ promptIndex=idx; promptIndexPath=path; promptIndexEtag=r.etag||null; return promptIndex; }
   }
+  // When we cannot load (endpoint 404等)、既存のpromptIndexがあるなら再構築せずにそのまま使う
+  if (!bootstrap && promptIndex && promptIndexPath===path){
+    return promptIndex;
+  }
   if (!bootstrap){
+    // ここで作り直すと“名前が戻る”原因になるため、作らない
     console.warn("ensurePromptIndex: load failed; skipped bootstrap to avoid overwrite. Check API base or function name.");
     setStatus("インデックスの読込に失敗（再構築は未実施）。API設定をご確認ください。","orange");
-    // set benign empty structure to keep UI running
-    promptIndex = { version:1, clientId, behavior, updatedAt:null, items:[] };
-    promptIndexPath = path; promptIndexEtag=null;
     return promptIndex;
   }
   // Bootstrap (index新規作成)
@@ -224,6 +173,7 @@ async function reloadIndex(){
     promptIndex = idx;
     promptIndexEtag = r.etag || null;
   }
+}
 }
 
 async function saveIndex(){
@@ -392,64 +342,104 @@ async function tryLoad(filename){
 }
 
 async function renderFileList(){
-  const list = els.fileList;
-  if (!list) return;
-  list.innerHTML = "";
+  if (!els.fileList) return;
+  els.fileList.innerHTML = "";
+  const clid = (els.clientId?.value||"").trim().toUpperCase();
+  const beh  = (els.behavior?.value||"BASE").toUpperCase();
 
-  // index not loaded yet
-  if (!promptIndex || !Array.isArray(promptIndex.items)){
-    // show empty placeholder, but keep UI usable
-    const emp = document.createElement("div");
-    emp.className = "empty-hint";
-    emp.textContent = "インデックス未読み込み（API未接続/404）。＋追加から作成できます。";
-    list.appendChild(emp);
-    setBadges("—", null);
-    setStatus("インデックスの読込に失敗（再構築は未実施）。API設定をご確認ください。","orange");
-    return;
-  }
+  await ensurePromptIndex(clid, beh, false);
 
-  const items = [...promptIndex.items].sort((a,b)=>(a.order||0)-(b.order||0));
-  for (const it of items){
-    const li = document.createElement("div");
-    li.className = "fileitem";
-    li.dataset.file = it.file;
-    li.innerHTML = `
-      <span class="drag">≡</span>
-      <span class="name">${it.lock?'<span class="lock">🔒</span>':''}${it.name||it.file}</span>
-      <span class="meta">
-        <button class="rename">✎</button>
-        <button class="del">🗑</button>
-      </span>`;
-    list.appendChild(li);
+  const rows = [...(promptIndex.items||[])]
+    .filter(it => !it.hidden)
+    .sort((a,b)=>(a.order??0)-(b.order??0));
 
-    li.addEventListener("click", (e)=>{
-      if (e.target.closest(".rename,.del")) return;
-      openByFilename(it.file);
-    });
-    li.querySelector(".rename")?.addEventListener("click", async ()=>{
-      const nv = prompt("新しい名称を入力してください", it.name||"");
-      if (nv!=null){
-        try{
-          li.querySelector(".name").innerHTML = (it.lock?'<span class="lock">🔒</span>':'') + nv.trim();
-          setStatus("名称を変更中…","orange");
-          await renameIndexItem(it.file, nv.trim());
-          setStatus("名称を変更しました。","green");
-          await renderFileList();
-        }catch(err){
-          console.error(err);
-          setStatus("名称変更に失敗: " + (err?.message||err),"red");
-          await reloadIndex();
-          await renderFileList();
-        }
+  // Attach drag handlers once
+  if (!dragBound){
+    dragBound = true;
+    els.fileList.addEventListener('dragover', (e)=>{
+      e.preventDefault();
+      const dragging = document.querySelector('.fileitem.dragging');
+      const after = getDragAfterElement(els.fileList, e.clientY);
+      if (dragging){
+        if (!after) els.fileList.appendChild(dragging);
+        else els.fileList.insertBefore(dragging, after);
       }
     });
-    li.querySelector(".del")?.addEventListener("click", async ()=>{
-      if (!confirm("この項目をインデックスから削除します。よろしいですか？")) return;
-      await removeIndexItem(it.file);
+    els.fileList.addEventListener('drop', async ()=>{
+      const lis = [...els.fileList.querySelectorAll('.fileitem')];
+      lis.forEach((el, i) => {
+        const f = el.dataset.file;
+        const it = promptIndex.items.find(x=>x.file===f);
+        if (it) it.order = (i+1)*10;
+      });
       await saveIndex();
-      await reloadIndex();
-      await renderFileList();
     });
+  }
+
+  for (const it of rows){
+    const name = it.name || prettifyNameFromFile(it.file);
+    const li = document.createElement("div");
+    li.className = "fileitem" + (it.lock? " locked": "");
+    li.dataset.file = it.file;
+    li.draggable = !it.lock;
+
+    const lockIcon = it.lock ? `<span class="lock">🔒</span>` : "";
+
+    li.innerHTML = `<span class="drag">≡</span>
+                    <div class="name" title="${it.file}">${lockIcon}${name}</div>
+                    <div class="meta">
+                      ${it.lock? "" : '<button class="rename" title="名称を変更">✎</button>'}
+                      ${it.lock? "" : '<button class="delete" title="削除">🗑</button>'}
+                    </div>`;
+    els.fileList.appendChild(li);
+
+    if (!it.lock){
+      li.addEventListener('dragstart', ()=> li.classList.add('dragging'));
+      li.addEventListener('dragend', async ()=>{
+        li.classList.remove('dragging');
+        const lis = [...els.fileList.querySelectorAll('.fileitem')];
+        lis.forEach((el, i) => {
+          const f = el.dataset.file;
+          const it2 = promptIndex.items.find(x=>x.file===f);
+          if (it2) it2.order = (i+1)*10;
+        });
+        await saveIndex();
+      });
+    }
+
+    li.addEventListener("click", async (e)=>{
+      if (e.target.closest("button")) return; // handled by buttons
+      await openByFilename(it.file);
+    });
+
+    if (!it.lock){
+      li.querySelector(".rename")?.addEventListener("click", async (e)=>{
+        e.preventDefault(); e.stopPropagation();
+        const nv = prompt("表示名の変更", name);
+        if (nv!=null){
+          try{
+            // optimistic update in UI
+            li.querySelector('.name').innerHTML = (it.lock? '<span class="lock">🔒</span>' : '') + nv.trim();
+            setStatus('名称を変更中…','orange');
+            await renameIndexItem(it.file, nv.trim());
+            setStatus('名称を変更しました。','green');
+            await renderFileList();
+          }catch(err){
+            console.error(err);
+            setStatus('名称変更に失敗: ' + (err?.message||err),'red');
+            await reloadIndex();
+            await renderFileList();
+          }
+        }
+      });
+      li.querySelector(".delete")?.addEventListener("click", async (e)=>{
+        e.preventDefault(); e.stopPropagation();
+        if (!confirm(`「${name}」を一覧から削除します。ファイル自体は削除されません。よろしいですか？`)) return;
+        await deleteIndexItem(it.file);
+        await reloadIndex();
+        await renderFileList();
+      });
+    }
   }
 }
 
