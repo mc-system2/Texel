@@ -1,5 +1,5 @@
-/* build:ps-20251110-214727 */
-/* ===== Prompt Studio – logic (index-safe add) ===== */
+/* build:ps-20251112-idxfix */
+/* ===== Prompt Studio – logic (index-safe add, robust reload) ===== */
 const DEV_API  = "https://func-texel-api-dev-jpe-001-b2f6fec8fzcbdrc3.japaneast-01.azurewebsites.net/api/";
 const PROD_API = "https://func-texel-api-prod-jpe-001-dsgfhtafbfbxawdz.japaneast-01.azurewebsites.net/api/";
 
@@ -83,10 +83,14 @@ async function apiSaveText(filename, payload, etag){
 function normalizeIndex(x){
   try{
     if (!x) return null;
-    // allow {items:[...]} or {prompt:{items:[...]}} or raw string JSON
-    if (x.items) return x;
-    if (x.prompt?.items) return x.prompt;
-    if (typeof x === "string"){ const p=JSON.parse(x); return p.items? p : (p.prompt?.items? p.prompt : null); }
+    const pick = (o)=> (o && Array.isArray(o.items)) ? o : null;
+    if (x.items) return pick(x);
+    if (x.prompt?.items) return pick(x.prompt);
+    if (typeof x === "string"){
+      const p = JSON.parse(x);
+      if (p.items) return pick(p);
+      if (p.prompt?.items) return pick(p.prompt);
+    }
   }catch{}
   return null;
 }
@@ -118,6 +122,14 @@ async function ensurePromptIndex(clientId, behavior){
   return promptIndex;
 }
 
+async function reloadIndex(){
+  if (!promptIndexPath) return;
+  const r = await apiLoadText(promptIndexPath);
+  if (!r) return;
+  const idx = normalizeIndex(r.data);
+  if (idx){ promptIndex = idx; promptIndexEtag = r.etag || null; }
+}
+
 async function saveIndex(){
   if (!promptIndex) return;
   promptIndex.updatedAt = new Date().toISOString();
@@ -141,9 +153,10 @@ async function deleteIndexItem(file){
 }
 async function addIndexItemRaw(fileName, displayName){
   // append only (never reconstruct)
-  let file = fileName.trim();
+  let file = (fileName||"").trim();
   if (!file.endsWith(".json")) file = file + ".json";
   if (!file.startsWith("texel-")) file = "texel-" + file;
+  if (!promptIndex || !Array.isArray(promptIndex.items)) promptIndex = { version:1, items: [] };
   if (promptIndex.items.some(x=>x.file===file)) throw new Error("同名ファイルが既に存在します。");
   const maxOrder = Math.max(0, ...promptIndex.items.map(x=>x.order||0));
   promptIndex.items.push({ file, name:(displayName||'').trim()||prettifyNameFromFile(file), order:maxOrder+10, hidden:false });
@@ -160,13 +173,13 @@ function generateAutoFilename(){
 /* ---------- Tabs ---------- */
 function showTab(which){
   const isPrompt = which === "prompt";
-  els.tabPromptBtn.classList.toggle("active", isPrompt);
-  els.tabParamsBtn.classList.toggle("active", !isPrompt);
-  els.promptTab.classList.toggle("active", isPrompt);
-  els.paramsTab.classList.toggle("active", !isPrompt);
+  els.tabPromptBtn?.classList.toggle("active", isPrompt);
+  els.tabParamsBtn?.classList.toggle("active", !isPrompt);
+  els.promptTab?.classList.toggle("active", isPrompt);
+  els.paramsTab?.classList.toggle("active", !isPrompt);
 }
-els.tabPromptBtn.addEventListener("click", ()=>showTab("prompt"));
-els.tabParamsBtn.addEventListener("click", ()=>showTab("params"));
+els.tabPromptBtn?.addEventListener("click", ()=>showTab("prompt"));
+els.tabParamsBtn?.addEventListener("click", ()=>showTab("params"));
 
 /* ---------- Params ---------- */
 const paramKeys = [
@@ -190,7 +203,7 @@ function writeParamUI(params){
 function readParamUI(){
   const o = {};
   paramKeys.forEach(([k])=>{
-    const v = document.getElementById("param_"+k).value;
+    const v = document.getElementById("param_"+k)?.value ?? "";
     o[k] = (""+v).includes(".") ? parseFloat(v) : parseInt(v,10);
   });
   return o;
@@ -209,11 +222,12 @@ paramKeys.forEach(([k])=>{
 
 /* ---------- Boot ---------- */
 window.addEventListener("DOMContentLoaded", boot);
+let dragBound = false;
 function boot(){
   const q = new URLSearchParams(location.hash.replace(/^#\??/, ''));
-  els.clientId.value = (q.get("client") || "").toUpperCase();
-  els.behavior.value = (q.get("behavior") || "BASE").toUpperCase();
-  els.apiBase.value  = q.get("api") || DEV_API;
+  els.clientId && (els.clientId.value = (q.get("client") || "").toUpperCase());
+  els.behavior && (els.behavior.value = (q.get("behavior") || "BASE").toUpperCase());
+  els.apiBase  && (els.apiBase.value  = q.get("api") || DEV_API);
 
   if (els.search){ els.search.style.display='none'; }
   renderFileList();
@@ -222,20 +236,18 @@ function boot(){
     if ((e.ctrlKey||e.metaKey) && e.key.toLowerCase()==="s"){ e.preventDefault(); saveCurrent(); }
   });
 
-  if (els.search){
-    els.search.addEventListener("input", ()=>{
-      const kw = els.search.value.toLowerCase();
-      [...els.fileList.children].forEach(it=>{
-        const t = it.querySelector(".name").textContent.toLowerCase();
-        it.style.display = t.includes(kw) ? "" : "none";
-      });
+  els.search?.addEventListener("input", ()=>{
+    const kw = (els.search.value||"").toLowerCase();
+    [...(els.fileList?.children||[])].forEach(it=>{
+      const t = it.querySelector(".name")?.textContent.toLowerCase() || "";
+      it.style.display = t.includes(kw) ? "" : "none";
     });
-  }
+  });
 
-  els.promptEditor.addEventListener("input", markDirty);
+  els.promptEditor?.addEventListener("input", markDirty);
 
-  // ✅ fixed: bind correctly (was els.els.btnAdd)
   if (els.btnAdd){
+    els.btnAdd.removeEventListener("click", onClickAdd);
     els.btnAdd.addEventListener("click", onClickAdd);
   }
 }
@@ -262,33 +274,39 @@ async function tryLoad(filename){
 }
 
 async function renderFileList(){
+  if (!els.fileList) return;
   els.fileList.innerHTML = "";
-  const clid = els.clientId.value.trim().toUpperCase();
-  const beh  = els.behavior.value.toUpperCase();
+  const clid = (els.clientId?.value||"").trim().toUpperCase();
+  const beh  = (els.behavior?.value||"BASE").toUpperCase();
 
   await ensurePromptIndex(clid, beh);
 
-  const rows = [...promptIndex.items]
+  const rows = [...(promptIndex.items||[])]
     .filter(it => !it.hidden)
     .sort((a,b)=>(a.order??0)-(b.order??0));
 
-  // drag sort
-  els.fileList.addEventListener('dragover', (e)=>{
-    e.preventDefault();
-    const dragging = document.querySelector('.fileitem.dragging');
-    const after = getDragAfterElement(els.fileList, e.clientY);
-    if (!after) els.fileList.appendChild(dragging);
-    else els.fileList.insertBefore(dragging, after);
-  });
-  els.fileList.addEventListener('drop', async ()=>{
-    const lis = [...els.fileList.querySelectorAll('.fileitem')];
-    lis.forEach((el, i) => {
-      const f = el.dataset.file;
-      const it = promptIndex.items.find(x=>x.file===f);
-      if (it) it.order = (i+1)*10;
+  // Attach drag handlers once
+  if (!dragBound){
+    dragBound = true;
+    els.fileList.addEventListener('dragover', (e)=>{
+      e.preventDefault();
+      const dragging = document.querySelector('.fileitem.dragging');
+      const after = getDragAfterElement(els.fileList, e.clientY);
+      if (dragging){
+        if (!after) els.fileList.appendChild(dragging);
+        else els.fileList.insertBefore(dragging, after);
+      }
     });
-    await saveIndex();
-  });
+    els.fileList.addEventListener('drop', async ()=>{
+      const lis = [...els.fileList.querySelectorAll('.fileitem')];
+      lis.forEach((el, i) => {
+        const f = el.dataset.file;
+        const it = promptIndex.items.find(x=>x.file===f);
+        if (it) it.order = (i+1)*10;
+      });
+      await saveIndex();
+    });
+  }
 
   for (const it of rows){
     const name = it.name || prettifyNameFromFile(it.file);
@@ -327,15 +345,16 @@ async function renderFileList(){
     });
 
     if (!it.lock){
-      li.querySelector(".rename").addEventListener("click", async (e)=>{
+      li.querySelector(".rename")?.addEventListener("click", async (e)=>{
         e.preventDefault(); e.stopPropagation();
         const nv = prompt("表示名の変更", name);
-        if (nv!=null){ await renameIndexItem(it.file, nv.trim()); await renderFileList(); }
+        if (nv!=null){ await renameIndexItem(it.file, nv.trim()); await reloadIndex(); await renderFileList(); }
       });
-      li.querySelector(".delete").addEventListener("click", async (e)=>{
+      li.querySelector(".delete")?.addEventListener("click", async (e)=>{
         e.preventDefault(); e.stopPropagation();
         if (!confirm(`「${name}」を一覧から削除します。ファイル自体は削除されません。よろしいですか？`)) return;
         await deleteIndexItem(it.file);
+        await reloadIndex();
         await renderFileList();
       });
     }
@@ -355,15 +374,16 @@ function getDragAfterElement(container, y){
 async function openByFilename(filename){
   if (dirty && !confirm("未保存の変更があります。破棄して読み込みますか？")) return;
 
-  els.diffPanel.hidden = true;
-  [...els.fileList.children].forEach(n=>n.classList.toggle("active", n.dataset.file===filename));
+  els.diffPanel && (els.diffPanel.hidden = true);
+  [...(els.fileList?.children||[])].forEach(n=>n.classList.toggle("active", n.dataset.file===filename));
   setStatus("読込中…","orange");
 
-  const clid = els.clientId.value.trim().toUpperCase();
-  const beh  = els.behavior.value.toUpperCase();
+  const clid = (els.clientId?.value||"").trim().toUpperCase();
+  const beh  = (els.behavior?.value||"BASE").toUpperCase();
 
   const clientTarget = `client/${clid}/${filename}`;
-  document.getElementById("fileTitle").textContent = clientTarget;
+  const titleEl = document.getElementById("fileTitle");
+  if (titleEl) titleEl.textContent = clientTarget;
 
   const candidates = [ clientTarget, `prompt/${clid}/${filename}`, templateFromFilename(filename, beh) ];
 
@@ -377,7 +397,7 @@ async function openByFilename(filename){
 
   if (!loaded){
     currentEtag = null;
-    els.promptEditor.value = "";
+    if (els.promptEditor) els.promptEditor.value = "";
     writeParamUI({});
     setBadges("Missing（新規）", null);
     setStatus("新規作成できます。右上の保存で client 配下に作成します。");
@@ -392,7 +412,7 @@ async function openByFilename(filename){
   else if (typeof d === "string") promptText = d;
   else promptText = JSON.stringify(d, null, 2);
 
-  els.promptEditor.value = promptText;
+  if (els.promptEditor) els.promptEditor.value = promptText;
   writeParamUI(d.params || {});
 
   currentEtag = (used.startsWith("client/") || used.startsWith("prompt/")) ? loaded.etag : null;
@@ -405,12 +425,12 @@ async function openByFilename(filename){
   clearDirty();
 }
 
-els.btnSave.addEventListener("click", saveCurrent);
+els.btnSave?.addEventListener("click", saveCurrent);
 async function saveCurrent(){
-  const title = document.getElementById("fileTitle").textContent;
+  const title = document.getElementById("fileTitle")?.textContent || "";
   if (!title || title==="未選択") return;
   const filename = title;
-  const prompt = els.promptEditor.value;
+  const prompt = els.promptEditor?.value ?? "";
   const params = readParamUI();
   setStatus("保存中…","orange");
   try{
@@ -426,26 +446,26 @@ async function saveCurrent(){
 }
 
 /* ---------- Diff ---------- */
-els.btnDiff.addEventListener("click", ()=>{
-  els.diffLeft.value  = templateText || "(テンプレートなし)";
-  els.diffRight.value = els.promptEditor.value || "";
-  els.diffPanel.hidden = !els.diffPanel.hidden;
+els.btnDiff?.addEventListener("click", ()=>{
+  if (els.diffLeft)  els.diffLeft.value  = templateText || "(テンプレートなし)";
+  if (els.diffRight) els.diffRight.value = els.promptEditor?.value || "";
+  if (els.diffPanel) els.diffPanel.hidden = !els.diffPanel.hidden;
 });
 
 /* ---------- Utils ---------- */
-function setStatus(msg, color="#0AA0A6"){ els.status.style.color = color; els.status.textContent = msg; }
+function setStatus(msg, color="#0AA0A6"){ if (els.status){ els.status.style.color = color; els.status.textContent = msg; } }
 function setBadges(stateText, etag, mode){
-  els.badgeState.textContent = stateText;
-  els.badgeState.className = "chip " + (mode||"");
-  els.badgeEtag.textContent = etag || "—";
+  if (els.badgeState){ els.badgeState.textContent = stateText; els.badgeState.className = "chip " + (mode||""); }
+  if (els.badgeEtag){ els.badgeEtag.textContent = etag || "—"; }
 }
 
 /* ===== Add Button handler (asks name, creates blob, appends to index, updates UI) ===== */
 async function onClickAdd(){
   try{
-    const clid = els.clientId.value.trim().toUpperCase();
-    const beh  = els.behavior.value.toUpperCase();
-    await ensurePromptIndex(clid, beh); // load existing index (do not reconstruct)
+    const clid = (els.clientId?.value||"").trim().toUpperCase();
+    const beh  = (els.behavior?.value||"BASE").toUpperCase();
+    if (!clid){ alert("Client ID が未設定です。左上で選択してください。"); return; }
+    await ensurePromptIndex(clid, beh); // load existing index or bootstrap
 
     // ask only display name; filename auto
     const dname = prompt("新しいプロンプトの名称を入力してください", "新規プロンプト");
@@ -453,7 +473,7 @@ async function onClickAdd(){
 
     // unique filename
     let file = generateAutoFilename();
-    const existing = new Set(promptIndex.items.map(x=>x.file));
+    const existing = new Set((promptIndex.items||[]).map(x=>x.file));
     let salt = 0;
     while (existing.has(file)){
       salt++;
@@ -466,6 +486,9 @@ async function onClickAdd(){
 
     // append to *existing* index
     await addIndexItemRaw(file, dname);
+
+    // 🔁 re-fetch index to update local ETag and items
+    await reloadIndex();
 
     // refresh list and open it
     await renderFileList();
