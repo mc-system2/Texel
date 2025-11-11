@@ -1,4 +1,4 @@
-/* build:ps-20251112-idxfix+autoboot */
+/* build:ps-20251112-idxfix+pathfix */
 /* ===== Prompt Studio – logic (index-safe add, robust reload) ===== */
 const DEV_API  = "https://func-texel-api-dev-jpe-001-b2f6fec8fzcbdrc3.japaneast-01.azurewebsites.net/api/";
 const PROD_API = "https://func-texel-api-prod-jpe-001-dsgfhtafbfbxawdz.japaneast-01.azurewebsites.net/api/";
@@ -331,13 +331,28 @@ function templateFromFilename(filename, behavior){
 }
 
 async function tryLoad(filename){
-  const url = join(els.apiBase.value, "LoadPromptText") + `?filename=${encodeURIComponent(filename)}`;
-  const res = await fetch(url, { cache: "no-store" }).catch(()=>null);
-  if (!res || !res.ok) return null;
-  const etag = res.headers.get("etag") || null;
-  let data = {};
-  try { data = await res.json(); } catch { data = {}; }
-  return { data, etag };
+  // Normalize and try multiple candidate paths.
+  const clid = (els.clientId?.value||"").trim().toUpperCase();
+  const beh  = (els.behavior?.value||"BASE").toUpperCase();
+
+  const candidates = [];
+  if (typeof filename === "string" && !filename.includes("/")){
+    candidates.push(`client/${clid}/${filename}`);
+    candidates.push(`prompt/${clid}/${filename}`);
+    candidates.push(templateFromFilename(filename, beh));
+  } else {
+    candidates.push(filename);
+  }
+  for (const f of candidates){
+    const url = join(els.apiBase.value, "LoadPromptText") + `?filename=${encodeURIComponent(f)}`;
+    const res = await fetch(url, { cache: "no-store" }).catch(()=>null);
+    if (!res || !res.ok) continue;
+    const etag = res.headers.get("etag") || null;
+    let data = {};
+    try { data = await res.json(); } catch { data = {}; }
+    return { data, etag, used:f };
+  }
+  return null;
 }
 
 async function renderFileList(){
