@@ -56,49 +56,28 @@ function prettifyNameFromFile(filename){
 }
 function join(base, path){ return (base||"").replace(/\/+$/,"") + "/" + String(path||"").replace(/^\/+/, ""); }
 
-const LOAD_CANDIDATES = ["LoadPromptText","LoadBLOB","LoadPrompt","LoadText"];
-const SAVE_CANDIDATES = ["SavePromptText","SaveBLOB","SavePrompt","SaveText"];
-
 async function apiLoadText(filename){
-  // Try POST with multiple function names first (avoid GET 404 noise)
-  for (const fn of LOAD_CANDIDATES){
-    try{
-      const r = await fetch(join(els.apiBase.value, fn), {
-        method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify({ filename })
-      });
-      if (!r.ok) continue;
-      const j = await r.json().catch(()=>null);
-      let data = null;
-      const t = j?.text ?? j?.prompt ?? null;
-      if (typeof t === "string"){ try{ data = JSON.parse(t) }catch{ data = t } }
-      else if (j?.prompt) data = j.prompt;
-      else if (j && typeof j === "object") data = j;
-      return { etag: j?.etag ?? null, data, used: fn };
-    }catch{ /* ignore and try next */ }
-  }
-
-  // If all POST candidates failed, try GET (no-store) as a last resort
-  const getRes = await tryLoad(filename);
-  if (getRes) { getRes.used = "GET"; return { etag: getRes.etag ?? null, data: getRes.data, used: "GET" }; }
-
-  return null;
+  const r = await fetch(join(els.apiBase.value,"LoadPromptText"),{
+    method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify({ filename })
+  }).catch(()=>null);
+  if (!r || !r.ok) return null;
+  const j = await r.json().catch(()=>null);
+  let data = null;
+  const t = j?.text ?? j?.prompt ?? null;
+  if (typeof t === "string"){ try{ data = JSON.parse(t) }catch{ data = t } }
+  else if (j?.prompt) data = j.prompt;
+  else if (j && typeof j === "object") data = j;
+  return { etag: j?.etag ?? null, data };
 }
 async function apiSaveText(filename, payload, etag){
   const body = { filename, prompt: typeof payload==="string"? payload : JSON.stringify(payload,null,2) };
   if (etag) body.etag = etag;
-
-  for (const fn of SAVE_CANDIDATES){
-    try{
-      const r = await fetch(join(els.apiBase.value, fn), {
-        method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify(body)
-      });
-      const raw = await r.text(); let j={}; try{ j = raw?JSON.parse(raw):{} }catch{}
-      if (!r.ok) continue;
-      if (els.badgeEtag) els.badgeEtag.title = "via " + fn; // show which endpoint succeeded
-      return j;
-    }catch{ /* try next */ }
-  }
-  throw new Error("保存APIが見つかりません（候補: " + SAVE_CANDIDATES.join(",") + "）");
+  const r = await fetch(join(els.apiBase.value,"SavePromptText"),{
+    method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify(body)
+  });
+  const raw = await r.text(); let j={}; try{ j = raw?JSON.parse(raw):{} }catch{}
+  if (!r.ok) throw new Error(j?.error || raw || `HTTP ${r.status}`);
+  return j;
 }
 
 function normalizeIndex(x){
@@ -166,14 +145,14 @@ async function ensurePromptIndex(clientId, behavior, bootstrap=true){
 
 async function reloadIndex(){
   if (!promptIndexPath) return;
-  const r = await apiLoadText(promptIndexPath);
-  if (!r) return;
-  const idx = normalizeIndex(r.data);
+  // Use GET-based loader with cache:no-store to avoid stale reads
+  const res = await tryLoad(promptIndexPath);
+  if (!res) return;
+  const idx = normalizeIndex(res.data);
   if (idx){
     promptIndex = idx;
-    promptIndexEtag = r.etag || null;
+    promptIndexEtag = res.etag || null;
   }
-}
 }
 
 async function saveIndex(){
@@ -467,26 +446,15 @@ async function openByFilename(filename){
   const titleEl = document.getElementById("fileTitle");
   if (titleEl) titleEl.textContent = clientTarget;
 
-  // Compose candidates without issuing a bare-filename GET (which produced 404 noise)
-  const candidates = [ clientTarget, `prompt/${clid}/${filename}` ];
-  const tmpl = templateFromFilename(filename, beh);
-  // only push 3rd candidate if it looks like a namespaced path
-  if (/^(client|prompt|templates)\//.test(tmpl)) candidates.push(tmpl);
+  const candidates = [ clientTarget, `prompt/${clid}/${filename}`, templateFromFilename(filename, beh) ];
 
   let loaded = null, used = null;
   for (const f of candidates){
-    const r = await apiLoadText(f);
-    if (r && r.data) { loaded = r; used = f; break; }
+    const r = await tryLoad(f);
+    if (r) { loaded = r; used = f; break; }
   }
-
-  // Try template as pure template load (no network unless necessary)
-  if (!loaded){
-    const templ = await apiLoadText(templateFromFilename(filename, beh));
-    templateText = templ ? JSON.stringify(templ.data, null, 2) : "";
-  }else{
-    const templ = await apiLoadText(templateFromFilename(filename, beh));
-    templateText = templ ? JSON.stringify(templ.data, null, 2) : "";
-  }
+  const templ = await tryLoad(templateFromFilename(filename, beh));
+  templateText = templ ? JSON.stringify(templ.data, null, 2) : "";
 
   if (!loaded){
     currentEtag = null;
