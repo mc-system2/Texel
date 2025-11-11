@@ -95,12 +95,53 @@ function normalizeIndex(x){
   return null;
 }
 
-async function ensurePromptIndex(clientId, behavior){
+async function ensurePromptIndex(clientId, behavior, bootstrap=true){
   const path = indexClientPath(clientId);
-  const r = await apiLoadText(path);
+  // 1) Try POST loader
+  let r = await apiLoadText(path);
+  // 2) Fallback to GET (no-store)
+  if (!r) {
+    const g = await tryLoad(path);
+    if (g) r = g;
+  }
   if (r){
     const idx = normalizeIndex(r.data);
     if (idx){ promptIndex=idx; promptIndexPath=path; promptIndexEtag=r.etag||null; return promptIndex; }
+  }
+  // When we cannot load (endpoint 404等)、既存のpromptIndexがあるなら再構築せずにそのまま使う
+  if (!bootstrap && promptIndex && promptIndexPath===path){
+    return promptIndex;
+  }
+  if (!bootstrap){
+    // ここで作り直すと“名前が戻る”原因になるため、作らない
+    console.warn("ensurePromptIndex: load failed; skipped bootstrap to avoid overwrite. Check API base or function name.");
+    setStatus("インデックスの読込に失敗（再構築は未実施）。API設定をご確認ください。","orange");
+    return promptIndex;
+  }
+  // Bootstrap (index新規作成)
+  const kinds = [...FAMILY[behavior]];
+  const items = [];
+  let order = 10;
+  for (const k of kinds){
+    const file = KIND_TO_NAME[k];
+    const isRoom = (k==="roomphoto");
+    items.push({
+      file,
+      name: isRoom ? "画像分析プロンプト" : prettifyNameFromFile(file),
+      order: order, hidden:false, lock: isRoom
+    });
+    order += 10;
+  }
+  promptIndex = { version:1, clientId, behavior, updatedAt:new Date().toISOString(), items };
+  promptIndexPath = path; promptIndexEtag=null;
+  try{
+    await apiSaveText(promptIndexPath, promptIndex, null);
+  }catch(e){
+    console.error("bootstrap save failed:", e);
+    setStatus("インデックス新規作成に失敗しました。API設定をご確認ください。","red");
+  }
+  return promptIndex;
+}
   }
   // not found → bootstrap (do NOT overwrite if exists)
   const kinds = [...FAMILY[behavior]];
@@ -157,7 +198,7 @@ async function renameIndexItem(file, newName){
   if (!promptIndexPath || !promptIndex){
     const clid = (els.clientId?.value||"").trim().toUpperCase();
     const beh  = (els.behavior?.value||"BASE").toUpperCase();
-    await ensurePromptIndex(clid, beh);
+    await ensurePromptIndex(clid, beh, false);
   }
   const it = promptIndex?.items?.find(x=>x.file===file);
   if (!it) throw new Error("対象が見つかりません。");
@@ -305,7 +346,7 @@ async function renderFileList(){
   const clid = (els.clientId?.value||"").trim().toUpperCase();
   const beh  = (els.behavior?.value||"BASE").toUpperCase();
 
-  await ensurePromptIndex(clid, beh);
+  await ensurePromptIndex(clid, beh, false);
 
   const rows = [...(promptIndex.items||[])]
     .filter(it => !it.hidden)
@@ -505,7 +546,7 @@ async function onClickAdd(){
     const clid = (els.clientId?.value||"").trim().toUpperCase();
     const beh  = (els.behavior?.value||"BASE").toUpperCase();
     if (!clid){ alert("Client ID が未設定です。左上で選択してください。"); return; }
-    await ensurePromptIndex(clid, beh); // load existing index or bootstrap
+    await ensurePromptIndex(clid, beh, false); // load existing index or bootstrap
 
     // ask only display name; filename auto
     const dname = prompt("新しいプロンプトの名称を入力してください", "新規プロンプト");
