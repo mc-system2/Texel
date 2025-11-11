@@ -118,27 +118,12 @@ function normalizeIndex(x){
   return null;
 }
 
-function dedupeIndexItems(idx){
-  try{
-    if (!idx || !Array.isArray(idx.items)) return idx;
-    const seen = new Set();
-    idx.items = idx.items.filter(it => {
-      if (!it || !it.file) return false;
-      if (seen.has(it.file)) return false;
-      seen.add(it.file);
-      return true;
-    });
-    idx.items.sort((a,b)=>(a.order??0)-(b.order??0)).forEach((x,i)=> x.order=(i+1)*10);
-  }catch(e){}
-  return idx;
-}
-
 async function ensurePromptIndex(clientId, behavior){
   const path = indexClientPath(clientId);
   const r = await apiLoadText(path);
   if (r){
     const idx = normalizeIndex(r.data);
-    if (idx){ promptIndex=dedupeIndexItems(idx); promptIndexPath=path; promptIndexEtag=r.etag||null; return promptIndex; }
+    if (idx){ promptIndex = dedupeIndexItems(idx); promptIndexPath=path; promptIndexEtag=r.etag||null; return promptIndex; }
   }
   // not found → bootstrap (do NOT overwrite if exists)
   const kinds = [...FAMILY[behavior]];
@@ -162,7 +147,6 @@ async function ensurePromptIndex(clientId, behavior){
 
 async function saveIndex(){
   if (!promptIndex) return;
-  promptIndex = dedupeIndexItems(promptIndex);
   promptIndex.updatedAt = new Date().toISOString();
   try{
     const res = await apiSaveText(promptIndexPath, promptIndex, promptIndexEtag);
@@ -206,7 +190,6 @@ async function addIndexItemRaw(fileName, displayName){
   let file = fileName.trim();
   if (!file.endsWith(".json")) file = file + ".json";
   if (!file.startsWith("texel-")) file = "texel-" + file;
-  if (!promptIndex || !Array.isArray(promptIndex.items)) promptIndex = {items:[]};
   if (promptIndex.items.some(x=>x.file===file)) throw new Error("同名ファイルが既に存在します。");
   const maxOrder = Math.max(0, ...promptIndex.items.map(x=>x.order||0));
   promptIndex.items.push({ file, name:(displayName||'').trim()||prettifyNameFromFile(file), order:maxOrder+10, hidden:false });
@@ -301,7 +284,26 @@ function boot(){
   } else {
     setStatus("クライアントIDを入力してから開始してください。","orange");
   }
-window.addEventListener("keydown", (e)=>{
+
+
+  // keep uppercase and sanitize
+  els.clientId.addEventListener("input", ()=>{
+    els.clientId.value = sanitizeSegment(els.clientId.value.toUpperCase());
+  });
+  // persist in hash for reloads
+  function syncHash(){
+    const params = new URLSearchParams();
+    params.set("client", (els.clientId.value||"").toUpperCase());
+    params.set("behavior", (els.behavior.value||"BASE").toUpperCase());
+    params.set("api", els.apiBase.value||"");
+    location.hash = params.toString();
+  }
+  els.clientId.addEventListener("change", syncHash);
+  els.behavior.addEventListener("change", syncHash);
+  els.apiBase.addEventListener("change", syncHash);
+  renderFileList();
+
+  window.addEventListener("keydown", (e)=>{
     if ((e.ctrlKey||e.metaKey) && e.key.toLowerCase()==="s"){ e.preventDefault(); saveCurrent(); }
   });
 
@@ -345,7 +347,7 @@ async function tryLoad(filename){
 }
 
 async function renderFileList(){
-  const __newList = els.fileList.cloneNode(false); els.fileList.parentNode.replaceChild(__newList, els.fileList); els.fileList = __newList; els.fileList.innerHTML = "";
+  els.fileList.innerHTML = "";
   const clid = requireClient();
   const beh  = requireBehavior();
 
@@ -525,6 +527,9 @@ function setBadges(stateText, etag, mode){
 
 /* ===== Add Button handler (asks name, creates blob, appends to index, updates UI) ===== */
 async function onClickAdd(){
+  if (__PS_ADD_INFLIGHT) { console.warn('add inflight - skip'); return; }
+  __PS_ADD_INFLIGHT = True; try {
+
   const clid = requireClient();
   try{
     const clid = requireClient();
@@ -559,10 +564,15 @@ async function onClickAdd(){
     alert("追加に失敗: " + (e?.message || e));
     console.error(e);
   }
+
+  } finally { __PS_ADD_INFLIGHT = False; }
 }
 
 /* ===== Optional Safe Wrapper (kept for compatibility) ===== */
 (function(){
+  // re-entrancy guards
+  let __PS_ADD_INFLIGHT = false;
+
   function $q(sel){ return document.querySelector(sel); }
   function bind(){
     const btn = $q('#btnAdd, [data-role="btn-add"]');
@@ -577,6 +587,9 @@ async function onClickAdd(){
 
 
 ;(function(){
+  // re-entrancy guards
+  let __PS_ADD_INFLIGHT = false;
+
   try{
     const ver = window.__APP_BUILD__ || document.body?.dataset?.build || "(none)";
     console.log("%cPrompt Studio build:", "font-weight:bold", ver);
@@ -584,3 +597,5 @@ async function onClickAdd(){
     if (badge) badge.textContent = ver;
   }catch(e){}
 })();
+
+function dedupeIndexItems(idx){ if(!idx||!Array.isArray(idx.items)) return idx; const seen=new Set(); idx.items=idx.items.filter(it=>{ if(!it||!it.file) return false; if(seen.has(it.file)) return false; seen.add(it.file); return true;}); return idx;}
