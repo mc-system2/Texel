@@ -174,7 +174,6 @@ async function reloadIndex(){
     promptIndexEtag = r.etag || null;
   }
 }
-}
 
 async function saveIndex(){
   if (!promptIndex) return;
