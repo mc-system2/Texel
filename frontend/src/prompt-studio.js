@@ -142,6 +142,26 @@ async function ensurePromptIndex(clientId, behavior, bootstrap=true){
   }
   return promptIndex;
 }
+  }
+  // not found → bootstrap (do NOT overwrite if exists)
+  const kinds = [...FAMILY[behavior]];
+  const items = [];
+  let order = 10;
+  for (const k of kinds){
+    const file = KIND_TO_NAME[k];
+    const isRoom = (k==="roomphoto");
+    items.push({
+      file,
+      name: isRoom ? "画像分析プロンプト" : prettifyNameFromFile(file),
+      order: order, hidden:false, lock: isRoom
+    });
+    order += 10;
+  }
+  promptIndex = { version:1, clientId, behavior, updatedAt:new Date().toISOString(), items };
+  promptIndexPath = path; promptIndexEtag=null;
+  await apiSaveText(promptIndexPath, promptIndex, null);
+  return promptIndex;
+}
 
 async function reloadIndex(){
   if (!promptIndexPath) return;
