@@ -173,9 +173,7 @@ function normalizeIndex(x){
 
 async function ensurePromptIndex(clientId, behavior, bootstrap=true){
   const path = indexClientPath(clientId);
-  // 1) Try POST loader
   let r = await apiLoadText(path);
-  // 2) Fallback to GET (no-store)
   if (!r) {
     const g = await tryLoad(path);
     if (g) r = g;
@@ -184,14 +182,12 @@ async function ensurePromptIndex(clientId, behavior, bootstrap=true){
     const idx = normalizeIndex(r.data);
     if (idx){ promptIndex=idx; promptIndexPath=path; promptIndexEtag=r.etag||null; return promptIndex; }
   }
-  // When we cannot load (endpoint 404等)、既存のpromptIndexがあるなら再構築せずにそのまま使う
-  if (!bootstrap && promptIndex && promptIndexPath===path){
-    return promptIndex;
-  }
   if (!bootstrap){
-    // ここで作り直すと“名前が戻る”原因になるため、作らない
     console.warn("ensurePromptIndex: load failed; skipped bootstrap to avoid overwrite. Check API base or function name.");
     setStatus("インデックスの読込に失敗（再構築は未実施）。API設定をご確認ください。","orange");
+    // set benign empty structure to keep UI running
+    promptIndex = { version:1, clientId, behavior, updatedAt:null, items:[] };
+    promptIndexPath = path; promptIndexEtag=null;
     return promptIndex;
   }
   // Bootstrap (index新規作成)
@@ -396,104 +392,64 @@ async function tryLoad(filename){
 }
 
 async function renderFileList(){
-  if (!els.fileList) return;
-  els.fileList.innerHTML = "";
-  const clid = (els.clientId?.value||"").trim().toUpperCase();
-  const beh  = (els.behavior?.value||"BASE").toUpperCase();
+  const list = els.fileList;
+  if (!list) return;
+  list.innerHTML = "";
 
-  await ensurePromptIndex(clid, beh, false);
-
-  const rows = [...(promptIndex.items||[])]
-    .filter(it => !it.hidden)
-    .sort((a,b)=>(a.order??0)-(b.order??0));
-
-  // Attach drag handlers once
-  if (!dragBound){
-    dragBound = true;
-    els.fileList.addEventListener('dragover', (e)=>{
-      e.preventDefault();
-      const dragging = document.querySelector('.fileitem.dragging');
-      const after = getDragAfterElement(els.fileList, e.clientY);
-      if (dragging){
-        if (!after) els.fileList.appendChild(dragging);
-        else els.fileList.insertBefore(dragging, after);
-      }
-    });
-    els.fileList.addEventListener('drop', async ()=>{
-      const lis = [...els.fileList.querySelectorAll('.fileitem')];
-      lis.forEach((el, i) => {
-        const f = el.dataset.file;
-        const it = promptIndex.items.find(x=>x.file===f);
-        if (it) it.order = (i+1)*10;
-      });
-      await saveIndex();
-    });
+  // index not loaded yet
+  if (!promptIndex || !Array.isArray(promptIndex.items)){
+    // show empty placeholder, but keep UI usable
+    const emp = document.createElement("div");
+    emp.className = "empty-hint";
+    emp.textContent = "インデックス未読み込み（API未接続/404）。＋追加から作成できます。";
+    list.appendChild(emp);
+    setBadges("—", null);
+    setStatus("インデックスの読込に失敗（再構築は未実施）。API設定をご確認ください。","orange");
+    return;
   }
 
-  for (const it of rows){
-    const name = it.name || prettifyNameFromFile(it.file);
+  const items = [...promptIndex.items].sort((a,b)=>(a.order||0)-(b.order||0));
+  for (const it of items){
     const li = document.createElement("div");
-    li.className = "fileitem" + (it.lock? " locked": "");
+    li.className = "fileitem";
     li.dataset.file = it.file;
-    li.draggable = !it.lock;
+    li.innerHTML = `
+      <span class="drag">≡</span>
+      <span class="name">${it.lock?'<span class="lock">🔒</span>':''}${it.name||it.file}</span>
+      <span class="meta">
+        <button class="rename">✎</button>
+        <button class="del">🗑</button>
+      </span>`;
+    list.appendChild(li);
 
-    const lockIcon = it.lock ? `<span class="lock">🔒</span>` : "";
-
-    li.innerHTML = `<span class="drag">≡</span>
-                    <div class="name" title="${it.file}">${lockIcon}${name}</div>
-                    <div class="meta">
-                      ${it.lock? "" : '<button class="rename" title="名称を変更">✎</button>'}
-                      ${it.lock? "" : '<button class="delete" title="削除">🗑</button>'}
-                    </div>`;
-    els.fileList.appendChild(li);
-
-    if (!it.lock){
-      li.addEventListener('dragstart', ()=> li.classList.add('dragging'));
-      li.addEventListener('dragend', async ()=>{
-        li.classList.remove('dragging');
-        const lis = [...els.fileList.querySelectorAll('.fileitem')];
-        lis.forEach((el, i) => {
-          const f = el.dataset.file;
-          const it2 = promptIndex.items.find(x=>x.file===f);
-          if (it2) it2.order = (i+1)*10;
-        });
-        await saveIndex();
-      });
-    }
-
-    li.addEventListener("click", async (e)=>{
-      if (e.target.closest("button")) return; // handled by buttons
-      await openByFilename(it.file);
+    li.addEventListener("click", (e)=>{
+      if (e.target.closest(".rename,.del")) return;
+      openByFilename(it.file);
     });
-
-    if (!it.lock){
-      li.querySelector(".rename")?.addEventListener("click", async (e)=>{
-        e.preventDefault(); e.stopPropagation();
-        const nv = prompt("表示名の変更", name);
-        if (nv!=null){
-          try{
-            // optimistic update in UI
-            li.querySelector('.name').innerHTML = (it.lock? '<span class="lock">🔒</span>' : '') + nv.trim();
-            setStatus('名称を変更中…','orange');
-            await renameIndexItem(it.file, nv.trim());
-            setStatus('名称を変更しました。','green');
-            await renderFileList();
-          }catch(err){
-            console.error(err);
-            setStatus('名称変更に失敗: ' + (err?.message||err),'red');
-            await reloadIndex();
-            await renderFileList();
-          }
+    li.querySelector(".rename")?.addEventListener("click", async ()=>{
+      const nv = prompt("新しい名称を入力してください", it.name||"");
+      if (nv!=null){
+        try{
+          li.querySelector(".name").innerHTML = (it.lock?'<span class="lock">🔒</span>':'') + nv.trim();
+          setStatus("名称を変更中…","orange");
+          await renameIndexItem(it.file, nv.trim());
+          setStatus("名称を変更しました。","green");
+          await renderFileList();
+        }catch(err){
+          console.error(err);
+          setStatus("名称変更に失敗: " + (err?.message||err),"red");
+          await reloadIndex();
+          await renderFileList();
         }
-      });
-      li.querySelector(".delete")?.addEventListener("click", async (e)=>{
-        e.preventDefault(); e.stopPropagation();
-        if (!confirm(`「${name}」を一覧から削除します。ファイル自体は削除されません。よろしいですか？`)) return;
-        await deleteIndexItem(it.file);
-        await reloadIndex();
-        await renderFileList();
-      });
-    }
+      }
+    });
+    li.querySelector(".del")?.addEventListener("click", async ()=>{
+      if (!confirm("この項目をインデックスから削除します。よろしいですか？")) return;
+      await removeIndexItem(it.file);
+      await saveIndex();
+      await reloadIndex();
+      await renderFileList();
+    });
   }
 }
 
