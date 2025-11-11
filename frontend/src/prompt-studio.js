@@ -18,6 +18,15 @@ const FAMILY = {
   "TYPE-S": new Set(["roomphoto","suumo-catch","suumo-comment","suggestion"])
 };
 
+
+/* ==== Adaptive API strategy to avoid repeated 404 noise ==== */
+let LOAD_STRATEGY = localStorage.getItem("ps.load.strategy") || "AUTO"; // "GET" or "POST:Fn"
+let SAVE_STRATEGY = localStorage.getItem("ps.save.strategy") || "AUTO"; // "POST:Fn"
+function rememberStrategy(kind, value){
+  if (kind==="LOAD"){ LOAD_STRATEGY = value; localStorage.setItem("ps.load.strategy", value); }
+  if (kind==="SAVE"){ SAVE_STRATEGY = value; localStorage.setItem("ps.save.strategy", value); }
+}
+
 const els = {
   clientId:  document.getElementById("clientId"),
   behavior:  document.getElementById("behavior"),
@@ -60,7 +69,32 @@ const LOAD_CANDIDATES = ["LoadPromptText","LoadBLOB","LoadPrompt","LoadText"];
 const SAVE_CANDIDATES = ["SavePromptText","SaveBLOB","SavePrompt","SaveText"];
 
 async function apiLoadText(filename){
-  // Try POST with multiple function names first (avoid GET 404 noise)
+  // 1) If strategy locked, use it
+  if (LOAD_STRATEGY.startsWith("POST:")){
+    const fn = LOAD_STRATEGY.split(":")[1];
+    try{
+      const r = await fetch(join(els.apiBase.value, fn), {
+        method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify({ filename })
+      });
+      if (r.ok){
+        const j = await r.json().catch(()=>null);
+        let data = null;
+        const t = j?.text ?? j?.prompt ?? null;
+        if (typeof t === "string"){ try{ data = JSON.parse(t) }catch{ data = t } }
+        else if (j?.prompt) data = j.prompt;
+        else if (j && typeof j === "object") data = j;
+        return { etag: j?.etag ?? null, data, used: fn };
+      }
+    }catch{}
+    // if failed, fall back to AUTO
+    rememberStrategy("LOAD","AUTO");
+  } else if (LOAD_STRATEGY === "GET"){
+    const g = await tryLoad(filename);
+    if (g){ g.used="GET"; return { etag: g.etag ?? null, data: g.data, used: "GET" }; }
+    rememberStrategy("LOAD","AUTO");
+  }
+
+  // 2) AUTO detection: try POST candidates quickly; on first success, remember
   for (const fn of LOAD_CANDIDATES){
     try{
       const r = await fetch(join(els.apiBase.value, fn), {
@@ -73,13 +107,18 @@ async function apiLoadText(filename){
       if (typeof t === "string"){ try{ data = JSON.parse(t) }catch{ data = t } }
       else if (j?.prompt) data = j.prompt;
       else if (j && typeof j === "object") data = j;
+      rememberStrategy("LOAD", "POST:"+fn);
       return { etag: j?.etag ?? null, data, used: fn };
-    }catch{ /* ignore and try next */ }
+    }catch{}
   }
 
-  // If all POST candidates failed, try GET (no-store) as a last resort
+  // 3) Finally GET; remember GET if succeeded
   const getRes = await tryLoad(filename);
-  if (getRes) { getRes.used = "GET"; return { etag: getRes.etag ?? null, data: getRes.data, used: "GET" }; }
+  if (getRes) {
+    rememberStrategy("LOAD","GET");
+    getRes.used = "GET";
+    return { etag: getRes.etag ?? null, data: getRes.data, used: "GET" };
+  }
 
   return null;
 }
@@ -87,6 +126,20 @@ async function apiSaveText(filename, payload, etag){
   const body = { filename, prompt: typeof payload==="string"? payload : JSON.stringify(payload,null,2) };
   if (etag) body.etag = etag;
 
+  // 1) If we already know which function works, use it
+  if (SAVE_STRATEGY.startsWith("POST:")){
+    const fn = SAVE_STRATEGY.split(":")[1];
+    try{
+      const r = await fetch(join(els.apiBase.value, fn), {
+        method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify(body)
+      });
+      const raw = await r.text(); let j={}; try{ j = raw?JSON.parse(raw):{} }catch{}
+      if (r.ok){ if (els.badgeEtag) els.badgeEtag.title = "via " + fn; return j; }
+    }catch{}
+    rememberStrategy("SAVE","AUTO");
+  }
+
+  // 2) AUTO scan candidates; on first success, remember
   for (const fn of SAVE_CANDIDATES){
     try{
       const r = await fetch(join(els.apiBase.value, fn), {
@@ -94,10 +147,12 @@ async function apiSaveText(filename, payload, etag){
       });
       const raw = await r.text(); let j={}; try{ j = raw?JSON.parse(raw):{} }catch{}
       if (!r.ok) continue;
-      if (els.badgeEtag) els.badgeEtag.title = "via " + fn; // show which endpoint succeeded
+      if (els.badgeEtag) els.badgeEtag.title = "via " + fn;
+      rememberStrategy("SAVE","POST:"+fn);
       return j;
-    }catch{ /* try next */ }
+    }catch{}
   }
+
   throw new Error("保存APIが見つかりません（候補: " + SAVE_CANDIDATES.join(",") + "）");
 }
 
