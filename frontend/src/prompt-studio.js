@@ -1,5 +1,122 @@
 
 /* =====================================================================
+   API INTEGRATION PATCH (CopyPromptText / DeletePromptText)
+   - Use server-side Copy API for "add" (template → client/<ID>/texel-<ts>.json)
+   - Use server-side Delete API for deletion (ETag-aware)
+   ===================================================================== */
+(function(){
+  try {
+    var API_BASE = (typeof getFunctionBase === 'function') ? getFunctionBase() :
+      (window.FUNCTION_BASE || "https://func-texel-api-dev-jpe-001-b2f6fec8fzcbdrc3.japaneast-01.azurewebsites.net/api");
+
+    async function callCopyPrompt(src, dst, overwrite) {
+      const res = await fetch(API_BASE + "/CopyPromptText", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        cache: "no-store",
+        body: JSON.stringify({ src, dst, overwrite: !!overwrite })
+      });
+      if (!res.ok) {
+        let msg = await res.text().catch(()=> "");
+        throw new Error("CopyPromptText failed: " + res.status + " " + msg);
+      }
+      return res.json();
+    }
+
+    async function callDeletePrompt(path, ifMatch) {
+      const body = { path: path };
+      if (ifMatch) body.ifMatch = ifMatch;
+      const res = await fetch(API_BASE + "/DeletePromptText", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        cache: "no-store",
+        body: JSON.stringify(body)
+      });
+      if (!(res.status === 204 || res.status === 200)) {
+        let msg = await res.text().catch(()=> "");
+        throw new Error("DeletePromptText failed: " + res.status + " " + msg);
+      }
+      return true;
+    }
+
+    // Resolve clientId helper
+    function __resolveClientId() {
+      try {
+        if (window.currentClientId) return String(window.currentClientId).trim();
+        if (typeof window.getCurrentClientId === "function") return String(window.getCurrentClientId()||"").trim();
+      } catch(_e){}
+      return "";
+    }
+
+    // Replace creation flow to use Copy API with template
+    (function replaceAddFlow(){
+      var TEMPLATE_NAME = "texel-prompt-template.json";
+      async function createFromApiTemplate(displayName) {
+        var clientId = __resolveClientId();
+        if (!clientId) throw new Error("clientId not resolved");
+        var file = "texel-" + Date.now() + ".json";
+        var dst = "client/" + clientId + "/" + file;
+        var copyRes = await callCopyPrompt(TEMPLATE_NAME, dst, false);
+        var etag = copyRes && copyRes.etag || null;
+
+        if (typeof window.upsertPromptIndex === "function") {
+          try { await window.upsertPromptIndex({ path: dst, name: displayName || file, order: Date.now() }); } catch(_e){}
+        }
+        // keep editor state
+        if (!window.editorState) window.editorState = {};
+        window.editorState.currentPath = dst;
+        window.editorState.lastKnownETag = etag;
+
+        if (typeof window.openPrompt === "function") {
+          await window.openPrompt({ path: dst });
+        }
+        return dst;
+      }
+
+      window.addNewPrompt = createFromApiTemplate;
+      window.createPromptFile = createFromApiTemplate;
+      window.createNewPrompt = createFromApiTemplate;
+    })();
+
+    // Provide deletion flow that uses Delete API (and updates index if hook exists)
+    window.deletePromptFile = async function(path, opts) {
+      opts = opts || {};
+      await callDeletePrompt(path, opts.ifMatch);
+      if (typeof window.removeFromPromptIndex === "function") {
+        try { await window.removeFromPromptIndex(path); } catch(_e){}
+      }
+      // If current open file was deleted, clear editor
+      try {
+        if (window.editorState && window.editorState.currentPath === path) {
+          window.editorState.currentPath = null;
+          window.editorState.lastKnownETag = null;
+          var ta = document.querySelector('#prompt-text') || document.querySelector('textarea[name="prompt"]');
+          if (ta) ta.value = "";
+          var pa = document.querySelector('#prompt-params');
+          if (pa) pa.value = "{}";
+        }
+      } catch(_e){}
+      return true;
+    };
+
+    // Optional: hook delete buttons
+    document.addEventListener("click", function(ev){
+      var btn = ev.target && ev.target.closest("[data-action='delete-prompt']");
+      if (!btn) return;
+      ev.preventDefault();
+      var p = btn.getAttribute("data-path");
+      if (!p) return;
+      window.deletePromptFile(p).catch(err => alert(err.message || String(err)));
+    }, true);
+
+  } catch (e) {
+    console.error("API INTEGRATION PATCH error:", e);
+  }
+})();
+/* =========================== END API INTEGRATION PATCH ==================== */
+
+
+/* =====================================================================
    TEMPLATE-COPY INIT PATCH
    - On add: load 'texel-prompt-template.json' and save it to client/<ID>/texel-<ts>.json
    - Ensures flat structure like:
