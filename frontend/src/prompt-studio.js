@@ -57,8 +57,8 @@ function prettifyNameFromFile(filename){
 }
 function join(base, path){ return (base||"").replace(/\/+$/,"") + "/" + String(path||"").replace(/^\/+/, ""); }
 
-const LOAD_CANDIDATES = ["LoadPromptText"];
-const SAVE_CANDIDATES = ["SavePromptText"];
+const LOAD_CANDIDATES = ["LoadPromptText","LoadBLOB","LoadPrompt","LoadText"];
+const SAVE_CANDIDATES = ["SavePromptText","SaveBLOB","SavePrompt","SaveText"];
 
 /* ---------- helpers: normalize/patch prompt docs ---------- */
 function normalizePromptDoc(doc){
@@ -393,7 +393,7 @@ async function tryLoad(filename){
     candidates.push(filename);
   }
   for (const f of candidates){
-    const url = join(els.apiBase.value, "LoadPromptText") + `?filename=${encodeURIComponent(f)}`;
+    const url = apiLoadUrl(f);
     const res = await fetch(url, { cache: "no-store" }).catch(()=>null);
     if (!res || !res.ok) continue;
     const etag = res.headers.get("etag") || null;
@@ -641,6 +641,25 @@ async function onClickAdd(){
 
 /* ===== Optional Safe Wrapper (kept for compatibility) ===== */
 (function(){
+
+function resolvePath(name){
+  const clid = (els && els.clientId && els.clientId.value ? els.clientId.value : "").trim().toUpperCase();
+  if (!name) return "";
+  if (name.includes("/")) return name;
+  return `client/${clid}/${name}`;
+}
+
+function apiLoadUrl(name){
+  const f = resolvePath(name);
+  return apiLoadUrl(f);
+}
+
+function apiSaveUrl(name){
+  const f = resolvePath(name);
+  return apiSaveUrl(f);
+}
+
+
   function $q(sel){ return document.querySelector(sel); }
   function bind(){
     const btn = $q('#btnAdd, [data-role="btn-add"]');
@@ -671,7 +690,7 @@ async function openNewlyCreatedWithRetry(filename, tries=6, interval=250){
     const target = `client/${clid}/${filename}`;
     for (let i=0;i<tries;i++){
       try{
-        const url = join(els.apiBase.value, "LoadPromptText") + `?filename=${encodeURIComponent(target)}`;
+        const url = apiLoadUrl(target);
         const res = await fetch(url, { cache:"no-store" });
         if (res.ok){
           // 成功したら通常オープンへ
