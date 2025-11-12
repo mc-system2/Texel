@@ -24,7 +24,11 @@
         <label class="label">API Base</label>
         <input id="apiBase" class="input sm wide" placeholder="https://.../api" autocomplete="off" />
       </div>
-      <div class="right"><span id="buildBadge" class="chip">ps-20251112</span></div>
+      <div class="right">
+        <span id="buildBadge" class="chip">ps-20251112</span>
+        <button id="btnDiff" class="btn secondary">差分</button>
+        <button id="btnSave" class="btn">保存 (Ctrl+S)</button>
+      </div>
     </header>
 
     <!-- 本文 -->
@@ -106,12 +110,7 @@
             <textarea id="diffRight" readonly></textarea>
           </div>
         </div>
-            <div class="toolbar editor-toolbar">
-        <button id="btnDiff" class="btn ghost">差分</button>
-        <button id="btnSave" class="btn primary">保存 (Ctrl+S)</button>
-        <span id="statusMessage" class="status"></span>
-      </div>
-    </section>
+      </section>
     </main>
   </div>
 
