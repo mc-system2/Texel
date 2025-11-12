@@ -658,27 +658,34 @@ async function onClickAdd(){
     const badge = document.getElementById("buildBadge");
     if (badge) badge.textContent = ver;
   }catch(e){}
+})();
 
-// --- Move existing top Save button into bottom toolbar & remove top '(none)' badge ---
+// --- normalize Save button & toolbar (bottom-left) ---
 window.addEventListener('DOMContentLoaded', ()=>{
   try{
-    const toolbar = document.querySelector('.toolbar');
+    const toolbar = document.querySelector('.toolbar-bottom-left');
     if(toolbar){
-      // 1) move a top save button (text includes '保存') down here if present
-      const topSave = Array.from(document.querySelectorAll('button, .btn'))
-        .find(b => /保存/.test((b.textContent||'').trim()) && !toolbar.contains(b));
-      if(topSave){
-        topSave.id = 'btnSave';
-        toolbar.prepend(topSave);
+      // find all buttons that include '保存'
+      const candidates = Array.from(document.querySelectorAll('button, .btn'))
+        .filter(b => /保存/.test((b.textContent||'').trim()));
+      if(candidates.length){
+        // take the first one as canonical
+        const mainBtn = candidates[0];
+        mainBtn.id = 'btnSave';
+        if(!toolbar.contains(mainBtn)) toolbar.prepend(mainBtn);
+        // remove the rest
+        candidates.slice(1).forEach(b=>{ if(b !== mainBtn) b.remove(); });
+      }else{
+        // if none existed, create one
+        let add = document.createElement('button');
+        add.id='btnSave'; add.className='btn primary';
+        add.textContent='保存（Ctrl+S）';
+        toolbar.prepend(add);
       }
     }
-    // 2) remove a small '(none)' badge near top-right if present
-    const noneChip = Array.from(document.querySelectorAll('button, .chip, .tag, .badge, .pill, .env-badge, .env-chip'))
-      .find(el => (el.textContent||'').trim() === '(none)');
-    if(noneChip && noneChip.parentElement){
-      noneChip.remove();
-    }
-  }catch(e){ /* no-op */ }
+    // kill (none) tag if any
+    const noneChip = Array.from(document.querySelectorAll('button,.chip,.tag,.badge,.pill'))
+      .find(el => (el.textContent||'').trim()==='(none)');
+    if(noneChip) noneChip.remove();
+  }catch(e){/* noop */}
 });
-
-})();
