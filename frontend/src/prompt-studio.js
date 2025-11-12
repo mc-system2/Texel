@@ -1,5 +1,76 @@
 
 /* =====================================================================
+   STRICT EMPTY INIT PATCH
+   - Guarantee: newly created file content is exactly { "prompt": {}, "params": {} }
+   - Overrides any existing creation flows (addNewPrompt/createPromptFile)
+   - After creation, opens the created path
+   ===================================================================== */
+(function(){
+  try {
+    var DEV_BASE = (typeof getFunctionBase === 'function') ? getFunctionBase() :
+      (window.FUNCTION_BASE || "https://func-texel-api-dev-jpe-001-b2f6fec8fzcbdrc3.japaneast-01.azurewebsites.net/api");
+    window.TEXEL_EMPTY_INIT = true;
+
+    async function __strictSaveEmpty(path) {
+      var body = JSON.stringify({ prompt: {}, params: {} });
+      var res = await fetch(DEV_BASE + "/SavePromptText?filename=" + encodeURIComponent(path), {
+        method: "POST",
+        cache: "no-store",
+        headers: { "Content-Type": "application/json", "If-Match": "*" },
+        body
+      });
+      if (!res.ok) throw new Error("Strict empty init save failed: " + res.status);
+      return res.headers.get("ETag") || null;
+    }
+
+    function __resolveClientId() {
+      try {
+        if (window.currentClientId) return String(window.currentClientId).trim();
+        if (typeof window.getCurrentClientId === "function") return String(window.getCurrentClientId()||"").trim();
+      } catch(_e){}
+      return "";
+    }
+
+    async function __strictCreate(displayName) {
+      var clientId = __resolveClientId();
+      if (!clientId) throw new Error("clientId not resolved");
+      var file = "texel-" + Date.now() + ".json";
+      var path = "client/" + clientId + "/" + file;
+      await __strictSaveEmpty(path);
+      if (typeof window.upsertPromptIndex === "function") {
+        try { await window.upsertPromptIndex({ path: path, name: displayName || file, order: Date.now() }); } catch(_e){}
+      }
+      if (typeof window.openPrompt === "function") {
+        try { await window.openPrompt({ path }); } catch(_e){}
+      }
+      return path;
+    }
+
+    // Override multiple likely entry points
+    window.addNewPrompt = __strictCreate;
+    window.createPromptFile = __strictCreate;
+    window.createNewPrompt = __strictCreate;
+
+    // Defensive: intercept any DOM button with [data-action="add-prompt"]
+    try {
+      document.addEventListener("click", function(ev){
+        var t = ev.target;
+        if (!t) return;
+        var el = t.closest("[data-action='add-prompt']");
+        if (el) {
+          ev.preventDefault();
+          __strictCreate(el.getAttribute("data-name") || "");
+        }
+      }, true);
+    } catch(_e){}
+  } catch(e) {
+    console.error("STRICT EMPTY INIT PATCH error:", e);
+  }
+})();
+// ========================= END STRICT EMPTY INIT PATCH =====================
+
+
+/* =====================================================================
    TEXEL Prompt-Studio Patch Block (DEV forced + cache/shape/ETag fixes)
    - Always use DEV endpoint
    - Full-path addressing (client/<ID>/...)
