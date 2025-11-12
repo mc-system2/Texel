@@ -393,7 +393,7 @@ async function tryLoad(filename){
     candidates.push(filename);
   }
   for (const f of candidates){
-    const url = window.apiLoadUrl(f);
+    const url = join(els.apiBase.value, "LoadPromptText") + `?filename=${encodeURIComponent(f)}`;
     const res = await fetch(url, { cache: "no-store" }).catch(()=>null);
     if (!res || !res.ok) continue;
     const etag = res.headers.get("etag") || null;
@@ -641,35 +641,7 @@ async function onClickAdd(){
 
 /* ===== Optional Safe Wrapper (kept for compatibility) ===== */
 (function(){
-
-// --- unified API helpers (global) ---
-window.resolvePath = function(name){
-  try{
-    const clid = (els && els.clientId && els.clientId.value ? els.clientId.value : "").trim().toUpperCase();
-    if (!name) return "";
-    if (String(name).includes("/")) return name;
-    return `client/${clid}/${name}`;
-  }catch(e){
-    return name || "";
-  }
-};
-
-window.apiLoadUrl = function(name){
-  const f = window.resolvePath(name);
-  return join(els.apiBase.value, "LoadPromptText") + `?filename=${encodeURIComponent(f)}`;
-};
-
-window.apiSaveUrl = function(name){
-  const f = window.resolvePath(name);
-  return join(els.apiBase.value, "SavePromptText") + `?filename=${encodeURIComponent(f)}`;
-};
-
-
-
-/${name}`;
-}
-
-function $q(sel){ return document.querySelector(sel); }
+  function $q(sel){ return document.querySelector(sel); }
   function bind(){
     const btn = $q('#btnAdd, [data-role="btn-add"]');
     if (btn) btn.removeEventListener('click', onClickAdd), btn.addEventListener('click', onClickAdd);
@@ -699,7 +671,7 @@ async function openNewlyCreatedWithRetry(filename, tries=6, interval=250){
     const target = `client/${clid}/${filename}`;
     for (let i=0;i<tries;i++){
       try{
-        const url = window.apiLoadUrl(target);
+        const url = join(els.apiBase.value, "LoadPromptText") + `?filename=${encodeURIComponent(target)}`;
         const res = await fetch(url, { cache:"no-store" });
         if (res.ok){
           // 成功したら通常オープンへ
