@@ -26,6 +26,14 @@
   let FUNCTION_BASE = initialFunctionBase;
   let CLIENT_PATH   = initialClientPath;
 
+  function showEnvGuard(){
+    const list = $('#prompt-list');
+    if (list) {
+      list.innerHTML = '<div class="ps-item" style="justify-content:center;gap:8px;background:#fff"><span>右上の <b>FUNCTION_BASE</b> と <b>Client Path</b> を設定し、<b>適用</b>を押してください。</span></div>';
+    }
+    $('#status').textContent = 'FUNCTION_BASE未設定：適用後にインデックスを読み込みます。';
+  }
+
   $('#env-apply').addEventListener('click', ()=>{
     FUNCTION_BASE = envInput.value.trim();
     CLIENT_PATH   = pathInput.value.trim() || 'client/A001/';
@@ -48,7 +56,9 @@
                    console.error(e); }
 
   function apiUrl(path, params){
-    const u = new URL((FUNCTION_BASE || '').replace(/\/+$/,'') + '/' + path.replace(/^\/+/,'') );
+    const base = (FUNCTION_BASE||'').trim();
+    if (!base) { throw new Error('FUNCTION_BASE未設定です（右上で設定→適用）。'); }
+    const u = new URL(base.replace(/\/+$/,'') + '/' + path.replace(/^\/+/,'') );
     if (params && typeof params === 'object') {
       Object.entries(params).forEach(([k,v])=> u.searchParams.set(k, v));
     }
@@ -293,7 +303,11 @@
     $('#status').textContent = '未保存の変更があります…';
   });
 
-  // 初期ロード
-  refreshIndex();
+  // 初期ロード（FUNCTION_BASE未設定なら案内を表示し、設定後に読み込む）
+  if ((FUNCTION_BASE||'').trim()) {
+    refreshIndex();
+  } else {
+    showEnvGuard();
+  }
 
 })();
