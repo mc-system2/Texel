@@ -85,7 +85,7 @@
 
 
 /* ==== 40/60 split layout (left/right) ==== */
-.app-main{ display:flex; }
+.app-main{ display:flex; gap:16px; }
 .ps-side.panel{
   flex: 0 0 40%;
   max-width: 40%;
@@ -112,3 +112,7 @@
 .tab-wrap{ flex:1 1 auto; display:flex; flex-direction:column; min-height: 0; }
 .tab-panel{ flex:1 1 auto; display:flex; }
 #promptEditor{ flex:1 1 auto; width:100%; min-height:280px; resize:vertical; }
+
+
+/* injected gap */
+.app-main{ gap:16px; }
