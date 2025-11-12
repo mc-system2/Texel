@@ -15,9 +15,9 @@ body{margin:0;background:var(--bg);color:var(--text);font:14px/1.6 -apple-system
 .label{opacity:.8}
 .input{border:1px solid var(--line);border-radius:8px;padding:6px 8px;background:#fff}
 .input.sm{height:28px}
-.input.wide{min-width:320px}
+.input.wide{min-width:400px}
 .btn{border:1px solid transparent;border-radius:10px;background:var(--brand-2);color:#fff;padding:8px 14px;cursor:pointer}
-.btn.tiny{padding:6px 10px;border-radius:8px;background:#fff;color:#223;border:1px solid var(--line)}
+.btn.tiny{padding:6px 10px;border-radius:8px;background:var(--brand-2);color:#fff;border:1px solid var(--line)}
 .chip{display:inline-block;padding:4px 10px;border-radius:999px;background:#eef2ff;color:#334}
 
 /* ====== Main two-pane layout (LEFT 40% / RIGHT 60%) ====== */
