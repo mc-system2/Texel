@@ -658,4 +658,27 @@ async function onClickAdd(){
     const badge = document.getElementById("buildBadge");
     if (badge) badge.textContent = ver;
   }catch(e){}
+
+// --- Move existing top Save button into bottom toolbar & remove top '(none)' badge ---
+window.addEventListener('DOMContentLoaded', ()=>{
+  try{
+    const toolbar = document.querySelector('.toolbar');
+    if(toolbar){
+      // 1) move a top save button (text includes '保存') down here if present
+      const topSave = Array.from(document.querySelectorAll('button, .btn'))
+        .find(b => /保存/.test((b.textContent||'').trim()) && !toolbar.contains(b));
+      if(topSave){
+        topSave.id = 'btnSave';
+        toolbar.prepend(topSave);
+      }
+    }
+    // 2) remove a small '(none)' badge near top-right if present
+    const noneChip = Array.from(document.querySelectorAll('button, .chip, .tag, .badge, .pill, .env-badge, .env-chip'))
+      .find(el => (el.textContent||'').trim() === '(none)');
+    if(noneChip && noneChip.parentElement){
+      noneChip.remove();
+    }
+  }catch(e){ /* no-op */ }
+});
+
 })();

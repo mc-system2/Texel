@@ -58,3 +58,9 @@ body{margin:0;background:var(--bg);color:var(--text);font:14px/1.6 -apple-system
   .ps-side.panel{flex-basis:45%;max-width:45%}
   .ps-editor.panel{flex-basis:55%}
 }
+
+/* toolbar tweaks */
+.panel{display:flex;flex-direction:column}
+.toolbar{margin-top:auto;display:flex;justify-content:flex-start;gap:8px}
+/* hide possible top-right (none) env badge if exists */
+.env-badge, .env-chip, .header-env, .top-right .env, .topbar .env, .envIndicator{display:none!important}
