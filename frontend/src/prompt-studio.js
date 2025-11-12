@@ -372,9 +372,12 @@ window.addEventListener("beforeunload", (e)=>{ if (!dirty) return; e.preventDefa
 
 /* ---------- File List ---------- */
 function templateFromFilename(filename, behavior){
-  if (behavior === "TYPE-R") return filename.replace(/^texel-/, "texel-r-");
-  if (behavior === "TYPE-S") return filename.replace(/^texel-/, "texel-s-");
-  return filename;
+  // 正規化：既に r-/s- で始まっていたら一度 texel- に戻す
+  const normalized = (filename || "").replace(/^texel-(r-|s-)/, 'texel-');
+  const beh = (behavior || '').toUpperCase();
+  if (beh === "TYPE-R") return normalized.replace(/^texel-/, "texel-r-");
+  if (beh === "TYPE-S") return normalized.replace(/^texel-/, "texel-s-");
+  return normalized;
 }
 
 async function tryLoad(filename){
@@ -628,7 +631,7 @@ async function onClickAdd(){
     await addIndexItemRaw(file, dname);
     await reloadIndex();
     await renderFileList();
-    await openByFilename(file);
+    await openNewlyCreatedWithRetry(file, 6, 250);
     setStatus("新しいプロンプトを追加しました。","green");
   }catch(e){
     alert("追加に失敗: " + (e?.message || e));
@@ -659,3 +662,31 @@ async function onClickAdd(){
     if (badge) badge.textContent = ver;
   }catch(e){}
 })();
+
+async function sleep(ms){ return new Promise(r=>setTimeout(r, ms)); }
+
+async function openNewlyCreatedWithRetry(filename, tries=6, interval=250){
+  try{
+    const clid = (els && els.clientId && els.clientId.value ? els.clientId.value : "").trim().toUpperCase();
+    const target = `client/${clid}/${filename}`;
+    for (let i=0;i<tries;i++){
+      try{
+        const url = join(els.apiBase.value, "LoadPromptText") + `?filename=${encodeURIComponent(target)}`;
+        const res = await fetch(url, { cache:"no-store" });
+        if (res.ok){
+          // 成功したら通常オープンへ
+          await openByFilename(filename);
+          return true;
+        }
+      }catch(e){}
+      await sleep(interval);
+    }
+    // 取得できなくても最後に開く（テンプレになる可能性はあるが UI は継続）
+    await openByFilename(filename);
+    return false;
+  }catch(e){
+    try{ await openByFilename(filename); }catch(_){}
+    return false;
+  }
+}
+
