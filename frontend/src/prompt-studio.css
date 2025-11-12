@@ -58,3 +58,15 @@ body{margin:0;background:var(--bg);color:var(--text);font:14px/1.6 -apple-system
   .ps-side.panel{flex-basis:45%;max-width:45%}
   .ps-editor.panel{flex-basis:55%}
 }
+
+/* --- hide State & ETag badges and their labels --- */
+#badgeState,
+#badgeEtag{
+  display: none !important;
+}
+
+/* hide the label spans ("状態:", "ETag:") that sit immediately before the chips */
+.bar.meta span:has(+ #badgeState),
+.bar.meta span:has(+ #badgeEtag){
+  display: none !important;
+}
