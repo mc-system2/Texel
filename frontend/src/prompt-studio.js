@@ -95,30 +95,6 @@ function patchPromptDoc(existing, newPrompt, newParams){
   out.params = newParams || {};
   return out;
 }
-  // copy to avoid mutating the reference from cache
-  const out = JSON.parse(JSON.stringify(existing));
-
-  if (typeof out.prompt === "string"){
-    out.prompt = newPrompt;
-    out.params = newParams || {};
-    return out;
-  }
-  if (out.prompt && typeof out.prompt.prompt === "string"){
-    // keep nested shape
-    out.prompt.prompt = newPrompt;
-    out.prompt.params = newParams || {};
-    // do not touch top-level params if any（混在を避けるため空にしておく）
-    if ("params" in out && out.params && Object.keys(out.params).length){
-      // keep it but do not overwrite
-    }
-    return out;
-  }
-  // unknown structure: fallback to the minimal flat shape but preserve unknown keys
-  out.prompt = newPrompt;
-  out.params = newParams || {};
-  return out;
-}
-
 /* ---------- API wrappers ---------- */
 async function apiLoadText(filename){
   // Try GET first (cache disabled)
