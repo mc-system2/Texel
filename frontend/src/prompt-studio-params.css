@@ -1,21 +1,107 @@
-/* ===== Prompt Studio: Params full-width redesign ===== */
-#paramsTab{padding:8px 12px}
-.param-list.param-grid{display:grid;grid-template-columns:1fr;gap:14px}
+/* PromptStudio params full-width redesign (2025-11-12) */
+#paramsTab { padding: 8px 12px; }
 
-.slider-group{
-  display:grid;
-  grid-template-columns:minmax(220px,360px) 1fr max(56px,8ch);
-  align-items:center;gap:16px;
-  background:#fff;border:1px solid var(--line);border-radius:10px;padding:12px 14px;
+.params-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 14px;
 }
-.slider-group .slider-label{font-size:14px;color:var(--text);line-height:1.3}
-.slider-group input[type="range"]{width:100%;accent-color:var(--brand);height:8px}
-.slider-group .slider-value{ text-align:right;font-variant-numeric:tabular-nums;font-weight:600;color:var(--muted) }
 
-@media (max-width:880px){
-  .slider-group{ grid-template-columns:1fr max(56px,8ch);
-    grid-template-areas:"label value" "slider slider"; }
-  .slider-group .slider-label{ grid-area:label }
-  .slider-group input[type="range"]{ grid-area:slider }
-  .slider-group .slider-value{ grid-area:value; text-align:right }
+/* Each row = label | slider | value (right) */
+.param-item {
+  display: grid;
+  grid-template-columns: minmax(220px, 360px) 1fr max(56px, 8ch);
+  align-items: center;
+  gap: 16px;
+  background: var(--panel, #fff);
+  border: 1px solid var(--line, #e6e9ef);
+  border-radius: 10px;
+  padding: 12px 14px;
+}
+
+/* Make slider take all remaining width */
+.param-item input[type="range"] {
+  width: 100%;
+  accent-color: var(--brand, #0aa0a6);
+  height: 8px;
+}
+
+/* Value bubble (right) */
+.param-val {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  color: var(--muted, #7a8599);
+}
+
+/* Label */
+.param-item label {
+  font-size: 14px;
+  color: var(--text, #223);
+  line-height: 1.3;
+}
+
+/* Narrow screens: stack label on first row, slider full width on second */
+@media (max-width: 880px){
+  .param-item {
+    grid-template-columns: 1fr max(56px, 8ch);
+    grid-template-areas:
+      "label value"
+      "slider slider";
+  }
+  .param-item label      { grid-area: label; }
+  .param-item input[type="range"] { grid-area: slider; }
+  .param-item .param-val { grid-area: value; text-align: right; }
+}
+
+
+/* ==== Compatibility: apply full-width design to current HTML ==== */
+#paramsTab { padding: 8px 12px; }
+
+/* grid container (current HTML uses .param-list.param-grid) */
+.param-list.param-grid{
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 14px;
+}
+
+/* each slider group (current HTML uses .slider-group) */
+.slider-group{
+  display: grid;
+  grid-template-columns: minmax(220px, 360px) 1fr max(56px, 8ch);
+  align-items: center;
+  gap: 16px;
+  background: var(--panel, #fff);
+  border: 1px solid var(--line, #e6e9ef);
+  border-radius: 10px;
+  padding: 12px 14px;
+}
+.slider-group .slider-label{
+  font-size: 14px;
+  color: var(--text, #223);
+  line-height: 1.3;
+}
+.slider-group input[type="range"]{
+  width: 100%;
+  accent-color: var(--brand, #0aa0a6);
+  height: 8px;
+}
+.slider-group .slider-value{
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  color: var(--muted, #7a8599);
+}
+
+/* responsive stacking */
+@media (max-width: 880px){
+  .slider-group{
+    grid-template-columns: 1fr max(56px, 8ch);
+    grid-template-areas:
+      "label value"
+      "slider slider";
+  }
+  .slider-group .slider-label{ grid-area: label; }
+  .slider-group input[type="range"]{ grid-area: slider; }
+  .slider-group .slider-value{ grid-area: value; text-align: right; }
 }
