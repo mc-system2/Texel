@@ -659,3 +659,57 @@ async function onClickAdd(){
     if (badge) badge.textContent = ver;
   }catch(e){}
 })();
+
+/* ===== Filelist DOM normalizer (non-destructive) ===== */
+(function(){
+  function normalizeFileListDom(){
+    var list = document.getElementById('fileList');
+    if(!list) return;
+    Array.from(list.children).forEach(function(row){
+      if(!row || row.classList && row.classList.contains('fileitem')) return;
+      // Skip if this is a section header
+      if(row.classList && row.classList.contains('section')) return;
+
+      // Try to find name & action buttons
+      var renameBtn = row.querySelector('[data-role="rename"], .rename, button.ren');
+      var deleteBtn = row.querySelector('[data-role="delete"], .delete, button.del');
+      var moveBtn   = row.querySelector('[data-role="move"], .move');
+      // Name fallback: longest text node in row
+      var nameText = '';
+      var walker = document.createTreeWalker(row, NodeFilter.SHOW_TEXT, null);
+      var t; while((t=walker.nextNode())){
+        var s=(t.textContent||'').trim();
+        if(s && s.length>nameText.length) nameText=s;
+      }
+
+      var wrap = document.createElement('div'); wrap.className='fileitem';
+      var drag = document.createElement('div'); drag.className='drag'; drag.textContent='≡';
+      if(moveBtn){ moveBtn.classList.add('hidden-original-move'); }
+
+      var name = document.createElement('div'); name.className='name'; name.textContent = nameText || (row.getAttribute('data-name')||'（名称未設定）');
+
+      var meta = document.createElement('div'); meta.className='meta';
+      if(renameBtn) meta.appendChild(renameBtn);
+      if(deleteBtn) meta.appendChild(deleteBtn);
+
+      // Replace original node
+      row.replaceWith(wrap);
+      wrap.appendChild(drag);
+      wrap.appendChild(name);
+      wrap.appendChild(meta);
+    });
+  }
+
+  function scheduleNormalize(){
+    // Allow current call stack to finish updates
+    setTimeout(normalizeFileListDom, 0);
+  }
+
+  document.addEventListener('DOMContentLoaded', function(){
+    scheduleNormalize();
+    var list = document.getElementById('fileList');
+    if(!list) return;
+    var mo = new MutationObserver(function(m){ scheduleNormalize(); });
+    mo.observe(list, {childList:true});
+  });
+})();

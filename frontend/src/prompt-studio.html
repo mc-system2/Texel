@@ -6,8 +6,10 @@
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <!-- Prompt-editor と同一デザイン（コピー済み） -->
   <link rel="stylesheet" href="./prompt-studio.css" />
-  <!-- パラメータのフル幅スライダー補助スタイル -->
   <link rel="stylesheet" href="./prompt-studio-params.css" />
+  <link rel="stylesheet" href="./prompt-studio-filelist.css" />
+  <!-- パラメータのフル幅スライダー補助スタイル -->
+  
 </head>
 <body>
   <div class="app">
@@ -24,11 +26,7 @@
         <label class="label">API Base</label>
         <input id="apiBase" class="input sm wide" placeholder="https://.../api" autocomplete="off" />
       </div>
-      <div class="right">
-        <span id="buildBadge" class="chip">ps-20251112</span>
-        <button id="btnDiff" class="btn secondary">差分</button>
-        <button id="btnSave" class="btn">保存 (Ctrl+S)</button>
-      </div>
+      <div class="right"><span id="buildBadge" class="chip">ps-20251112</span></div>
     </header>
 
     <!-- 本文 -->
@@ -110,7 +108,12 @@
             <textarea id="diffRight" readonly></textarea>
           </div>
         </div>
-      </section>
+            <div class="toolbar editor-toolbar">
+        <button id="btnDiff" class="btn ghost">差分</button>
+        <button id="btnSave" class="btn primary">保存 (Ctrl+S)</button>
+        <span id="statusMessage" class="status"></span>
+      </div>
+    </section>
     </main>
   </div>
 
