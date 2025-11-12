@@ -659,33 +659,3 @@ async function onClickAdd(){
     if (badge) badge.textContent = ver;
   }catch(e){}
 })();
-
-// --- normalize Save button & toolbar (bottom-left) ---
-window.addEventListener('DOMContentLoaded', ()=>{
-  try{
-    const toolbar = document.querySelector('.toolbar-bottom-left');
-    if(toolbar){
-      // find all buttons that include '保存'
-      const candidates = Array.from(document.querySelectorAll('button, .btn'))
-        .filter(b => /保存/.test((b.textContent||'').trim()));
-      if(candidates.length){
-        // take the first one as canonical
-        const mainBtn = candidates[0];
-        mainBtn.id = 'btnSave';
-        if(!toolbar.contains(mainBtn)) toolbar.prepend(mainBtn);
-        // remove the rest
-        candidates.slice(1).forEach(b=>{ if(b !== mainBtn) b.remove(); });
-      }else{
-        // if none existed, create one
-        let add = document.createElement('button');
-        add.id='btnSave'; add.className='btn primary';
-        add.textContent='保存（Ctrl+S）';
-        toolbar.prepend(add);
-      }
-    }
-    // kill (none) tag if any
-    const noneChip = Array.from(document.querySelectorAll('button,.chip,.tag,.badge,.pill'))
-      .find(el => (el.textContent||'').trim()==='(none)');
-    if(noneChip) noneChip.remove();
-  }catch(e){/* noop */}
-});
