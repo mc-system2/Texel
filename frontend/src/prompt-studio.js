@@ -80,14 +80,21 @@ function normalizePromptDoc(doc){
     params = doc.params || {};
     shape = "flat";
   }
+  if (!params || typeof params !== 'object' || Array.isArray(params)) params = {};
   return { prompt, params, shape };
 }
 
+
 function patchPromptDoc(existing, newPrompt, newParams){
-  // Update only the fields, preserving original shape and unknown keys.
-  if (!existing || typeof existing !== "object"){
-    return { prompt: newPrompt, params: newParams || {} };
+  // Always output flat shape while preserving unknown top-level keys.
+  const out = {};
+  if (existing && typeof existing === "object"){
+    Object.keys(existing).forEach(k=>{ if (k!=="prompt" && k!=="params") out[k]=existing[k]; });
   }
+  out.prompt = newPrompt;
+  out.params = newParams || {};
+  return out;
+}
   // copy to avoid mutating the reference from cache
   const out = JSON.parse(JSON.stringify(existing));
 
