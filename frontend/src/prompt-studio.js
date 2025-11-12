@@ -80,19 +80,60 @@ function normalizePromptDoc(doc){
     params = doc.params || {};
     shape = "flat";
   }
-  if (!params || typeof params !== 'object' || Array.isArray(params)) params = {};
   return { prompt, params, shape };
 }
 
-
 function patchPromptDoc(existing, newPrompt, newParams){
-  // Always output flat shape while preserving unknown top-level keys.
-  const out = {};
-  if (existing && typeof existing === "object"){
-    Object.keys(existing).forEach(k=>{ if (k!=="prompt" && k!=="params") out[k]=existing[k]; });
+  // Update only the fields, preserving original shape and unknown keys.
+  if (!existing || typeof existing !== "object"){
+    return { prompt: newPrompt, params: newParams || {} };
   }
+  // copy to avoid mutating the reference from cache
+  const out = JSON.parse(JSON.stringify(existing));
+
+  if (typeof out.prompt === "string"){
+    out.prompt = newPrompt;
+    out.params = newParams || {};
+    return out;
+  }
+  if (out.prompt && typeof out.prompt.prompt === "string"){
+    // keep nested shape
+    out.prompt.prompt = newPrompt;
+    out.prompt.params = newParams || {};
+    // do not touch top-level params if any（混在を避けるため空にしておく）
+    if ("params" in out && out.params && Object.keys(out.params).length){
+      // keep it but do not overwrite
+    }
+    return out;
+  }
+  // unknown structure: fallback to the minimal flat shape but preserve unknown keys
   out.prompt = newPrompt;
   out.params = newParams || {};
+  return out;
+}
+
+
+/* ---------- Save-time normalizer (last-mile) ---------- */
+function toFlat(doc){
+  const out = {};
+  if (doc && typeof doc === "object"){
+    for (const k in doc){ if (k!=="prompt" && k!=="params") out[k] = doc[k]; }
+  }
+  if (doc && typeof doc === "object" && doc.prompt && typeof doc.prompt === "object" && ('prompt' in doc.prompt)){
+    out.prompt = doc.prompt.prompt ?? "";
+    const p1 = (doc.prompt.params && typeof doc.prompt.params === "object" && !Array.isArray(doc.prompt.params)) ? doc.prompt.params : {};
+    const p2 = (doc.params && typeof doc.params === "object" && !Array.isArray(doc.params)) ? doc.params : {};
+    out.params = Object.keys(p1).length ? p1 : p2;
+    if (!out.params) out.params = {};
+    return out;
+  }
+  if (doc && typeof doc === "object"){
+    out.prompt = (doc.prompt !== undefined) ? doc.prompt : "";
+    out.params = (doc.params && typeof doc.params === "object" && !Array.isArray(doc.params)) ? doc.params : {};
+    return out;
+  }
+  out.prompt = (doc==null) ? "" : String(doc);
+  out.params = {};
   return out;
 }
 /* ---------- API wrappers ---------- */
@@ -120,7 +161,8 @@ async function apiLoadText(filename){
   return null;
 }
 async function apiSaveText(filename, payload, etag){
-  const body = { filename, prompt: typeof payload==="string"? payload : JSON.stringify(payload,null,2) };
+  const flat = (typeof payload === "string") ? (()=>{ try{ return toFlat(JSON.parse(payload)); }catch{ return toFlat({prompt:String(payload), params:{}}); } })() : toFlat(payload);
+  const body = { filename, prompt: JSON.stringify(flat, null, 2) };
   if (etag) body.etag = etag;
 
   for (const fn of SAVE_CANDIDATES){
@@ -563,8 +605,9 @@ async function saveCurrent(){
 
     // If nothing exists yet, still respect the last loaded shape (flat default)
     const payload = patchPromptDoc(baseDoc, newPrompt, newParams);
+    const payloadFlat = toFlat(payload);
 
-    const res = await apiSaveText(filename, payload, currentEtag || undefined);
+    const res = await apiSaveText(filename, payloadFlat, currentEtag || undefined);
     currentEtag = res?.etag || currentEtag || null;
     setBadges("Overridden", currentEtag, "ok");
     setStatus("保存完了","green");
