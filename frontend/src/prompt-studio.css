@@ -101,3 +101,13 @@
 }
 .btn.primary{ background:var(--brand-2,#0b6cf2); color:#fff; }
 .btn.ghost{ background:transparent; border:1px solid var(--line,#e6e9ef); }
+
+
+/* ==== layout tweaks (narrower gaps, tighter sidebar) ==== */
+.app-main{ gap:8px; }
+.ps-side.panel{ flex:0 0 300px; min-width:280px; }
+.ps-side.panel .side-actions{ padding: 6px 8px; }
+.ps-side.panel .tips{ padding: 6px 10px; }
+
+/* panel padding unify */
+.panel{ padding: 10px 12px; }
