@@ -128,7 +128,7 @@
       if (!clientId) throw new Error("clientId not resolved");
       var file = "texel-" + Date.now() + ".json";
       var path = "client/" + clientId + "/" + file;
-      var initial = { prompt: { prompt: "", params: {} }, params: {} };
+      var initial = { prompt: {}, params: {} };
       await savePromptText(path, initial, null);
       // index upsert (project-specific hook)
       if (typeof window.upsertPromptIndex === 'function') {
@@ -149,7 +149,7 @@
         var params = {};
         var pa = document.querySelector('#prompt-params');
         if (pa) { try { params = JSON.parse(pa.value || "{}"); } catch(_e) { params = {}; } }
-        return { prompt: { prompt: txt, params: params }, params: {} };
+        return { prompt: (txt || Object.keys(params||{}).length ? { prompt: txt, params: params } : {}), params: {} };
       };
       var doc = normalizeDoc(getDoc());
       var etag = window.editorState.lastKnownETag || null;
