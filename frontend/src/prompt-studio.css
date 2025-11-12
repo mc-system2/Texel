@@ -52,3 +52,47 @@ input[type=range]{width:100%;}
 .btn{background:#0AA0A6; color:#fff; border:none; border-radius:10px; padding:8px 14px; cursor:pointer; font-weight:700;}
 .btn.ghost{background:#fff; color:#0d2330; border:1px solid var(--line);}
 .status{margin-left:8px; color:#0AA0A6; min-height:1.3em;}
+
+
+/* ==== Two-column layout (restore original left/right) ==== */
+.app-main{
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;           /* side-by-side */
+  gap: 12px;
+  align-items: stretch;
+  padding: 0 16px 16px;
+}
+
+/* Left: sidebar (fixed width) */
+.ps-side.panel{
+  flex: 0 0 320px;         /* fixed column */
+  min-width: 280px;
+  max-width: 420px;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Right: editor (flexible) */
+.ps-editor.panel{
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* Make the file list fill the sidebar and scroll independently */
+.ps-side .filelist{
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+}
+
+/* Keep the meta bar compact above the tabs */
+.ps-editor .bar.meta{
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  align-items: center;
+  font-size: 12px;
+  color: #456;
+}
+.ps-editor .filename{ font-weight: 700; }
