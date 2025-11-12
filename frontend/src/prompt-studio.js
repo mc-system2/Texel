@@ -516,15 +516,44 @@ async function renderFileList(){
           }
         }
       });
+      
       li.querySelector(".delete")?.addEventListener("click", async (e)=>{
         e.preventDefault(); e.stopPropagation();
-        if (!confirm(`「${name}」を一覧から削除します。ファイル自体は削除されません。よろしいですか？`)) return;
-        await deleteIndexItem(it.file);
-        await reloadIndex();
-        await renderFileList();
+        const clid = (els.clientId?.value||"").trim().toUpperCase();
+        const filePath = `client/${clid}/${it.file}`;
+
+        if (!confirm(`「${name}」を削除します。BLOB本体も削除されます。よろしいですか？`)) return;
+
+        try{
+          setStatus('サーバから削除中…','orange');
+          const del = await apiDeletePromptBlob(filePath, it.etag);
+          if (!del.ok){
+            if (del.status === 412){
+              alert("削除できません（ETag不一致）。一度再読み込み後に再実行してください。");
+              setStatus('削除中断（ETag不一致）','red');
+              return;
+            }
+            alert(`削除に失敗しました（${del.status||'unknown'}）。${del.detail||''}`);
+            setStatus('削除失敗','red');
+            return;
+          }
+          setStatus('BLOB削除成功。インデックス更新中…','green');
+          await deleteIndexItem(it.file);   // 従来のインデックス削除
+          await reloadIndex();
+          await renderFileList();
+          setStatus('削除しました。','green');
+          // 編集中のファイルだったらエディタをクリア
+          if (window.currentFilename === it.file && typeof clearEditor === 'function'){
+            clearEditor();
+          }
+        }catch(err){
+          console.error(err);
+          setStatus('削除中にエラー: ' + (err?.message||err),'red');
+        }
       });
     }
   }
+}
 }
 
 function getDragAfterElement(container, y){
@@ -685,3 +714,85 @@ async function onClickAdd(){
     if (badge) badge.textContent = ver;
   }catch(e){}
 })();
+
+/* =============================================================
+ * Delete via API then update index (Texel 2025-11)
+ * ============================================================= */
+(function(){
+  try{
+    // fallbacks
+    const log = (...a)=>{ try{ console.log("[PromptStudio:delete]", ...a);}catch{}};
+    const $ = (s,r)=> (r||document).querySelector(s);
+    const $$ = (s,r)=> Array.from((r||document).querySelectorAll(s));
+
+    async function apiDeletePromptBlob(blobPath, etag){
+      if (!window.FUNCTION_BASE) throw new Error("FUNCTION_BASE is not defined");
+      const url = `${window.FUNCTION_BASE}/DeletePromptText`;
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path: blobPath, ifMatch: etag || "*" })
+      });
+      if (res.status === 204 || res.status === 200) return { ok:true };
+      let detail = "";
+      try{ detail = await res.text(); }catch{}
+      return { ok:false, status:res.status, detail };
+    }
+
+    async function handleDeletePrompt(item){
+      if (!item || !item.path) return;
+      const nm = item.name || item.path;
+      if (!confirm(`「${nm}」を削除します。よろしいですか？\n（BLOB本体も削除されます）`)) return;
+
+      const del = await apiDeletePromptBlob(item.path, item.etag);
+      if (!del.ok){
+        if (del.status === 412) { alert("削除できません（ETag不一致）。最新の状態を読み直してから再実行してください。"); return; }
+        if (del.status && del.status !== 404){ alert(`削除中にエラー（${del.status}）。${del.detail||""}`); return; }
+      }
+      // Index 更新（関数があれば実行）
+      try{
+        if (typeof removeEntryFromIndexAndSave === "function"){
+          await removeEntryFromIndexAndSave(item.path);
+        }else{
+          // emit event as fallback; actual removal can be handled elsewhere
+          document.dispatchEvent(new CustomEvent("prompt:index-remove", { detail:{ path:item.path } }));
+        }
+      }catch(e){ log("index update error", e); }
+
+      // UI removal
+      try{
+        if (typeof removePromptFromListUI === "function"){
+          removePromptFromListUI(item.path);
+        }else{
+          const row = document.querySelector(`[data-path="${CSS.escape(item.path)}"]`);
+          if (row) row.remove();
+        }
+        if (window.currentEditing && window.currentEditing.path === item.path && typeof clearEditor === "function"){
+          clearEditor();
+        }
+      }catch(e){ log("ui update error", e); }
+
+      try{ if (typeof toast === "function") toast("削除しました"); }catch{}
+    }
+
+    // グローバルに公開（既存コードから呼べるように）
+    window.handleDeletePrompt = handleDeletePrompt;
+
+    // デリゲーション（btnに data-action="delete-prompt" を付ける or .prompt-trash / .btn-trash クラス）
+    document.addEventListener("click", (ev)=>{
+      const el = ev.target.closest('[data-action="delete-prompt"], .prompt-trash, .btn-trash');
+      if (!el) return;
+      ev.preventDefault(); ev.stopPropagation();
+      // 情報は要素か親行に data-* で持たせる想定
+      const holder = el.closest("[data-path]") || el;
+      const item = {
+        path: holder.dataset.path || el.dataset.path,
+        name: holder.dataset.name || el.dataset.name,
+        etag: holder.dataset.etag || el.dataset.etag
+      };
+      if (item.path) handleDeletePrompt(item);
+    });
+
+  }catch(e){ console.error(e); }
+})();
+
