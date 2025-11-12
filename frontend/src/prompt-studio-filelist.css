@@ -1,84 +1,51 @@
-/* Prompt Studio – file list restoration (2025-11-12) */
 
-/* container */
+/* ==== File list restore (strong overrides) ==== */
 .filelist{
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 6px 0 10px;
+  display:flex;
+  flex-direction:column;
+  gap:8px;
+  padding:6px 0 10px;
 }
-
-/* each row */
 .fileitem{
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  background: var(--panel, #fff);
-  border: 1px solid var(--line, #e6e9ef);
-  border-radius: 10px;
-  padding: 8px 10px;
-  transition: background .15s, border-color .15s;
+  display:flex !important;
+  align-items:center !important;
+  gap:10px !important;
+  background:var(--panel,#fff);
+  border:1px solid var(--line,#e6e9ef);
+  border-radius:12px;
+  padding:8px 10px;
 }
-.fileitem:hover{ background: rgba(11,108,242,.05); }
-.fileitem.active{ border-color: var(--brand-2, #0b6cf2); box-shadow: 0 0 0 2px rgba(11,108,242,.1) inset; }
-
-/* drag handle */
 .fileitem .drag{
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
-  color: var(--muted, #7a8599);
-  cursor: grab;
-  user-select: none;
-  padding: 0 2px;
+  color:var(--muted,#7a8599);
+  cursor:grab;
+  user-select:none;
+  padding:0 2px;
 }
-.fileitem.dragging{ opacity: .6; }
-
-/* name */
 .fileitem .name{
-  flex: 1 1 auto;
-  min-width: 0;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  color: var(--text, #223);
+  flex:1 1 auto;
+  min-width:0;
+  white-space:nowrap;
+  overflow:hidden;
+  text-overflow:ellipsis;
 }
-.fileitem .name .lock{ margin-right: 6px; color: var(--muted, #7a8599); }
-.fileitem.locked{ opacity: .75; }
-.fileitem.locked .drag{ cursor: default; color: #c4c9d4; }
-
-/* actions (rename/delete) */
 .fileitem .meta{
-  display: flex;
-  align-items: center;
-  gap: 6px;
+  margin-left:auto;
+  display:flex !important;
+  align-items:center !important;
+  gap:6px !important;
 }
-.fileitem .meta .rename,
-.fileitem .meta .delete{
-  width: 28px;
-  height: 28px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border: 1px solid var(--line, #e6e9ef);
-  border-radius: 8px;
-  background: #fff;
-  cursor: pointer;
-  font-size: 14px;
-  line-height: 1;
-  color: var(--text, #223);
+.fileitem .meta button,
+.fileitem button{
+  display:inline-flex !important;
+  align-items:center;
+  justify-content:center;
+  width:28px; height:28px;
+  border:1px solid var(--line,#e6e9ef);
+  border-radius:8px;
+  background:#fff;
+  padding:0;
 }
-.fileitem .meta .rename:hover,
-.fileitem .meta .delete:hover{
-  border-color: var(--brand, #0aa0a6);
-  box-shadow: 0 0 0 2px rgba(10,160,166,.12);
-}
-.fileitem .meta .rename:active,
-.fileitem .meta .delete:active{
-  transform: translateY(1px);
-}
-
-/* compact mode on narrow screens */
-@media (max-width: 680px){
-  .fileitem{ padding: 8px; gap: 8px; }
-  .fileitem .meta{ gap: 4px; }
-  .fileitem .meta .rename, .fileitem .meta .delete{ width: 26px; height: 26px; }
+.fileitem .meta button:hover{
+  border-color:var(--brand,#0aa0a6);
+  box-shadow:0 0 0 2px rgba(10,160,166,.12);
 }
