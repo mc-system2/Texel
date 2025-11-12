@@ -1,95 +1,95 @@
 
-/* ==== Prompt Studio: LEFT FILE LIST (final tuning) ==== */
+/* ===== Prompt Studio: Sidebar list goal style (2025-11-12c) ===== */
 
-/* container */
+/* Container spacing like the goal screenshot */
 .ps-side .filelist{
   display:flex;
   flex-direction:column;
-  gap:8px;
-  padding:4px 6px 12px;
+  gap:12px;
+  padding:8px 10px 14px;
 }
 
-/* row: drag | name | actions */
+/* Section header pill (e.g., 画像分析プロンプト) */
+.ps-side .filelist .section{
+  display:flex; align-items:center; gap:10px;
+  padding:12px 14px;
+  background:#ffffff;
+  border:1px solid var(--line,#e6e9ef);
+  border-radius:16px;
+  font-weight:800;
+  color:#1f2a44;
+  box-shadow: 0 1px 0 rgba(0,0,0,.02);
+}
+
+/* Row card — drag | name | actions */
 .ps-side .fileitem{
   display:grid !important;
-  grid-template-columns: 16px 1fr auto;
+  grid-template-columns: 18px 1fr auto;
   align-items:center;
-  gap:10px;
-  background:#fff;
+  gap:12px;
+  background:#ffffff;
   border:1px solid var(--line,#e6e9ef);
-  border-radius:12px;
-  padding:8px 10px;
-  min-height:40px;
+  border-radius:16px;
+  padding:12px 14px;
+  min-height:48px;
   box-shadow: 0 1px 0 rgba(0,0,0,.02);
+  transition: background .12s, border-color .12s, box-shadow .12s;
+}
+.ps-side .fileitem:hover{
+  background:#fbfdff;
+  border-color:#dfe6f3;
 }
 .ps-side .fileitem.active{
   border-color: var(--brand-2,#0b6cf2);
-  box-shadow: 0 0 0 2px rgba(11,108,242,.08) inset;
+  box-shadow: 0 0 0 2px rgba(11,108,242,.10) inset;
 }
 
-/* drag handle */
+/* Drag handle */
 .ps-side .fileitem .drag{
   text-align:center;
-  line-height:1;
-  color:var(--muted,#7a8599);
+  color:#8a95a7;
   cursor:grab;
   user-select:none;
-  width:16px;
+  width:18px;
 }
 
-/* name */
+/* Name */
 .ps-side .fileitem .name{
   min-width:0;
   white-space:nowrap;
   overflow:hidden;
   text-overflow:ellipsis;
-  font-size:14px;
+  font-size:16px;
   font-weight:700;
-  color:var(--text,#223);
-  display:flex;
-  align-items:center;
-  gap:8px;
+  color:#1f2a44;
+  display:flex; align-items:center; gap:10px;
 }
-.ps-side .fileitem .name .lock{ color:#caa03e; } /* 🔒色味調整 */
 
-/* actions */
+/* Actions (✎ / 🗑) as soft rounded buttons */
 .ps-side .fileitem .meta{
-  display:flex !important;
-  align-items:center !important;
-  gap:8px;
+  display:flex !important; align-items:center !important; gap:10px;
 }
 .ps-side .fileitem .meta button{
-  width:26px; height:26px;
+  width:36px; height:36px;
   display:inline-flex !important;
   align-items:center; justify-content:center;
   padding:0;
-  border:1px solid var(--line,#e6e9ef);
-  border-radius:8px;
-  background:#f6f8ff;
+  border:0;
+  border-radius:12px;
+  background:#eef2ff;
   color:#2f3d55;
+  box-shadow: 0 1px 0 rgba(0,0,0,.03), 0 0 0 1px rgba(0,0,0,.04) inset;
   cursor:pointer;
 }
+.ps-side .fileitem .meta .delete{ background:#f9fbff; }
 .ps-side .fileitem .meta button:hover{
-  border-color: var(--brand,#0aa0a6);
-  box-shadow: 0 0 0 2px rgba(10,160,166,.12);
-}
-.ps-side .fileitem .meta .delete{ background:#fff; }
-
-/* spacing for section headers in list (like '画像分析プロンプト') */
-.ps-side .filelist .section{
-  margin:6px 2px 2px;
-  padding:8px 10px;
-  border-radius:12px;
-  background:#f7f9ff;
-  border:1px dashed var(--line,#e6e9ef);
-  color:#1a2a4a;
-  font-weight:700;
-  display:flex; align-items:center; gap:8px;
+  box-shadow: 0 0 0 2px rgba(11,108,242,.18) inset;
 }
 
-/* compact on very narrow widths */
+/* Tighter layout for narrower screens */
 @media (max-width: 1180px){
-  .ps-side.panel{ flex-basis: 280px; }
-  .ps-side .fileitem{ padding:8px; gap:8px; }
-  .ps-side .fileitem .meta button{ width:24px; height:24px; }
+  .ps-side.panel{ flex-basis: 300px; }
+  .ps-side .fileitem{ padding:10px 12px; min-height:44px; }
+  .ps-side .fileitem .meta button{ width:32px; height:32px; border-radius:10px; }
+  .ps-side .fileitem .name{ font-size:15px; }
 }
