@@ -1,3 +1,172 @@
+
+/* =====================================================================
+   TEXEL Prompt-Studio Patch Block (DEV forced + cache/shape/ETag fixes)
+   - Always use DEV endpoint
+   - Full-path addressing (client/<ID>/...)
+   - Load: no-store, no If-None-Match; cache-buster ts
+   - Save: If-Match with lastKnownETag; update ETag on success
+   - Shape normalize (flat <-> nested) to avoid "empty" first reopen
+   - LocalStorage keys are full-path based
+   - Add: create file in client/<ID>/..., upsert index, open that path
+   - Reopen: always hit server (no stale LS), update editor state
+   ===================================================================== */
+(function() {
+  try {
+    var DEV_BASE = "https://func-texel-api-dev-jpe-001-b2f6fec8fzcbdrc3.japaneast-01.azurewebsites.net/api";
+    // ===== Force DEV environment to avoid 404s
+    if (typeof window !== 'undefined') {
+      window.ENV = 'DEV';
+      window.TEXEL_ENV = 'DEV';
+      window.TEXEL_FORCE_DEV = true;
+      window.FUNCTION_BASE = DEV_BASE;
+      window.getFunctionBase = function() { return DEV_BASE; };
+      window.FUNCTION_BASES = Object.assign({}, window.FUNCTION_BASES||{}, { DEV: DEV_BASE, PROD: DEV_BASE });
+    }
+
+    // ===== In-memory state & helpers
+    window.editorState = window.editorState || { currentPath: null, lastKnownETag: null };
+    var _memoryCache = new Map();
+    function _localKey(path) { return "prompt:" + path; }
+
+    // ===== Shape normalize (flat <-> nested)
+    function normalizeDoc(raw) {
+      var out = { prompt: { prompt: '', params: {} }, params: {} };
+      if (!raw || typeof raw !== 'object') return out;
+      // nested
+      if (raw.prompt && typeof raw.prompt === 'object' && ('prompt' in raw.prompt)) {
+        out.prompt.prompt = String(raw.prompt.prompt || '');
+        out.prompt.params = raw.prompt.params || {};
+        out.params = raw.params || {};
+      } else {
+        // flat
+        if (typeof raw.prompt === 'string') out.prompt.prompt = raw.prompt;
+        if (raw.params && typeof raw.params === 'object') out.prompt.params = raw.params;
+      }
+      // carry over unknown keys (shape-preserving)
+      for (var k in raw) if (!(k in out)) out[k] = raw[k];
+      return out;
+    }
+
+    // ===== I/O (always DEV, no-store)
+    async function loadPromptText(path) {
+      var base = (typeof getFunctionBase === 'function') ? getFunctionBase() : DEV_BASE;
+      var url = base + "/LoadPromptText?filename=" + encodeURIComponent(path) + "&ts=" + Date.now();
+      var res = await fetch(url, {
+        method: "GET",
+        cache: "no-store",
+        headers: { "Accept": "application/json", "Cache-Control": "no-cache" }
+      });
+      if (!res.ok) throw new Error("Load failed: " + res.status);
+      var etag = res.headers.get("ETag") || null;
+      var doc = await res.json();
+      return { doc, etag };
+    }
+
+    async function savePromptText(path, normalizedDoc, lastEtag) {
+      var base = (typeof getFunctionBase === 'function') ? getFunctionBase() : DEV_BASE;
+      var url = base + "/SavePromptText?filename=" + encodeURIComponent(path);
+      var body = JSON.stringify(normalizedDoc);
+      var headers = { "Content-Type": "application/json" };
+      if (lastEtag) headers["If-Match"] = lastEtag; else headers["If-Match"] = "*";
+      var res = await fetch(url, { method: "POST", cache: "no-store", headers, body });
+      if (res.status === 412) throw new Error("Precondition Failed (ETag mismatch)");
+      if (!res.ok) throw new Error("Save failed: " + res.status);
+      var newEtag = res.headers.get("ETag") || null;
+      // update state & caches
+      window.editorState.currentPath = path;
+      window.editorState.lastKnownETag = newEtag;
+      _memoryCache.set(path, normalizedDoc);
+      try { localStorage.setItem(_localKey(path), body); } catch(_e) {}
+      return newEtag;
+    }
+
+    // ===== Path resolver (client -> prompt -> template)
+    window.resolvePromptPath = window.resolvePromptPath || async function(entry) {
+      if (entry && entry.path) return entry.path;
+      // Fallback: resolve from entry fields
+      var clientId = (window.currentClientId || (window.getCurrentClientId && window.getCurrentClientId()) || "").trim();
+      var nameOrFile = (entry && (entry.file || entry.name || entry.id || entry.title)) || "";
+      var candidates = [];
+      if (clientId) candidates.push("client/" + clientId + "/" + nameOrFile);
+      if (clientId) candidates.push("prompt/" + clientId + "/" + nameOrFile);
+      candidates.push(nameOrFile); // template/raw
+      // First that exists wins
+      for (var i=0;i<candidates.length;i++) {
+        try {
+          var test = candidates[i];
+          await loadPromptText(test); // if ok, return that path
+          return test;
+        } catch(_e) { /* try next */ }
+      }
+      // default to client path
+      return candidates[0];
+    };
+
+    // ===== Open (always hit server; avoid stale LS)
+    window.openPrompt = window.openPrompt || async function(entry) {
+      var path = entry && entry.path ? entry.path : await window.resolvePromptPath(entry||{});
+      var loaded = await loadPromptText(path);
+      var normalized = normalizeDoc(loaded.doc);
+      window.editorState.currentPath = path;
+      window.editorState.lastKnownETag = loaded.etag;
+      // render hooks (Project-specific): try common names and no-op fallback
+      var render = window.renderEditor || window.bindEditor || window.showPromptEditor || function(doc){ 
+        // fallback: put into a textarea if exists
+        var ta = document.querySelector('#prompt-text') || document.querySelector('textarea[name="prompt"]');
+        if (ta) ta.value = (doc && doc.prompt && doc.prompt.prompt) ? doc.prompt.prompt : "";
+        var pa = document.querySelector('#prompt-params');
+        if (pa) try { pa.value = JSON.stringify(doc.prompt.params || {}, null, 2); } catch(_e) {}
+      };
+      render(normalized);
+      try { localStorage.setItem(_localKey(path), JSON.stringify(normalized)); } catch(_e) {}
+      return normalized;
+    };
+
+    // ===== Add new prompt (client/<ID>/...)
+    window.addNewPrompt = window.addNewPrompt || async function(displayName) {
+      var clientId = (window.currentClientId || (window.getCurrentClientId && window.getCurrentClientId()) || "").trim();
+      if (!clientId) throw new Error("clientId not resolved");
+      var file = "texel-" + Date.now() + ".json";
+      var path = "client/" + clientId + "/" + file;
+      var initial = { prompt: { prompt: "", params: {} }, params: {} };
+      await savePromptText(path, initial, null);
+      // index upsert (project-specific hook)
+      if (typeof window.upsertPromptIndex === 'function') {
+        try { await window.upsertPromptIndex({ path: path, name: displayName || file, order: Date.now() }) } catch(_e) { console.warn(_e); }
+      }
+      await window.openPrompt({ path });
+      return path;
+    };
+
+    // ===== Save current editor content using our robust I/O
+    window.saveCurrentPrompt = window.saveCurrentPrompt || async function() {
+      var path = window.editorState.currentPath;
+      if (!path) throw new Error("No currentPath");
+      // extract from UI (project-specific)
+      var getDoc = window.collectEditorDoc || function() {
+        var ta = document.querySelector('#prompt-text') || document.querySelector('textarea[name="prompt"]');
+        var txt = (ta && ta.value) || "";
+        var params = {};
+        var pa = document.querySelector('#prompt-params');
+        if (pa) { try { params = JSON.parse(pa.value || "{}"); } catch(_e) { params = {}; } }
+        return { prompt: { prompt: txt, params: params }, params: {} };
+      };
+      var doc = normalizeDoc(getDoc());
+      var etag = window.editorState.lastKnownETag || null;
+      var newEtag = await savePromptText(path, doc, etag);
+      return newEtag;
+    };
+
+    // Expose helpers for debugging
+    window.__PromptStudioPatch = {
+      normalizeDoc, loadPromptText, savePromptText, addNewPrompt
+    };
+  } catch(e) {
+    console.error("Prompt-Studio Patch error:", e);
+  }
+})();
+// ========================== END OF PATCH BLOCK ===========================
+
 /* build:ps-20251112-idxfix+pathfix+field-only-edit */
 /* ===== Prompt Studio – logic (index-safe add, robust reload, field-only edit) ===== */
 const DEV_API  = "https://func-texel-api-dev-jpe-001-b2f6fec8fzcbdrc3.japaneast-01.azurewebsites.net/api/";
