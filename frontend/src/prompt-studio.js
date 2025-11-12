@@ -1,5 +1,86 @@
 
 /* =====================================================================
+   TEMPLATE-COPY INIT PATCH
+   - On add: load 'texel-prompt-template.json' and save it to client/<ID>/texel-<ts>.json
+   - Ensures flat structure like:
+     { "prompt": "<string>", "params": { ... } }
+   ===================================================================== */
+(function(){
+  try {
+    var DEV_BASE = (typeof getFunctionBase === 'function') ? getFunctionBase() :
+      (window.FUNCTION_BASE || "https://func-texel-api-dev-jpe-001-b2f6fec8fzcbdrc3.japaneast-01.azurewebsites.net/api");
+    window.TEXEL_USE_TEMPLATE = true;
+    var TEMPLATE_NAME = "texel-prompt-template.json";
+
+    async function __loadTemplateDoc() {
+      var url = DEV_BASE + "/LoadPromptText?filename=" + encodeURIComponent(TEMPLATE_NAME) + "&ts=" + Date.now();
+      var res = await fetch(url, { method: "GET", cache: "no-store", headers: { "Accept":"application/json", "Cache-Control":"no-cache" } });
+      if (!res.ok) throw new Error("Load template failed: " + res.status);
+      return await res.json();
+    }
+
+    async function __saveDocTo(path, doc) {
+      var url = DEV_BASE + "/SavePromptText?filename=" + encodeURIComponent(path);
+      var body = JSON.stringify(doc);
+      var res = await fetch(url, { method: "POST", cache: "no-store", headers: { "Content-Type":"application/json", "If-Match":"*" }, body });
+      if (!res.ok) throw new Error("Save to client path failed: " + res.status);
+      return res.headers.get("ETag") || null;
+    }
+
+    function __resolveClientId() {
+      try {
+        if (window.currentClientId) return String(window.currentClientId).trim();
+        if (typeof window.getCurrentClientId === "function") return String(window.getCurrentClientId()||"").trim();
+      } catch(_e){}
+      return "";
+    }
+
+    // Normalize template into flat expected form (guard)
+    function __normalizeFlatTemplate(raw){
+      if (!raw || typeof raw !== "object") return { prompt:"", params:{} };
+      if (typeof raw.prompt === "string") {
+        return { prompt: String(raw.prompt), params: (raw.params && typeof raw.params==="object") ? raw.params : {} };
+      }
+      // nested → flat
+      if (raw.prompt && typeof raw.prompt === "object" && "prompt" in raw.prompt) {
+        return { prompt: String(raw.prompt.prompt || ""), params: (raw.prompt.params && typeof raw.prompt.params==="object") ? raw.prompt.params : {} };
+      }
+      // fallback minimal
+      return { prompt:"", params:{} };
+    }
+
+    async function __createFromTemplate(displayName) {
+      var clientId = __resolveClientId();
+      if (!clientId) throw new Error("clientId not resolved");
+      var file = "texel-" + Date.now() + ".json";
+      var path = "client/" + clientId + "/" + file;
+
+      var tpl = await __loadTemplateDoc();
+      var flat = __normalizeFlatTemplate(tpl); // ensure exactly the requested shape
+      await __saveDocTo(path, flat);
+
+      if (typeof window.upsertPromptIndex === "function") {
+        try { await window.upsertPromptIndex({ path: path, name: displayName || file, order: Date.now() }); } catch(_e){}
+      }
+      if (typeof window.openPrompt === "function") {
+        try { await window.openPrompt({ path }); } catch(_e){}
+      }
+      return path;
+    }
+
+    // Override entry points to use the template-based creation
+    window.addNewPrompt = __createFromTemplate;
+    window.createPromptFile = __createFromTemplate;
+    window.createNewPrompt = __createFromTemplate;
+
+  } catch(e) {
+    console.error("TEMPLATE-COPY INIT PATCH error:", e);
+  }
+})();
+// ====================== END TEMPLATE-COPY INIT PATCH =======================
+
+
+/* =====================================================================
    STRICT EMPTY INIT PATCH
    - Guarantee: newly created file content is exactly { "prompt": {}, "params": {} }
    - Overrides any existing creation flows (addNewPrompt/createPromptFile)
