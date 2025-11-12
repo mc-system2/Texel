@@ -77,3 +77,42 @@ body{
 
 /* Small helpers */
 .file-caption{ color:#567; }
+
+/* ==== Full-height editor & wide sliders (2025-11-12b) ==== */
+.ps-editor.panel{ display:flex; flex-direction:column; gap:10px; }
+
+/* Make the tab area occupy all remaining space */
+.tab-wrap{
+  display:flex;
+  flex-direction:column;
+  flex:1 1 auto;
+  min-height:0;
+}
+.tab-panel{
+  display:none;
+  min-height:0;
+}
+.tab-panel.active{
+  display:flex;
+  flex-direction:column;
+  flex:1 1 auto;
+  min-height:0;
+}
+
+/* Prompt tab textarea fills vertical space */
+#promptTab{ min-height:0; }
+#promptEditor{
+  flex:1 1 auto;
+  min-height:0;
+  height:auto;            /* let flex control height */
+  resize:vertical;
+}
+
+/* Params tab: sliders span full width */
+#paramsTab .param-list{ display:flex; flex-direction:column; gap:14px; }
+#paramsTab input[type="range"]{ width:100%; }
+#paramsTab .slider-label{ display:flex; align-items:center; gap:8px; }
+#paramsTab .slider-value{ margin-left:auto; font-variant-numeric:tabular-nums; color:#566; }
+
+/* Bottom toolbar stays at the bottom */
+.editor-toolbar{ margin-top:8px; }
