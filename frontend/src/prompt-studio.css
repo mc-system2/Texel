@@ -1,117 +1,54 @@
-/* --- Light UI (restored) + inner highlight --- */
 :root{
-  --bg:#f7f8fb; --panel:#ffffff; --line:#e6e9ef;
-  --text:#223; --muted:#7a8599; --brand:#0aa0a6; --brand-2:#0b6cf2;
-  --ok:#20b66e; --warn:#ff9f1a; --danger:#e05252; --info:#2080f0;
-  --chip-bg:#f1f4f8;
-}
-*{box-sizing:border-box} html,body{height:100%} body{margin:0;background:var(--bg);color:var(--text);font-family: system-ui, -apple-system, Segoe UI, Roboto, Noto Sans JP, Helvetica, Arial, "Apple Color Emoji","Segoe UI Emoji";}
-.app{min-height:100vh;display:flex;flex-direction:column}
-.ps-header{display:flex;gap:16px;align-items:center;justify-content:space-between;padding:10px 16px;border-bottom:1px solid var(--line);background:#fff;position:sticky;top:0;z-index:10}
-.app-title{font-size:18px;margin:0 8px 0 0}
-.label{font-size:12px;color:var(--muted);margin:0 6px}
-.input{border:1px solid var(--line);background:#fff;border-radius:8px;padding:8px 10px;font-size:14px;min-width:120px}
-.input.sm{padding:6px 8px;font-size:13px}
-.input.wide{min-width:420px}
-.btn{border:none;background:var(--brand);color:#fff;border-radius:10px;padding:10px 14px;font-weight:600;cursor:pointer;box-shadow:0 1px 0 rgba(0,0,0,.05)}
-.btn.secondary{background:#eef3ff;color:#1d4ed8}
-.btn.tiny{padding:6px 10px;font-size:13px}
-.btn:active{transform:translateY(1px)}
-.ps-main{display:grid;grid-template-columns:320px 1fr;gap:16px;padding:16px;flex:1}
-.panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;box-shadow:0 1px 0 rgba(0,0,0,.02)}
-.ps-side{padding:12px;display:flex;flex-direction:column;gap:12px}
-.tips{color:var(--muted);font-size:12px}
-.side-actions{display:flex;gap:8px}
-.filelist{display:flex;flex-direction:column;gap:8px;overflow:auto;min-height:300px}
-.fileitem{display:grid;grid-template-columns:20px 1fr auto;align-items:center;gap:8px;border:1px solid var(--line);border-radius:10px;padding:10px 10px;background:#fff;position:relative}
-.fileitem .drag{cursor:grab;color:var(--muted)}
-.fileitem.dragging{opacity:.6}
-.fileitem .name{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.fileitem .name .lock{margin-right:6px}
-.fileitem.locked{opacity:.85}
-.fileitem .meta button{border:none;background:#f2f6ff;color:#1d4ed8;border-radius:8px;padding:6px 8px;margin-left:6px;cursor:pointer}
-
-/* ▼ 内側に表示される強調（outline→inset box-shadow）*/
-.fileitem:hover{border-color:var(--brand-2)}
-.fileitem.active{box-shadow:inset 0 0 0 2px var(--brand)}
-.fileitem:focus-within{box-shadow:inset 0 0 0 2px var(--brand-2)}
-
-.ps-editor{display:flex;flex-direction:column;gap:10px;padding:12px}
-.bar.meta{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--muted)}
-.filename{font-weight:700;color:var(--text)}
-.chip{background:var(--chip-bg);border:1px solid var(--line);padding:4px 8px;border-radius:999px}
-.chip.ok{background:#edfbf4;border-color:#c6f1dc;color:#0f7e52}
-.chip.info{background:#eef4ff;border-color:#d8e6ff;color:#1d4ed8}
-.seg-tabs{display:grid;grid-template-columns:1fr 1fr;border:1px solid var(--line);border-radius:10px;overflow:hidden;width:max-content}
-.seg-btn{padding:8px 12px;border:none;background:#f6f8fc;cursor:pointer}
-.seg-btn.active{background:#fff;color:#000}
-.tab-wrap{border:1px solid var(--line);border-radius:10px;overflow:hidden}
-.tab-panel{display:none}
-.tab-panel.active{display:block}
-#promptEditor{width:100%;height:60vh;border:none;outline:none;resize:none;padding:12px;font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;font-size:13px;line-height:1.5}
-.param-grid{display:grid;grid-template-columns:repeat(3, minmax(240px,1fr));gap:16px;padding:12px}
-.slider-group{background:#fafbfe;border:1px solid var(--line);border-radius:10px;padding:10px}
-.slider-label{font-size:12px;color:var(--muted);display:flex;justify-content:space-between;align-items:center}
-.diff{border:1px dashed var(--line);border-radius:12px;padding:8px}
-.diff-cols{display:grid;grid-template-columns:1fr 1fr;gap:8px}
-.diff textarea{width:100%;height:40vh}
-@media (max-width: 1024px){
-  .ps-main{grid-template-columns:1fr}
-  .input.wide{min-width:280px}
-  .param-grid{grid-template-columns:1fr}
-}
-/* PromptStudio params full-width redesign (2025-11-12) */
-#paramsTab { padding: 8px 12px; }
-
-.params-grid {
-  display: grid;
-  grid-template-columns: 1fr;
-  gap: 14px;
+  --tx-primary:#0AA0A6;
+  --line:#d7e7f7;
+  --bg:#f6fafc;
 }
 
-/* Each row = label | slider | value (right) */
-.param-item {
-  display: grid;
-  grid-template-columns: minmax(220px, 360px) 1fr max(56px, 8ch);
-  align-items: center;
-  gap: 16px;
-  background: var(--panel, #fff);
-  border: 1px solid var(--line, #e6e9ef);
-  border-radius: 10px;
-  padding: 12px 14px;
+/* ==== Full screen layout ==== */
+html,body{height:100%; margin:0;}
+body{background:var(--bg); color:#123; font:14px/1.6 "Noto Sans JP",system-ui,Arial;}
+.app{height:100dvh; display:flex; flex-direction:column; min-width:960px;}
+.app-header{padding:12px 16px 0;}
+.app-header h1{margin:0 0 4px; font-size:20px;}
+.app-header .meta{font-size:12px; color:#456;}
+.app-header .apipath{font-size:12px; color:#245; background:#eef6fa; display:inline-block; padding:2px 8px; border-radius:6px; margin-top:6px;}
+.label{color:#0AA0A6; margin-left:.5em;}
+
+/* main panel fills the rest */
+.panel{
+  flex:1 1 auto; min-height:0; margin:12px 16px 16px;
+  display:flex; flex-direction:column; gap:12px;
+  background:#fff; border:1px solid var(--line); border-radius:12px;
+  padding:12px; box-shadow:0 8px 24px #0001;
 }
 
-/* Make slider take all remaining width */
-.param-item input[type="range"] {
-  width: 100%;
-  accent-color: var(--brand, #0aa0a6);
-  height: 8px;
+/* tabs */
+.tab-header{flex:0 0 auto; display:flex; gap:0; border-bottom:1px solid var(--line);}
+.tab-button{flex:1 1 0; height:42px; border:1px solid var(--line); border-bottom:none; background:#f3faff; font-weight:700; cursor:pointer;}
+.tab-button:first-child{border-top-left-radius:10px;}
+.tab-button:last-child{border-top-right-radius:10px;}
+.tab-button.active{background:#fff; position:relative; z-index:1;}
+.tab-panel{display:none; flex:1 1 auto; min-height:0; overflow:auto;}
+.tab-panel.active{display:block;}
+
+/* editor */
+#promptTab{padding-top:0;}
+#promptEditor{
+  width:100%; height:100%; min-height:0; box-sizing:border-box;
+  border:1px solid var(--line); border-radius:10px; padding:12px;
+  background:#fbfeff; resize:none; font:13px/1.7 ui-monospace,Consolas,Menlo;
+  white-space:pre-wrap;
 }
 
-/* Value bubble (right) */
-.param-val {
-  text-align: right;
-  font-variant-numeric: tabular-nums;
-  font-weight: 600;
-  color: var(--muted, #7a8599);
-}
+/* params */
+.param-list{display:grid; grid-template-columns:1fr; gap:12px;}
+.slider-group{border:1px solid var(--line); border-radius:10px; padding:10px 12px; background:#fcfeff;}
+.slider-label{display:flex; justify-content:space-between; align-items:center; gap:12px;}
+.slider-value{color:#134; font-weight:700;}
+input[type=range]{width:100%;}
 
-/* Label */
-.param-item label {
-  font-size: 14px;
-  color: var(--text, #223);
-  line-height: 1.3;
-}
-
-/* Narrow screens: stack label on first row, slider full width on second */
-@media (max-width: 880px){
-  .param-item {
-    grid-template-columns: 1fr max(56px, 8ch);
-    grid-template-areas:
-      "label value"
-      "slider slider";
-  }
-  .param-item label      { grid-area: label; }
-  .param-item input[type="range"] { grid-area: slider; }
-  .param-item .param-val { grid-area: value; text-align: right; }
-}
+/* toolbar & status */
+.toolbar{flex:0 0 auto; display:flex; align-items:center; gap:8px;}
+.btn{background:#0AA0A6; color:#fff; border:none; border-radius:10px; padding:8px 14px; cursor:pointer; font-weight:700;}
+.btn.ghost{background:#fff; color:#0d2330; border:1px solid var(--line);}
+.status{margin-left:8px; color:#0AA0A6; min-height:1.3em;}

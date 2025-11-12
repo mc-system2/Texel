@@ -4,12 +4,15 @@
   <meta charset="utf-8" />
   <title>Prompt Studio</title>
   <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <!-- Prompt-editor と同一デザイン（コピー済み） -->
   <link rel="stylesheet" href="./prompt-studio.css" />
+  <!-- パラメータのフル幅スライダー補助スタイル -->
+  <link rel="stylesheet" href="./prompt-studio-params.css" />
 </head>
 <body>
   <div class="app">
     <!-- ヘッダー -->
-    <header class="ps-header">
+    <header class="ps-header app-header">
       <div class="left"><h1 class="app-title">Prompt Studio</h1></div>
       <div class="middle">
         <label class="label">Client</label>
@@ -22,19 +25,20 @@
         <input id="apiBase" class="input sm wide" placeholder="https://.../api" autocomplete="off" />
       </div>
       <div class="right">
+        <span id="buildBadge" class="chip">ps-20251112</span>
         <button id="btnDiff" class="btn secondary">差分</button>
         <button id="btnSave" class="btn">保存 (Ctrl+S)</button>
       </div>
     </header>
 
     <!-- 本文 -->
-    <main class="ps-main">
+    <main class="ps-main app-main">
       <!-- サイドバー -->
-      <aside class="ps-side panel" id="sidebar">
+      <aside class="ps-side panel">
         <div class="tips">クライアント別の編集対象を選択してください。</div>
         <div class="side-actions">
           <input id="search" class="input" placeholder="ファイル検索…" />
-          <button id="btnAdd" class="btn tiny">＋ 追加</button>
+          <button id="btnAdd" class="btn tiny" data-role="btn-add">＋ 追加</button>
         </div>
         <div id="fileList" class="filelist" aria-label="ファイル一覧"></div>
       </aside>
@@ -48,20 +52,20 @@
           <span class="filename" id="fileTitle">未選択</span>
         </div>
 
-        <!-- セグメントタブ（幅をちょうど半分で2分割） -->
-        <div class="seg-tabs">
-          <button class="seg-btn left active"  id="tabPromptBtn">プロンプト</button>
-          <button class="seg-btn right"         id="tabParamsBtn">パラメータ</button>
+        <!-- タブ -->
+        <div class="tab-header seg-tabs">
+          <button class="tab-button seg-btn left active"  id="tabPromptBtn">プロンプト</button>
+          <button class="tab-button seg-btn right"         id="tabParamsBtn">パラメータ</button>
         </div>
 
         <!-- タブ本体 -->
         <div class="tab-wrap">
-          <div class="tab-panel active" id="promptTab">
+          <section class="tab-panel active" id="promptTab">
             <textarea id="promptEditor" spellcheck="false" placeholder="ここにプロンプトが読み込まれます…"></textarea>
-          </div>
+          </section>
 
-          <div class="tab-panel" id="paramsTab">
-            <div class="param-grid">
+          <section class="tab-panel" id="paramsTab">
+            <div class="param-list param-grid">
               <div class="slider-group">
                 <div class="slider-label">入力補完トークンの最大数（100〜32768）
                   <span class="slider-value" id="val_max_tokens">800</span></div>
@@ -93,7 +97,7 @@
                 <input type="range" id="param_n" min="1" max="4" step="1" value="1" />
               </div>
             </div>
-          </div>
+          </section>
         </div>
 
         <div id="statusMessage" class="tips">ファイルを選択してください。</div>
