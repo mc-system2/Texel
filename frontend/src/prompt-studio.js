@@ -57,8 +57,8 @@ function prettifyNameFromFile(filename){
 }
 function join(base, path){ return (base||"").replace(/\/+$/,"") + "/" + String(path||"").replace(/^\/+/, ""); }
 
-const LOAD_CANDIDATES = ["LoadPromptText","LoadBLOB","LoadPrompt","LoadText"];
-const SAVE_CANDIDATES = ["SavePromptText","SaveBLOB","SavePrompt","SaveText"];
+const LOAD_CANDIDATES = ["LoadPromptText"];
+const SAVE_CANDIDATES = ["SavePromptText"];
 
 /* ---------- helpers: normalize/patch prompt docs ---------- */
 function normalizePromptDoc(doc){
