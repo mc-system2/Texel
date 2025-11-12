@@ -1,5 +1,5 @@
-/* build:ps-20251112-idxfix+pathfix */
-/* ===== Prompt Studio – logic (index-safe add, robust reload) ===== */
+/* build:ps-20251112-idxfix+pathfix+field-only-edit */
+/* ===== Prompt Studio – logic (index-safe add, robust reload, field-only edit) ===== */
 const DEV_API  = "https://func-texel-api-dev-jpe-001-b2f6fec8fzcbdrc3.japaneast-01.azurewebsites.net/api/";
 const PROD_API = "https://func-texel-api-prod-jpe-001-dsgfhtafbfbxawdz.japaneast-01.azurewebsites.net/api/";
 
@@ -42,6 +42,7 @@ const els = {
 };
 
 let currentEtag = null;
+let currentLoadShape = "flat"; // 'flat' => {prompt:"", params:{}}, 'nested' => {prompt:{prompt:"",params:{}}, ...}
 let templateText = "";
 let dirty = false;
 
@@ -59,8 +60,61 @@ function join(base, path){ return (base||"").replace(/\/+$/,"") + "/" + String(p
 const LOAD_CANDIDATES = ["LoadPromptText","LoadBLOB","LoadPrompt","LoadText"];
 const SAVE_CANDIDATES = ["SavePromptText","SaveBLOB","SavePrompt","SaveText"];
 
+/* ---------- helpers: normalize/patch prompt docs ---------- */
+function normalizePromptDoc(doc){
+  // returns {prompt, params, shape}
+  let prompt = "", params = {}, shape = "flat";
+  if (typeof doc === "string"){
+    prompt = doc;
+  } else if (doc && typeof doc.prompt === "string"){
+    prompt = doc.prompt;
+    params = doc.params || {};
+    shape = "flat";
+  } else if (doc && doc.prompt && typeof doc.prompt.prompt === "string"){
+    // nested style seen on some blobs: { "prompt": { "prompt": "...", "params": {...}}, "params": {...} }
+    prompt = doc.prompt.prompt;
+    params = Object.assign({}, doc.prompt.params || {}, doc.params || {});
+    shape = "nested";
+  } else if (doc && typeof doc.text === "string"){
+    prompt = doc.text;
+    params = doc.params || {};
+    shape = "flat";
+  }
+  return { prompt, params, shape };
+}
+
+function patchPromptDoc(existing, newPrompt, newParams){
+  // Update only the fields, preserving original shape and unknown keys.
+  if (!existing || typeof existing !== "object"){
+    return { prompt: newPrompt, params: newParams || {} };
+  }
+  // copy to avoid mutating the reference from cache
+  const out = JSON.parse(JSON.stringify(existing));
+
+  if (typeof out.prompt === "string"){
+    out.prompt = newPrompt;
+    out.params = newParams || {};
+    return out;
+  }
+  if (out.prompt && typeof out.prompt.prompt === "string"){
+    // keep nested shape
+    out.prompt.prompt = newPrompt;
+    out.prompt.params = newParams || {};
+    // do not touch top-level params if any（混在を避けるため空にしておく）
+    if ("params" in out && out.params && Object.keys(out.params).length){
+      // keep it but do not overwrite
+    }
+    return out;
+  }
+  // unknown structure: fallback to the minimal flat shape but preserve unknown keys
+  out.prompt = newPrompt;
+  out.params = newParams || {};
+  return out;
+}
+
+/* ---------- API wrappers ---------- */
 async function apiLoadText(filename){
-  // Prefer GET (no-store) to avoid 404 noise when POST function name differs
+  // Try GET first (cache disabled)
   const getRes = await tryLoad(filename);
   if (getRes) { getRes.used = "GET"; return { etag: getRes.etag ?? null, data: getRes.data, used: "GET" }; }
 
@@ -117,9 +171,8 @@ function normalizeIndex(x){
 
 async function ensurePromptIndex(clientId, behavior, bootstrap=true){
   const path = indexClientPath(clientId);
-  // 1) Try POST loader
+  // 1) Try POST/GET loader
   let r = await apiLoadText(path);
-  // 2) Fallback to GET (no-store)
   if (!r) {
     const g = await tryLoad(path);
     if (g) r = g;
@@ -128,12 +181,10 @@ async function ensurePromptIndex(clientId, behavior, bootstrap=true){
     const idx = normalizeIndex(r.data);
     if (idx){ promptIndex=idx; promptIndexPath=path; promptIndexEtag=r.etag||null; return promptIndex; }
   }
-  // When we cannot load (endpoint 404等)、既存のpromptIndexがあるなら再構築せずにそのまま使う
   if (!bootstrap && promptIndex && promptIndexPath===path){
     return promptIndex;
   }
   if (!bootstrap){
-    // ここで作り直すと“名前が戻る”原因になるため、作らない
     console.warn("ensurePromptIndex: load failed; skipped bootstrap to avoid overwrite. Check API base or function name.");
     setStatus("インデックスの読込に失敗（再構築は未実施）。API設定をご確認ください。","orange");
     return promptIndex;
@@ -165,7 +216,6 @@ async function ensurePromptIndex(clientId, behavior, bootstrap=true){
 
 async function reloadIndex(){
   if (!promptIndexPath) return;
-  // Use GET-based loader with cache:no-store to avoid stale reads
   const res = await tryLoad(promptIndexPath);
   if (!res) return;
   const idx = normalizeIndex(res.data);
@@ -182,7 +232,6 @@ async function saveIndex(){
     const res = await apiSaveText(promptIndexPath, promptIndex, promptIndexEtag);
     promptIndexEtag = res?.etag || promptIndexEtag || null;
   }catch(e){
-    // If ETag precondition failed, reload and retry once
     const msg = String(e||"");
     if (msg.includes("412")){
       await reloadIndex();
@@ -214,12 +263,10 @@ async function deleteIndexItem(file){
   const i = promptIndex.items.findIndex(x=>x.file===file);
   if (i<0 || promptIndex.items[i].lock) return;
   promptIndex.items.splice(i,1);
-  // re-number
   promptIndex.items.sort((a,b)=>(a.order??0)-(b.order??0)).forEach((x,i)=>x.order=(i+1)*10);
   await saveIndex();
 }
 async function addIndexItemRaw(fileName, displayName){
-  // append only (never reconstruct)
   let file = (fileName||"").trim();
   if (!file.endsWith(".json")) file = file + ".json";
   if (!file.startsWith("texel-")) file = "texel-" + file;
@@ -331,7 +378,6 @@ function templateFromFilename(filename, behavior){
 }
 
 async function tryLoad(filename){
-  // Normalize and try multiple candidate paths.
   const clid = (els.clientId?.value||"").trim().toUpperCase();
   const beh  = (els.behavior?.value||"BASE").toUpperCase();
 
@@ -367,7 +413,7 @@ async function renderFileList(){
     .filter(it => !it.hidden)
     .sort((a,b)=>(a.order??0)-(b.order??0));
 
-  // Attach drag handlers once
+  // drag handlers once
   if (!dragBound){
     dragBound = true;
     els.fileList.addEventListener('dragover', (e)=>{
@@ -432,7 +478,6 @@ async function renderFileList(){
         const nv = prompt("表示名の変更", name);
         if (nv!=null){
           try{
-            // optimistic update in UI
             li.querySelector('.name').innerHTML = (it.lock? '<span class="lock">🔒</span>' : '') + nv.trim();
             setStatus('名称を変更中…','orange');
             await renameIndexItem(it.file, nv.trim());
@@ -493,6 +538,7 @@ async function openByFilename(filename){
 
   if (!loaded){
     currentEtag = null;
+    currentLoadShape = "flat";
     if (els.promptEditor) els.promptEditor.value = "";
     writeParamUI({});
     setBadges("Missing（新規）", null);
@@ -501,15 +547,10 @@ async function openByFilename(filename){
     return;
   }
 
-  const d = loaded.data || {};
-  let promptText = "";
-  if (typeof d.prompt === "string") promptText = d.prompt;
-  else if (d.prompt && typeof d.prompt.text === "string") promptText = d.prompt.text;
-  else if (typeof d === "string") promptText = d;
-  else promptText = JSON.stringify(d, null, 2);
-
-  if (els.promptEditor) els.promptEditor.value = promptText;
-  writeParamUI(d.params || {});
+  const norm = normalizePromptDoc(loaded.data || {});
+  currentLoadShape = norm.shape;
+  if (els.promptEditor) els.promptEditor.value = norm.prompt || "";
+  writeParamUI(norm.params || {});
 
   currentEtag = (used.startsWith("client/") || used.startsWith("prompt/")) ? loaded.etag : null;
 
@@ -525,12 +566,22 @@ els.btnSave?.addEventListener("click", saveCurrent);
 async function saveCurrent(){
   const title = document.getElementById("fileTitle")?.textContent || "";
   if (!title || title==="未選択") return;
-  const filename = title;
-  const prompt = els.promptEditor?.value ?? "";
-  const params = readParamUI();
+
+  const filename = title; // already "client/<id>/<file>.json" by openByFilename
+  const newPrompt = els.promptEditor?.value ?? "";
+  const newParams = readParamUI();
   setStatus("保存中…","orange");
+
   try{
-    const res = await apiSaveText(filename, { prompt, params }, currentEtag || undefined);
+    // Load current to preserve unknown fields and shape
+    let baseDoc = null;
+    const cur = await tryLoad(filename);
+    if (cur && cur.data) baseDoc = cur.data;
+
+    // If nothing exists yet, still respect the last loaded shape (flat default)
+    const payload = patchPromptDoc(baseDoc, newPrompt, newParams);
+
+    const res = await apiSaveText(filename, payload, currentEtag || undefined);
     currentEtag = res?.etag || currentEtag || null;
     setBadges("Overridden", currentEtag, "ok");
     setStatus("保存完了","green");
@@ -561,32 +612,21 @@ async function onClickAdd(){
     const clid = (els.clientId?.value||"").trim().toUpperCase();
     const beh  = (els.behavior?.value||"BASE").toUpperCase();
     if (!clid){ alert("Client ID が未設定です。左上で選択してください。"); return; }
-    await ensurePromptIndex(clid, beh, true); // load existing index or bootstrap
+    await ensurePromptIndex(clid, beh, true);
 
-    // ask only display name; filename auto
     const dname = prompt("新しいプロンプトの名称を入力してください", "新規プロンプト");
     if (dname === null) return;
 
-    // unique filename
     let file = generateAutoFilename();
     const existing = new Set((promptIndex.items||[]).map(x=>x.file));
     let salt = 0;
-    while (existing.has(file)){
-      salt++;
-      file = file.replace(/\.json$/, `-${salt}.json`);
-    }
+    while (existing.has(file)){ salt++; file = file.replace(/\.json$/, `-${salt}.json`); }
 
-    // create placeholder at client/
     const clientPath = `client/${clid}/${file}`;
     await apiSaveText(clientPath, { prompt: "", params: {} }, null);
 
-    // append to *existing* index
     await addIndexItemRaw(file, dname);
-
-    // 🔁 re-fetch index to update local ETag and items
     await reloadIndex();
-
-    // refresh list and open it
     await renderFileList();
     await openByFilename(file);
     setStatus("新しいプロンプトを追加しました。","green");
