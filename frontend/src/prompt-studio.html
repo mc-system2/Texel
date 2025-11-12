@@ -6,10 +6,8 @@
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <!-- Prompt-editor と同一デザイン（コピー済み） -->
   <link rel="stylesheet" href="./prompt-studio.css" />
-  <link rel="stylesheet" href="./prompt-studio-params.css" />
-  <link rel="stylesheet" href="./prompt-studio-filelist.css" />
   <!-- パラメータのフル幅スライダー補助スタイル -->
-  
+  <link rel="stylesheet" href="./prompt-studio-params.css" />
 </head>
 <body>
   <div class="app">
@@ -26,9 +24,11 @@
         <label class="label">API Base</label>
         <input id="apiBase" class="input sm wide" placeholder="https://.../api" autocomplete="off" />
       </div>
-      <div class="right"><span id="buildBadge" class="chip">ps-20251112</span></div>
+      <div class="right">
+        <span id="buildBadge" class="chip">ps-20251112</span>
+        <button id="btnSave" class="btn">保存 (Ctrl+S)</button>
+      </div>
     </header>
-
     <!-- 本文 -->
     <main class="ps-main app-main">
       <!-- サイドバー -->
@@ -40,7 +40,6 @@
         </div>
         <div id="fileList" class="filelist" aria-label="ファイル一覧"></div>
       </aside>
-
       <!-- エディタ -->
       <section class="ps-editor panel">
         <div class="bar meta">
@@ -49,19 +48,16 @@
           <span class="file-caption">ファイル:</span>
           <span class="filename" id="fileTitle">未選択</span>
         </div>
-
         <!-- タブ -->
         <div class="tab-header seg-tabs">
           <button class="tab-button seg-btn left active"  id="tabPromptBtn">プロンプト</button>
           <button class="tab-button seg-btn right"         id="tabParamsBtn">パラメータ</button>
         </div>
-
         <!-- タブ本体 -->
         <div class="tab-wrap">
           <section class="tab-panel active" id="promptTab">
             <textarea id="promptEditor" spellcheck="false" placeholder="ここにプロンプトが読み込まれます…"></textarea>
           </section>
-
           <section class="tab-panel" id="paramsTab">
             <div class="param-list param-grid">
               <div class="slider-group">
@@ -97,9 +93,7 @@
             </div>
           </section>
         </div>
-
         <div id="statusMessage" class="tips">ファイルを選択してください。</div>
-
         <!-- 差分 -->
         <div id="diffPanel" class="diff" hidden>
           <div class="diff-head">テンプレートとの差分（左：テンプレ / 右：現在）</div>
@@ -108,15 +102,9 @@
             <textarea id="diffRight" readonly></textarea>
           </div>
         </div>
-            <div class="toolbar editor-toolbar">
-        <button id="btnDiff" class="btn ghost">差分</button>
-        <button id="btnSave" class="btn primary">保存 (Ctrl+S)</button>
-        <span id="statusMessage" class="status"></span>
-      </div>
-    </section>
+      </section>
     </main>
   </div>
-
   <script src="./prompt-studio.js"></script>
 </body>
 </html>
