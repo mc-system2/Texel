@@ -283,8 +283,26 @@ async function syncClientPromptsAfterSave(currentClients){
 }
 
 // ---- 起動時自動読込 ----
-window.addEventListener("DOMContentLoaded", async ()=>{
-  if (!els.apiBase.value) els.apiBase.value = DEV_API;
-  updateEnvActive(els.apiBase.value.includes("-dev-") ? "dev" : "prod");
-  try{ await loadCatalog(); }catch{}
+window.addEventListener("DOMContentLoaded", async () => {
+  // 1) URLパラメータ / localStorage で既に apiBase が埋まっている場合はそれを優先
+  //    （getApiBase → setApiBase の処理でここまでに反映済み）
+
+  // 2) それでも空なら、ホスト名を見て DEV / PROD を判定してデフォルト設定
+  if (!els.apiBase.value) {
+    const host = location.hostname || "";
+
+    // ★ここに本番SWAのホスト名を入れておく
+    const isProdHost =
+      host.includes("lemon-beach") ||   // texel の PROD 静的Webアプリ
+      host.includes("texel-prod");      // 予備：将来名前を変えたとき用
+
+    const defaultBase = isProdHost ? PROD_API : DEV_API;
+    setApiBase(defaultBase); // input と localStorage の両方を更新
+  }
+
+  const base = els.apiBase.value || "";
+  // API Base に応じて DEV / PROD ピルの見た目を決定
+  updateEnvActive(base.includes("-prod-") ? "prod" : "dev");
+
+  try { await loadCatalog(); } catch {}
 });
