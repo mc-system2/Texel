@@ -28,8 +28,23 @@ body {
 }
 
 /* ===== ヘッダ ===== */
-.header{position:sticky;top:0;background:var(--panel);padding:12px 14px;border-bottom:1px solid var(--border);box-shadow:var(--shadow);z-index:10}
-.row{display:flex;align-items:center;gap:8px;margin:6px 0}
+
+.header {
+    position: sticky;
+    top: 0;
+    background: var(--panel);
+    padding: 12px 14px;
+    border-bottom: 1px solid var(--border);
+    box-shadow: var(--shadow);
+    z-index: 10
+}
+
+.row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 6px 0
+
 .row.gap{gap:10px}
 .env .btn{
   opacity:.75;
