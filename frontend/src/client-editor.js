@@ -410,7 +410,7 @@ els.gridBody.addEventListener("click", async (e) => {
     if (e.target.classList.contains("btn-del")) {
         const code = tr.querySelector(".code").value.trim().toUpperCase();
         if (!/^[A-Z0-9]{4}$/.test(code)) {
-            showAlert("コードが不正です", "error");
+            showAlert("コードが不正です","error");
             return;
         }
 
@@ -421,37 +421,103 @@ els.gridBody.addEventListener("click", async (e) => {
         const prefix = `client/${code}/`;
         const apiBase = els.apiBase.value.trim();
 
-        setStatus("削除中…");
+        (async () => {
+            setStatus("削除中…");
+            try {
+                const url = apiBase.replace(/\/+$/,"") + "/DeleteClientFolder";
+                const body = { prefix };
 
-        try {
-            const url = apiBase.replace(/\/+$/, "") + "/DeleteClientFolder";
-            const res = await fetch(url, {
-                method: "POST",
-                headers: {
-                    "Content-Type": "application/json"
-                },
-                body: JSON.stringify({
-                    prefix
-                })
-            });
+                const res = await fetch(url, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify(body)
+                });
 
-            if (!res.ok) {
-                const t = await res.text().catch( () => "");
-                throw new Error(`DeleteClientFolder 失敗: ${t}`);
+                if (!res.ok) {
+                    const t = await res.text().catch(()=>"");
+                    throw new Error(`DeleteClientFolder 失敗: ${t}`);
+                }
+
+                // UI行削除
+                tr.remove();
+                els.count.textContent = String(els.gridBody.querySelectorAll("tr").length);
+                validateGrid();
+                showAlert(`削除完了（${code}）`, "ok");
+
+                // ★★★★★ ここから追加部分 ★★★★★
+                await autoSaveCatalog();
+                showAlert("catalog を更新しました", "ok");
+                // ★★★★★ ここまで追加 ★★★★★
+
+            } catch (err) {
+                showAlert(err.message || "削除に失敗しました", "error");
+            } finally {
+                setStatus("");
             }
-
-            tr.remove();
-            els.count.textContent = String(els.gridBody.querySelectorAll("tr").length);
-            validateGrid();
-            showAlert(`削除完了（${code}）`, "ok");
-
-        } catch (err) {
-            showAlert(err.message || "削除に失敗しました", "error");
-        } finally {
-            setStatus("");
-        }
+        })();
 
         return;
+    }
+    
+    // ★★★ SaveCatalog() と同じ構造で catalog を組み立てて自動保存する版 ★★★
+    async function autoSaveCatalog() {
+        const apiBase = els.apiBase.value.trim();
+        const url = apiBase.replace(/\/+$/, "") + "/SaveClientCatalog";
+
+        // ---- saveCatalog() と同じ catalog を組み立てる ----
+        const rows = [...els.gridBody.querySelectorAll("tr")];
+        const clients = [];
+
+        for (const tr of rows) {
+            const code = tr.querySelector(".code").value.trim().toUpperCase();
+            const name = tr.querySelector(".name").value.trim();
+            const behaviorView = tr.querySelector(".behavior").value;
+            const sheetInput = tr.querySelector(".sheet").value.trim();
+            const createdAt = tr.querySelector(".created").value.trim();
+            const spreadsheetId = extractSheetId(sheetInput);
+
+            clients.push({
+                code,
+                name,
+                behavior: behaviorToPayload(behaviorView),
+                spreadsheetId,
+                createdAt
+            });
+        }
+
+        const catalog = {
+            version: 1,
+            updatedAt: new Date().toISOString(),
+            clients
+        };
+
+        const body = {
+            filename: FILENAME,
+            catalog,
+            etag: els.etag.dataset.etag || undefined
+        };
+
+        // ---- API 保存 ----
+        const res = await fetch(url, {
+            method: "POST",
+            headers: { "Content-Type": "application/json; charset=utf-8" },
+            body: JSON.stringify(body)
+        });
+
+        if (!res.ok) {
+            const t = await res.text().catch(() => "");
+            throw new Error("catalog 保存に失敗: " + t);
+        }
+
+        // ---- ETag の更新 ----
+        try {
+            const raw = await res.text();
+            const json = raw ? JSON.parse(raw) : {};
+            if (json?.etag) {
+                els.etag.dataset.etag = json.etag;
+                els.etag.textContent = `ETag: ${json.etag}`;
+            }
+        } catch {}
     }
 
     // ==========================
@@ -461,10 +527,27 @@ els.gridBody.addEventListener("click", async (e) => {
         const copy = tr.cloneNode(true);
         copy.querySelectorAll(".code-hint").forEach(h => h.remove());
         els.gridBody.insertBefore(copy, tr.nextSibling);
+
         attachCodeWatcher(copy);
         copy.querySelector(".code").value = issueNewCode();
         els.count.textContent = String(els.gridBody.querySelectorAll("tr").length);
         validateGrid();
+
+        // ★ ここで即保存＆SyncClientPrompts ★
+        (async () => {
+            try {
+                setStatus("複製内容を保存中…");
+                await autoSaveCatalog();          // ← さっき作った関数
+                // 必要ならここで新しい行だけを SyncClientPrompts に投げる
+                // await syncClientForRow(copy);
+                showAlert("クライアントを複製して catalog を更新しました","ok");
+            } catch (err) {
+                showAlert(err.message || "複製後の保存に失敗しました", "error");
+            } finally {
+                setStatus("");
+            }
+        })();
+
         return;
     }
 
