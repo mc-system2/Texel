@@ -559,6 +559,17 @@ function boot() {
             await saveIndex();
         });
     }
+    // =============
+    // ★ UI を編集不可にする
+    // =============
+    const clientIdEl = document.getElementById("clientId");
+    if (clientIdEl) clientIdEl.readOnly = true;
+
+    const clientNameEl = document.getElementById("clientName");
+    if (clientNameEl) clientNameEl.readOnly = true;
+
+    const apiBaseEl = document.getElementById("apiBase");
+    if (apiBaseEl) apiBaseEl.readOnly = true;
 }
 
 function markDirty() {
