@@ -239,3 +239,23 @@ body {
 .bar.meta span:has(+ #badgeState), .bar.meta span:has(+ #badgeEtag) {
     display: none !important;
 }
+
+.client-input {
+    width: 80px;
+}
+
+.name-input {
+    width: 260px;
+}
+
+.behavior-label {
+    padding: 6px 10px;
+    background: #f0f0f0;
+    border: 1px solid #ccc;
+    border-radius: 6px;
+}
+
+.api-input {
+    flex: 1;
+    min-width: 0;
+}

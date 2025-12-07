@@ -19,15 +19,16 @@
                 </div>
                 <div class="middle">
                     <label class="label">Client</label>
-                    <input id="clientId" class="input sm" placeholder="A001" autocomplete="off"/>
+                    <input id="clientId" class="input client-input" maxlength="4" />
+
+                    <label class="label">名称</label>
+                    <input id="clientName" class="input name-input" placeholder="クライアント名称" />
+
                     <label class="label">Behavior</label>
-                    <select id="behavior" class="input sm">
-                        <option>BASE</option>
-                        <option>TYPE-R</option>
-                        <option>TYPE-S</option>
-                    </select>
+                    <span id="behaviorLabel" class="behavior-label">TYPE-S</span>
+
                     <label class="label">API Base</label>
-                    <input id="apiBase" class="input sm wide" placeholder="https://.../api" autocomplete="off"/>
+                    <input id="apiBase" class="input api-input" placeholder="https://.../api"/>
                 </div>
                 <div class="right">
                     <button id="btnSave" class="btn">保存 (Ctrl+S)</button>
