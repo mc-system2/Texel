@@ -476,19 +476,22 @@ window.addEventListener("DOMContentLoaded", boot);
 let dragBound = false;
 function boot() {
     const q = new URLSearchParams(location.hash.replace(/^#\??/, ''));
-    // Client ID
+
+    // Client ID（表示専用）
     if (els.clientId) {
         els.clientId.value = (q.get("client") || "").toUpperCase();
+        els.clientId.readOnly = true;
     }
 
-    // Behavior ラベル（表示専用）
+    // Behavior（表示専用）
     const beh = (q.get("behavior") || "BASE").toUpperCase();
     const behLabel = document.getElementById("behaviorLabel");
     if (behLabel) behLabel.textContent = beh;
 
-    // API Base
+    // API Base（表示専用）
     if (els.apiBase) {
         els.apiBase.value = q.get("api") || DEV_API;
+        els.apiBase.readOnly = true;
     }
 
     // Search を非表示
@@ -496,10 +499,10 @@ function boot() {
         els.search.style.display = "none";
     }
 
-    // 左側リスト描画（中で ensurePromptIndex が呼ばれる）
+    // 左側リスト描画（内部で ensurePromptIndex が呼ばれる）
     renderFileList();
 
-    // Ctrl+S で保存
+    // Ctrl+S 保存ショートカット
     window.addEventListener("keydown", (e) => {
         if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") {
             e.preventDefault();
@@ -507,27 +510,18 @@ function boot() {
         }
     });
 
-    // （今は非表示だが）検索フィルタ
-    els.search?.addEventListener("input", () => {
-        const kw = (els.search.value || "").toLowerCase();
-        [...(els.fileList?.children || [])].forEach(it => {
-            const t = it.querySelector(".name")?.textContent.toLowerCase() || "";
-            it.style.display = t.includes(kw) ? "" : "none";
-        });
-    });
-
-    // プロンプト本文の dirty 管理
+    // 本文 dirty 管理
     els.promptEditor?.addEventListener("input", markDirty);
 
-    // ＋追加ボタン
+    // 追加ボタン
     if (els.btnAdd) {
         els.btnAdd.removeEventListener("click", onClickAdd);
         els.btnAdd.addEventListener("click", onClickAdd);
     }
 
-    // -------------------------------
-    // ★ clientName 表示を prompt-index.json から読み込む
-    // -------------------------------
+    // -------------------------------------------------
+    // ★ prompt-index.json から clientName を読み込んでセット
+    // -------------------------------------------------
     (async () => {
         try {
             const clid = (els.clientId?.value || "").trim().toUpperCase();
@@ -535,42 +529,23 @@ function boot() {
 
             const behavior = behLabel?.textContent || "BASE";
 
-            // bootstrap=false : 既存 index がなければ作らない（読み込み専用）
+            // bootstrap=false → index が無ければ作らない
             const idx = await ensurePromptIndex(clid, behavior, false);
             const clientName = idx?.name || "";
 
             const clientNameEl = document.getElementById("clientName");
             if (clientNameEl) {
                 clientNameEl.value = clientName;
+                clientNameEl.readOnly = true;  // ★ 編集不可
             }
         } catch (err) {
             console.error("ClientName load error:", err);
         }
     })();
 
-    // -------------------------------
-    // ★ clientName を編集したら promptIndex.name を更新＆saveIndex()
-    // -------------------------------
-    const clientNameEl = document.getElementById("clientName");
-    if (clientNameEl) {
-        clientNameEl.addEventListener("input", async (e) => {
-            if (!promptIndex) return;      // まだ index 読めてない場合は何もしない
-            promptIndex.name = e.target.value;
-            await saveIndex();
-        });
-    }
-    // =============
-    // ★ UI を編集不可にする
-    // =============
-    const clientIdEl = document.getElementById("clientId");
-    if (clientIdEl) clientIdEl.readOnly = true;
-
-    const clientNameEl = document.getElementById("clientName");
-    if (clientNameEl) clientNameEl.readOnly = true;
-
-    const apiBaseEl = document.getElementById("apiBase");
-    if (apiBaseEl) apiBaseEl.readOnly = true;
+    // ★★ clientName の編集イベントは削除（保存されないようにする） ★★
 }
+
 
 function markDirty() {
     dirty = true;
