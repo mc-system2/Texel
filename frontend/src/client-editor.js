@@ -179,7 +179,52 @@ function validateGrid(){
 // ---- 行内操作 + Studio 起動 ----
 els.gridBody.addEventListener("click",(e)=>{
   const tr = e.target.closest("tr"); if(!tr) return;
-  if(e.target.classList.contains("btn-del")){ tr.remove(); els.count.textContent = String(els.gridBody.querySelectorAll("tr").length); validateGrid(); return; }
+if (e.target.classList.contains("btn-del")) {
+    const code = tr.querySelector(".code").value.trim().toUpperCase();
+    if (!/^[A-Z0-9]{4}$/.test(code)) {
+        showAlert("コードが不正です","error");
+        return;
+    }
+
+    if (!confirm(`クライアント「${code}」を削除しますか？\n\nBlob上のフォルダも物理削除されます。`)) {
+        return;
+    }
+
+    const prefix = `client/${code}/`;
+    const apiBase = els.apiBase.value.trim();
+
+    (async () => {
+        setStatus("削除中…");
+        try {
+            const url = apiBase.replace(/\/+$/,"") + "/DeleteClientFolder";
+            const body = { prefix };
+
+            const res = await fetch(url, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(body)
+            });
+
+            if (!res.ok) {
+                const t = await res.text().catch(()=>"");
+                throw new Error(`DeleteClientFolder 失敗: ${t}`);
+            }
+
+            // 成功：UI から行削除
+            tr.remove();
+            els.count.textContent = String(els.gridBody.querySelectorAll("tr").length);
+            validateGrid();
+            showAlert(`削除完了（${code}）`, "ok");
+
+        } catch (err) {
+            showAlert(err.message || "削除に失敗しました", "error");
+        } finally {
+            setStatus("");
+        }
+    })();
+
+    return;
+}
   if(e.target.classList.contains("btn-dup")){ const copy = tr.cloneNode(true); copy.querySelectorAll(".code-hint").forEach(h=>h.remove()); els.gridBody.insertBefore(copy, tr.nextSibling); attachCodeWatcher(copy); copy.querySelector(".code").value = issueNewCode(); els.count.textContent = String(els.gridBody.querySelectorAll("tr").length); validateGrid(); return; }
   if(e.target.classList.contains("studio-link")){ openPromptStudioForRow(tr); return; }
 });
