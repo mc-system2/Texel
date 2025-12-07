@@ -693,12 +693,14 @@ async function renderFileList() {
         li.setAttribute("draggable", "false");
     }
 
-    const lockIcon = locked ? `<span class="lock">🔒</span>` : "";
+    const icon = locked
+        ? `<span class="lock-icon" title="固定プロンプト">🔒</span>`
+        : "";   // ロックしていなければ何も表示しない
 
     li.innerHTML = `
         <span class="drag">≡</span>
         <div class="name">
-            <span class="lock-icon" title="位置固定">📌</span>
+            ${icon}
             <input type="text"
                   class="name-input"
                   value="${name}"
