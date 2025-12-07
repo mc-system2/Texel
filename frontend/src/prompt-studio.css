@@ -259,3 +259,22 @@ body {
     flex: 1;
     min-width: 0;
 }
+
+.fileitem .name {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.fileitem .name-input {
+    flex: 1;
+    border: none;
+    background: transparent;
+    padding: 0 2px;
+    font: inherit;
+    min-width: 0;
+}
+
+.fileitem.locked .name-input {
+    color: #888;
+}

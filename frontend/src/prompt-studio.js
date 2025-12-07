@@ -637,6 +637,11 @@ async function renderFileList() {
             return (a.order ?? 0) - (b.order ?? 0);
         });
 
+    rows.forEach(it => {
+        if (it.file === ROOM && !it.lock) {
+            it.lock = true;      // 既存 index でも強制的に lock を立てる
+        }
+    });
 
     // drag handlers once
     if (!dragBound) {
@@ -654,8 +659,6 @@ async function renderFileList() {
         }
         );
         els.fileList.addEventListener('drop', async () => {
-            const ROOM = KIND_TO_NAME["roomphoto"];
-
             const lis = [...els.fileList.querySelectorAll('.fileitem')];
 
             lis.forEach((el, i) => {
@@ -663,45 +666,52 @@ async function renderFileList() {
                 const it2 = promptIndex.items.find(x => x.file === f);
                 if (!it2) return;
 
-                // ★ roomphoto（lock=true）は order=1 に固定
-                if (it2.lock || f === ROOM) {
-                    it2.order = 1;
-                    return;
-                }
-
-                // ★ 他は 2 番目以降へ
-                it2.order = i + 2;
+                // 一旦ドラッグ後の順番で 10,20,30... を付ける
+                it2.order = (i + 1) * 10;
             });
 
+            // 最終的な並びは fixRoomphotoOrder 側で
             fixRoomphotoOrder();
             await saveIndex();
         });
     }
 
     for (const it of rows) {
-        const name = it.name || prettifyNameFromFile(it.file);
-        const li = document.createElement("div");
-        li.className = "fileitem" + (it.lock ? " locked" : "");
-        li.dataset.file = it.file;
-        li.draggable = !it.lock;
+    const name = it.name || prettifyNameFromFile(it.file);
+    const isRoom = (it.file === ROOM);
+    if (isRoom && !it.lock) it.lock = true;     // 念のためここでも lock を保証
+    const locked = !!it.lock;
 
-        if (it.lock) {
-            li.draggable = false;
-            li.setAttribute("draggable", "false");
-        }
+    const li = document.createElement("div");
+    li.className = "fileitem" + (locked ? " locked" : "");
+    li.dataset.file = it.file;
+    li.draggable = !locked;
 
-        const lockIcon = it.lock ? `<span class="lock">🔒</span>` : "";
+    if (locked) {
+        li.draggable = false;
+        li.setAttribute("draggable", "false");
+    }
 
-        li.innerHTML = `<span class="drag">≡</span>
-                    <div class="name" title="${it.file}">${lockIcon}${name}</div>
-                    <div class="meta">
-                      ${it.lock ? "" : '<button class="rename" title="名称を変更">✎</button>'}
-                      ${it.lock ? "" : '<button class="delete" title="削除">🗑</button>'}
-                    </div>`;
-        els.fileList.appendChild(li);
+    const lockIcon = locked ? `<span class="lock">🔒</span>` : "";
+
+    li.innerHTML = `
+        <span class="drag">≡</span>
+        <div class="name">
+            ${lockIcon}
+            <input type="text"
+                  class="name-input"
+                  value="${name}"
+                  title="${it.file}"
+                  ${locked ? "readonly" : ""}>
+        </div>
+        <div class="meta">
+            ${locked ? "" : '<button class="delete" title="一覧から削除">🗑</button>'}
+        </div>`;
+    els.fileList.appendChild(li);
+
 
 // --- dragstart / dragend（ロック項目は一切動かないようにする） ---
-if (!it.lock) {
+if (!locked) {
 
     // 通常アイテムのみ dragstart を許可
     li.addEventListener('dragstart', () => {
@@ -746,45 +756,52 @@ if (!it.lock) {
 
 
         li.addEventListener("click", async (e) => {
-            if (e.target.closest("button"))
-                return;
-            // handled by buttons
+            if (e.target.closest("button") || e.target.closest("input"))
+                return; // ボタンと名前入力中は open しない
             await openByFilename(it.file);
-        }
-        );
+        });
 
-        if (!it.lock) {
-            li.querySelector(".rename")?.addEventListener("click", async (e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                const nv = prompt("表示名の変更", name);
-                if (nv != null) {
-                    try {
-                        li.querySelector('.name').innerHTML = (it.lock ? '<span class="lock">🔒</span>' : '') + nv.trim();
-                        setStatus('名称を変更中…', 'orange');
-                        await renameIndexItem(it.file, nv.trim());
-                        setStatus('名称を変更しました。', 'green');
-                        await renderFileList();
-                    } catch (err) {
-                        console.error(err);
-                        setStatus('名称変更に失敗: ' + (err?.message || err), 'red');
-                        await reloadIndex();
-                        await renderFileList();
-                    }
-                }
-            }
-            );
-            li.querySelector(".delete")?.addEventListener("click", async (e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                if (!confirm(`「${name}」を一覧から削除します。ファイル自体は削除されません。よろしいですか？`))
-                    return;
-                await deleteIndexItem(it.file);
-                await reloadIndex();
-                await renderFileList();
-            }
-            );
+if (!locked) {
+    const input = li.querySelector(".name-input");
+
+    // フォーカスを外したときに名称を保存
+    input.addEventListener("blur", async (e) => {
+        const nv = (e.target.value || "").trim();
+        if (!nv || nv === name) return;
+        try {
+            setStatus('名称を変更中…', 'orange');
+            await renameIndexItem(it.file, nv);
+            setStatus('名称を変更しました。', 'green');
+            await reloadIndex();
+            await renderFileList();
+        } catch (err) {
+            console.error(err);
+            setStatus('名称変更に失敗: ' + (err?.message || err), 'red');
+            await reloadIndex();
+            await renderFileList();
         }
+    });
+
+    // Enter で blur を発火させる
+    input.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") {
+            e.preventDefault();
+            input.blur();
+        }
+    });
+
+    // 削除ボタン
+    li.querySelector(".delete")?.addEventListener("click", async (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (!confirm(`「${name}」を一覧から削除します。ファイル自体は削除されません。よろしいですか？`))
+            return;
+        await deleteIndexItem(it.file);
+        await reloadIndex();
+        await renderFileList();
+    });
+}
+
     }
 }
 
