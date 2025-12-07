@@ -645,17 +645,26 @@ async function renderFileList() {
         }
         );
         els.fileList.addEventListener('drop', async () => {
+            const ROOM = KIND_TO_NAME["roomphoto"];
+
             const lis = [...els.fileList.querySelectorAll('.fileitem')];
-            lis.forEach( (el, i) => {
+
+            lis.forEach((el, i) => {
                 const f = el.dataset.file;
                 const it = promptIndex.items.find(x => x.file === f);
-                if (it)
-                    it.order = (i + 1) * 10;
-            }
-            );
+                if (!it) return;
+
+                if (f === ROOM) {
+                    it.order = 10;
+                    return;
+                }
+
+                it.order = (i + 1) * 10;
+            });
+
+            fixRoomphotoOrder();
             await saveIndex();
-        }
-        );
+        });
     }
 
     for (const it of rows) {
@@ -679,17 +688,27 @@ async function renderFileList() {
             li.addEventListener('dragstart', () => li.classList.add('dragging'));
             li.addEventListener('dragend', async () => {
                 li.classList.remove('dragging');
+                const ROOM = KIND_TO_NAME["roomphoto"];
+
                 const lis = [...els.fileList.querySelectorAll('.fileitem')];
-                lis.forEach( (el, i) => {
+
+                lis.forEach((el, i) => {
                     const f = el.dataset.file;
                     const it2 = promptIndex.items.find(x => x.file === f);
-                    if (it2)
-                        it2.order = (i + 1) * 10;
-                }
-                );
+                    if (!it2) return;
+
+                    // roomphoto は順番変更禁止（常に order = 10）
+                    if (f === ROOM) {
+                        it2.order = 10;
+                        return;
+                    }
+
+                    it2.order = (i + 1) * 10;
+                });
+
+                fixRoomphotoOrder();
                 await saveIndex();
-            }
-            );
+            });
         }
 
         li.addEventListener("click", async (e) => {
@@ -945,3 +964,17 @@ async function onClickAdd() {
     } catch (e) {}
 }
 )();
+
+function fixRoomphotoOrder() {
+    const ROOM = KIND_TO_NAME["roomphoto"];
+    if (!promptIndex || !Array.isArray(promptIndex.items)) return;
+
+    const rp = promptIndex.items.find(x => x.file === ROOM);
+    if (rp) rp.order = 10;
+
+    let n = 20;
+    promptIndex.items
+        .filter(x => x.file !== ROOM)
+        .sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
+        .forEach(x => x.order = n += 10);
+}
