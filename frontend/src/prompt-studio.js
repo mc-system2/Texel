@@ -647,18 +647,42 @@ async function renderFileList() {
     // drag handlers once
     if (!dragBound) {
         dragBound = true;
+
+        // ============================
+        // ★ dragover で「Roomphoto の上に入る」操作を禁止
+        // ============================
         els.fileList.addEventListener('dragover', (e) => {
             e.preventDefault();
+
             const dragging = document.querySelector('.fileitem.dragging');
-            const after = getDragAfterElement(els.fileList, e.clientY);
-            if (dragging) {
-                if (!after)
-                    els.fileList.appendChild(dragging);
-                else
-                    els.fileList.insertBefore(dragging, after);
+            if (!dragging) return;
+
+            const ROOM = KIND_TO_NAME["roomphoto"];
+
+            // Roomphoto のDOM要素を取得
+            const roomEl = [...els.fileList.children].find(x => x.dataset.file === ROOM);
+            if (!roomEl) return;
+
+            const roomBox = roomEl.getBoundingClientRect();
+
+            // ★ もしカーソル位置が roomphoto より上なら → いれない
+            if (e.clientY < roomBox.bottom) {
+                return; // ← ここで placement を拒否
             }
-        }
-        );
+
+            // 通常のドラッグ処理
+            const after = getDragAfterElement(els.fileList, e.clientY);
+            if (!after) {
+                els.fileList.appendChild(dragging);
+            } else {
+                els.fileList.insertBefore(dragging, after);
+            }
+        });
+
+
+        // ============================
+        // drop 時の処理（順番再計算）
+        // ============================
         els.fileList.addEventListener('drop', async () => {
             const lis = [...els.fileList.querySelectorAll('.fileitem')];
 
@@ -671,8 +695,9 @@ async function renderFileList() {
                 it2.order = (i + 1) * 10;
             });
 
-            // 最終的な並びは fixRoomphotoOrder 側で
+            // ★ 最後に Roomphoto の順番を order=1 に強制固定
             fixRoomphotoOrder();
+
             await saveIndex();
         });
     }
