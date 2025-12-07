@@ -660,15 +660,17 @@ async function renderFileList() {
 
             lis.forEach((el, i) => {
                 const f = el.dataset.file;
-                const it = promptIndex.items.find(x => x.file === f);
-                if (!it) return;
+                const it2 = promptIndex.items.find(x => x.file === f);
+                if (!it2) return;
 
-                if (f === ROOM) {
-                    it.order = 10;
+                // ★ roomphoto（lock=true）は order=1 に固定
+                if (it2.lock || f === ROOM) {
+                    it2.order = 1;
                     return;
                 }
 
-                it.order = (i + 1) * 10;
+                // ★ 他は 2 番目以降へ
+                it2.order = i + 2;
             });
 
             fixRoomphotoOrder();
@@ -683,6 +685,11 @@ async function renderFileList() {
         li.dataset.file = it.file;
         li.draggable = !it.lock;
 
+        if (it.lock) {
+            li.draggable = false;
+            li.setAttribute("draggable", "false");
+        }
+
         const lockIcon = it.lock ? `<span class="lock">🔒</span>` : "";
 
         li.innerHTML = `<span class="drag">≡</span>
@@ -693,32 +700,50 @@ async function renderFileList() {
                     </div>`;
         els.fileList.appendChild(li);
 
-        if (!it.lock) {
-            li.addEventListener('dragstart', () => li.classList.add('dragging'));
-            li.addEventListener('dragend', async () => {
-                li.classList.remove('dragging');
-                const ROOM = KIND_TO_NAME["roomphoto"];
+// --- dragstart / dragend（ロック項目は一切動かないようにする） ---
+if (!it.lock) {
 
-                const lis = [...els.fileList.querySelectorAll('.fileitem')];
+    // 通常アイテムのみ dragstart を許可
+    li.addEventListener('dragstart', () => {
+        li.classList.add('dragging');
+    });
 
-                lis.forEach((el, i) => {
-                    const f = el.dataset.file;
-                    const it2 = promptIndex.items.find(x => x.file === f);
-                    if (!it2) return;
+    li.addEventListener('dragend', async () => {
+        li.classList.remove('dragging');
 
-                    // roomphoto は順番変更禁止（常に order = 10）
-                    if (f === ROOM) {
-                        it2.order = 10;
-                        return;
-                    }
+        const ROOM = KIND_TO_NAME["roomphoto"];
+        const lis = [...els.fileList.querySelectorAll('.fileitem')];
 
-                    it2.order = (i + 1) * 10;
-                });
+        lis.forEach((el, i) => {
+            const f = el.dataset.file;
+            const it2 = promptIndex.items.find(x => x.file === f);
+            if (!it2) return;
 
-                fixRoomphotoOrder();
-                await saveIndex();
-            });
-        }
+            // ★ roomphoto（lock=true）は絶対に順番変更しない（order=1固定）
+            if (it2.lock || f === ROOM) {
+                it2.order = 1;  // 先頭固定
+                return;
+            }
+
+            // ★ その他は 2番目以降として order を再計算
+            it2.order = i + 2;
+        });
+
+        fixRoomphotoOrder();
+        await saveIndex();
+    });
+
+} else {
+
+    // ★ ロック項目（roomphoto）は dragstart そのものを禁止する
+    li.addEventListener("dragstart", (e) => {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        return false;
+    });
+    li.setAttribute("draggable", "false");
+}
+
 
         li.addEventListener("click", async (e) => {
             if (e.target.closest("button"))
@@ -978,11 +1003,11 @@ function fixRoomphotoOrder() {
     const ROOM = KIND_TO_NAME["roomphoto"];
     if (!promptIndex || !Array.isArray(promptIndex.items)) return;
 
-    // ① roomphoto は order = 1 に固定
+    // roomphoto を order=1 に固定
     const rp = promptIndex.items.find(x => x.file === ROOM);
     if (rp) rp.order = 1;
 
-    // ② 他の要素は 2, 3, 4... と続ける
+    // その他を 2,3,4... と並べる
     let n = 2;
     promptIndex.items
         .filter(x => x.file !== ROOM)
