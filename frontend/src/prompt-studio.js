@@ -374,16 +374,17 @@ async function renameIndexItem(file, newName) {
     const it = promptIndex?.items?.find(x => x.file === file);
     if (!it)
         throw new Error("対象が見つかりません。");
-    if (it.lock)
-        throw new Error("ロックされている項目は名称変更できません。");
+
     const nv = (newName || "").trim();
     if (!nv)
         throw new Error("名称が空です。");
+
     it.name = nv;
     await saveIndex();
     await reloadIndex();
     return true;
 }
+
 async function deleteIndexItem(file) {
     const i = promptIndex.items.findIndex(x => x.file === file);
     if (i < 0 || promptIndex.items[i].lock)
@@ -697,12 +698,11 @@ async function renderFileList() {
     li.innerHTML = `
         <span class="drag">≡</span>
         <div class="name">
-            ${lockIcon}
+            <span class="lock-icon" title="位置固定">📌</span>
             <input type="text"
                   class="name-input"
                   value="${name}"
-                  title="${it.file}"
-                  ${locked ? "readonly" : ""}>
+                  title="${it.file}">
         </div>
         <div class="meta">
             ${locked ? "" : '<button class="delete" title="一覧から削除">🗑</button>'}
@@ -710,49 +710,49 @@ async function renderFileList() {
     els.fileList.appendChild(li);
 
 
-// --- dragstart / dragend（ロック項目は一切動かないようにする） ---
-if (!locked) {
+        // --- dragstart / dragend（ロック項目は一切動かないようにする） ---
+        if (!locked) {
 
-    // 通常アイテムのみ dragstart を許可
-    li.addEventListener('dragstart', () => {
-        li.classList.add('dragging');
-    });
+            // 通常アイテムのみ dragstart を許可
+            li.addEventListener('dragstart', () => {
+                li.classList.add('dragging');
+            });
 
-    li.addEventListener('dragend', async () => {
-        li.classList.remove('dragging');
+            li.addEventListener('dragend', async () => {
+                li.classList.remove('dragging');
 
-        const ROOM = KIND_TO_NAME["roomphoto"];
-        const lis = [...els.fileList.querySelectorAll('.fileitem')];
+                const ROOM = KIND_TO_NAME["roomphoto"];
+                const lis = [...els.fileList.querySelectorAll('.fileitem')];
 
-        lis.forEach((el, i) => {
-            const f = el.dataset.file;
-            const it2 = promptIndex.items.find(x => x.file === f);
-            if (!it2) return;
+                lis.forEach((el, i) => {
+                    const f = el.dataset.file;
+                    const it2 = promptIndex.items.find(x => x.file === f);
+                    if (!it2) return;
 
-            // ★ roomphoto（lock=true）は絶対に順番変更しない（order=1固定）
-            if (it2.lock || f === ROOM) {
-                it2.order = 1;  // 先頭固定
-                return;
-            }
+                    // ★ roomphoto（lock=true）は絶対に順番変更しない（order=1固定）
+                    if (it2.lock || f === ROOM) {
+                        it2.order = 1;  // 先頭固定
+                        return;
+                    }
 
-            // ★ その他は 2番目以降として order を再計算
-            it2.order = i + 2;
-        });
+                    // ★ その他は 2番目以降として order を再計算
+                    it2.order = i + 2;
+                });
 
-        fixRoomphotoOrder();
-        await saveIndex();
-    });
+                fixRoomphotoOrder();
+                await saveIndex();
+            });
 
-} else {
+        } else {
 
-    // ★ ロック項目（roomphoto）は dragstart そのものを禁止する
-    li.addEventListener("dragstart", (e) => {
-        e.preventDefault();
-        e.stopImmediatePropagation();
-        return false;
-    });
-    li.setAttribute("draggable", "false");
-}
+            // ★ ロック項目（roomphoto）は dragstart そのものを禁止する
+            li.addEventListener("dragstart", (e) => {
+                e.preventDefault();
+                e.stopImmediatePropagation();
+                return false;
+            });
+            li.setAttribute("draggable", "false");
+        }
 
 
         li.addEventListener("click", async (e) => {
@@ -761,47 +761,46 @@ if (!locked) {
             await openByFilename(it.file);
         });
 
-if (!locked) {
-    const input = li.querySelector(".name-input");
+        const input = li.querySelector(".name-input");
 
-    // フォーカスを外したときに名称を保存
-    input.addEventListener("blur", async (e) => {
-        const nv = (e.target.value || "").trim();
-        if (!nv || nv === name) return;
-        try {
-            setStatus('名称を変更中…', 'orange');
-            await renameIndexItem(it.file, nv);
-            setStatus('名称を変更しました。', 'green');
-            await reloadIndex();
-            await renderFileList();
-        } catch (err) {
-            console.error(err);
-            setStatus('名称変更に失敗: ' + (err?.message || err), 'red');
-            await reloadIndex();
-            await renderFileList();
+        // ★ roomphoto でも名前変更は許可するので常に blur を登録
+        input.addEventListener("blur", async (e) => {
+            const nv = (e.target.value || "").trim();
+            if (!nv || nv === name) return;
+            try {
+                setStatus('名称を変更中…', 'orange');
+                await renameIndexItem(it.file, nv);
+                setStatus('名称を変更しました。', 'green');
+                await reloadIndex();
+                await renderFileList();
+            } catch (err) {
+                console.error(err);
+                setStatus('名称変更に失敗: ' + (err?.message || err), 'red');
+                await reloadIndex();
+                await renderFileList();
+            }
+        });
+
+        // Enter → blur
+        input.addEventListener("keydown", (e) => {
+            if (e.key === "Enter") {
+                e.preventDefault();
+                input.blur();
+            }
+        });
+
+        // ★ 削除ボタンは「locked=false のときだけ」付ける
+        if (!locked) {
+            li.querySelector(".delete")?.addEventListener("click", async (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                if (!confirm(`「${name}」を一覧から削除します。ファイル自体は削除されません。よろしいですか？`))
+                    return;
+                await deleteIndexItem(it.file);
+                await reloadIndex();
+                await renderFileList();
+            });
         }
-    });
-
-    // Enter で blur を発火させる
-    input.addEventListener("keydown", (e) => {
-        if (e.key === "Enter") {
-            e.preventDefault();
-            input.blur();
-        }
-    });
-
-    // 削除ボタン
-    li.querySelector(".delete")?.addEventListener("click", async (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        if (!confirm(`「${name}」を一覧から削除します。ファイル自体は削除されません。よろしいですか？`))
-            return;
-        await deleteIndexItem(it.file);
-        await reloadIndex();
-        await renderFileList();
-    });
-}
-
     }
 }
 
