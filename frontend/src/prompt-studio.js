@@ -474,55 +474,90 @@ paramKeys.forEach( ([k]) => {
 window.addEventListener("DOMContentLoaded", boot);
 let dragBound = false;
 function boot() {
-  const q = new URLSearchParams(location.hash.replace(/^#\??/, ''));
-  els.clientId && (els.clientId.value = (q.get("client") || "").toUpperCase());
-  const beh = (q.get("behavior") || "BASE").toUpperCase();
-  document.getElementById("behaviorLabel").textContent = beh;
-  els.apiBase && (els.apiBase.value = q.get("api") || DEV_API);
+    const q = new URLSearchParams(location.hash.replace(/^#\??/, ''));
+    // Client ID
+    if (els.clientId) {
+        els.clientId.value = (q.get("client") || "").toUpperCase();
+    }
 
-  if (els.search) {
-      els.search.style.display = 'none';
-  }
-  renderFileList();
+    // Behavior ラベル（表示専用）
+    const beh = (q.get("behavior") || "BASE").toUpperCase();
+    const behLabel = document.getElementById("behaviorLabel");
+    if (behLabel) behLabel.textContent = beh;
 
-  window.addEventListener("keydown", (e) => {
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") {
-          e.preventDefault();
-          saveCurrent();
-      }
-  }
-  );
+    // API Base
+    if (els.apiBase) {
+        els.apiBase.value = q.get("api") || DEV_API;
+    }
 
-  els.search?.addEventListener("input", () => {
-      const kw = (els.search.value || "").toLowerCase();
-      [...(els.fileList?.children || [])].forEach(it => {
-          const t = it.querySelector(".name")?.textContent.toLowerCase() || "";
-          it.style.display = t.includes(kw) ? "" : "none";
-      }
-      );
-  }
-  );
+    // Search を非表示
+    if (els.search) {
+        els.search.style.display = "none";
+    }
 
-  els.promptEditor?.addEventListener("input", markDirty);
+    // 左側リスト描画（中で ensurePromptIndex が呼ばれる）
+    renderFileList();
 
-  if (els.btnAdd) {
-      els.btnAdd.removeEventListener("click", onClickAdd);
-      els.btnAdd.addEventListener("click", onClickAdd);
-  }
+    // Ctrl+S で保存
+    window.addEventListener("keydown", (e) => {
+        if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") {
+            e.preventDefault();
+            saveCurrent();
+        }
+    });
 
-  document.getElementById("clientName")?.addEventListener("input", async (e) => {
-      if (!promptIndex) return;
-      promptIndex.name = e.target.value;
-      await saveIndex();
-  });
+    // （今は非表示だが）検索フィルタ
+    els.search?.addEventListener("input", () => {
+        const kw = (els.search.value || "").toLowerCase();
+        [...(els.fileList?.children || [])].forEach(it => {
+            const t = it.querySelector(".name")?.textContent.toLowerCase() || "";
+            it.style.display = t.includes(kw) ? "" : "none";
+        });
+    });
 
-  const clid = els.clientId.value.trim().toUpperCase();
-  const beh = document.getElementById("behaviorLabel").textContent;
-  ensurePromptIndex(clid, beh, false).then(idx => {
-      const nm = idx?.name || "";
-      const clientNameEl = document.getElementById("clientName");
-      if (clientNameEl) clientNameEl.value = nm;
-  });
+    // プロンプト本文の dirty 管理
+    els.promptEditor?.addEventListener("input", markDirty);
+
+    // ＋追加ボタン
+    if (els.btnAdd) {
+        els.btnAdd.removeEventListener("click", onClickAdd);
+        els.btnAdd.addEventListener("click", onClickAdd);
+    }
+
+    // -------------------------------
+    // ★ clientName 表示を prompt-index.json から読み込む
+    // -------------------------------
+    (async () => {
+        try {
+            const clid = (els.clientId?.value || "").trim().toUpperCase();
+            if (!clid) return;
+
+            const behavior = behLabel?.textContent || "BASE";
+
+            // bootstrap=false : 既存 index がなければ作らない（読み込み専用）
+            const idx = await ensurePromptIndex(clid, behavior, false);
+            const clientName = idx?.name || "";
+
+            const clientNameEl = document.getElementById("clientName");
+            if (clientNameEl) {
+                clientNameEl.value = clientName;
+            }
+        } catch (err) {
+            console.error("ClientName load error:", err);
+        }
+    })();
+
+    // -------------------------------
+    // ★ clientName を編集したら promptIndex.name を更新＆saveIndex()
+    // -------------------------------
+    const clientNameEl = document.getElementById("clientName");
+    if (clientNameEl) {
+        clientNameEl.addEventListener("input", async (e) => {
+            if (!promptIndex) return;      // まだ index 読めてない場合は何もしない
+            promptIndex.name = e.target.value;
+            await saveIndex();
+        });
+    }
 }
 
 function markDirty() {
