@@ -1,7 +1,19 @@
 {
-  "name": "texel-api",
-  "version": "0.0.1",
-  "type": "module",
-  "main": "index.js",
-  "dependencies": { "@azure/functions": "^4.4.0" }
+  "name": "",
+  "version": "1.0.0",
+  "description": "",
+  "main": "src/functions/*.js",
+  "scripts": {
+    "start": "func start",
+    "test": "echo \"No tests yet...\""
+  },
+  "dependencies": {
+    "@azure/functions": "^4.0.0",
+    "@azure/storage-blob": "^12.28.0",
+    "axios": "^1.12.2",
+    "uuid": "^13.0.0"
+  },
+  "devDependencies": {
+    "azure-functions-core-tools": "^4.x"
+  }
 }

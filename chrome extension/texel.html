@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Texel</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <style>
+      :root {
+        /* ===== Texel theme colors (tweak freely) ===== */
+        --tx-bg: #f7faf9;           /* app background */
+        --tx-paper: #ffffff;        /* cards/sections */
+        --tx-border: #d5e1dd;       /* subtle borders */
+        --tx-muted: #6b7d77;        /* secondary text */
+        --tx-primary: #0d9488;      /* teal (brand) */
+        --tx-primary-strong: #0b7b73; /* hover */
+        --tx-accent: #14b8a6;      /* light accent */
+        --tx-drop-bg: #f1fbf9;     /* dropzone bg */
+        --tx-danger: #ef4444;      /* warnings */
+      }
+
+      html, body { height: 100%; }
+
+      body {
+        font-family: system-ui, -apple-system, Segoe UI, Roboto, "Noto Sans JP", "Hiragino Kaku Gothic ProN", "Yu Gothic UI", "Meiryo", sans-serif;
+        margin: 0;
+        padding: 12px;
+        background: var(--tx-bg);
+        color: #111;
+      }
+
+      section {
+        border-top: 2px solid var(--tx-border);
+        margin-top: 24px;
+        padding: 20px;
+        background-color: var(--tx-paper);
+        position: relative;
+        border-radius: 10px;
+        box-shadow: 0 0 0 1px rgba(0,0,0,0.02), 0 2px 10px rgba(0,0,0,0.04);
+      }
+
+      .disabled { opacity: 0.45; pointer-events: none; }
+
+      h2 { margin-top: 0; }
+
+      .drop-zone {
+        border: 2px dashed var(--tx-border);
+        padding: 20px;
+        background: var(--tx-drop-bg);
+        text-align: center;
+        color: var(--tx-muted);
+        position: relative;
+        margin-bottom: 8px;
+        border-radius: 10px;
+      }
+
+      .drop-zone.highlight {
+        background-color: #dff7f3;
+        border-color: var(--tx-primary);
+        color: var(--tx-primary);
+      }
+
+      .drop-zone img {
+        max-width: 100%;
+        height: auto;
+        display: block;
+        margin-top: 10px;
+      }
+
+      .analysis-area {
+        background: var(--tx-paper);
+        padding: 10px;
+        margin-top: 8px;
+        border: 1px solid var(--tx-border);
+        text-align: left;
+        color: #000;
+        border-radius: 8px;
+      }
+
+      .analysis-area textarea {
+        width: 100%;
+        height: 100px;
+        font-size: 13px;
+        font-family: inherit;
+      }
+
+      .toggle-button { font-size: 13px; color: #34423e; cursor: pointer; margin: 6px 0; }
+
+      /* Spinner (hidden by default) */
+      .spinner {
+        display: none;
+        border: 4px solid #eef4f2;
+        border-top: 4px solid var(--tx-primary);
+        border-radius: 50%;
+        width: 20px; height: 20px;
+        animation: spin 1s linear infinite;
+        margin: 8px auto;
+      }
+      @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+
+      button {
+        padding: 10px 18px;
+        font-size: 14px;
+        background-color: var(--tx-primary);
+        color: white;
+        border: none;
+        border-radius: 8px;
+        cursor: pointer;
+        margin: 10px auto;
+        display: block;
+        box-shadow: 0 1px 0 rgba(0,0,0,0.06);
+      }
+      button:disabled { background-color: #cbd5d1; cursor: not-allowed; }
+      button.pressable { transition: transform 0.1s ease; }
+      button.pressable:active { transform: translateY(2px); box-shadow: inset 0 2px 4px rgba(0,0,0,0.2); }
+
+      .copy-button {
+        font-size: 11px;
+        padding: 6px 10px;
+        background-color: #edf8f6;
+        border: 1px solid var(--tx-border);
+        border-radius: 6px;
+        cursor: pointer;
+        margin-top: 4px;
+        color: #0f172a;
+      }
+      .copy-button:hover { background-color: #e4f6f2; }
+      .copy-button:active { transform: translateY(2px); box-shadow: none; }.prompt-config-link:hover { color: var(--tx-primary); }
+
+      .tool-button {
+        padding: 6px 12px;
+        background-color: var(--tx-primary);
+        color: white; border: none; border-radius: 6px; font-size: 13px; cursor: pointer;
+        transition: background-color 0.2s ease;
+      }
+      .tool-button:hover { background-color: var(--tx-primary-strong); }
+      .tool-button:disabled { background-color: #cbd5d1; cursor: not-allowed; }
+
+      .modal-input {
+        width: 90%; max-width: 260px; box-sizing: border-box; padding: 8px; margin: 12px auto; display: block; font-size: 14px;
+        border: 1px solid var(--tx-border); border-radius: 6px;
+      }
+
+      /* suggestion内個別エリアにも右上歯車がうまく配置されるように微調整 */
+      .analysis-area#code-banner {
+        position: sticky; top: 0; left: 0; width: 100%; border-radius: 8px; text-align: center;
+        background: var(--tx-primary); color: #fff; font-weight: 700; padding: 6px 12px;
+        box-sizing: border-box; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; z-index: 1000;
+      }
+
+      #northVectorSelect.warning { border: 2px solid var(--tx-danger); animation: blink 1s ease-in-out infinite; }
+      .glow { animation: glow-border 1s infinite alternate; }
+      @keyframes glow-border { from { box-shadow: 0 0 4px 2px rgba(20, 184, 166, 0.35); } to { box-shadow: 0 0 8px 4px rgba(20, 184, 166, 0.6); } }
+
+      textarea.auto-grow { overflow: hidden; resize: none; min-height: 120px; line-height: 1.4em; }
+      .flash { animation: flash-bg 0.8s ease-out; }
+      @keyframes flash-bg { 0% { background: rgba(20, 184, 166, .15); } 100% { background: transparent; } }
+
+      /* ===== Gate overlay ===== */
+      #gate-overlay {
+        position: fixed; inset: 0; background: rgba(247,250,249,0.95);
+        display: flex; align-items: center; justify-content: center; z-index: 10000;
+      }
+      #gate-card {
+        background: #fff; border: 1px solid var(--tx-border); border-radius: 12px;
+        padding: 18px; width: min(92vw, 420px); box-shadow: 0 10px 30px rgba(0,0,0,.08);
+        text-align: center;
+      }
+      #gate-card h3 { margin: 0 0 6px; }
+      #gate-retry { margin-top: 8px; }
+      #gate-progress { margin: 10px auto; border: 4px solid #eef4f2; border-top: 4px solid var(--tx-primary); border-radius: 50%; width: 22px; height: 22px; animation: spin 1s linear infinite; }
+      #signed-user { font-weight: 600; }
+    </style>
+  </head>
+  <body>
+    <div id="code-banner">Texel <span id="banner-user" style="opacity:.9;font-weight:600;"></span></div>
+
+    <!-- ★ Gate Overlay（会社アカウント未確認時は表示） -->
+    <div id="gate-overlay" aria-hidden="true">
+      <div id="gate-card">
+        <h3>会社アカウントを確認しています…</h3>
+        <div id="gate-progress"></div>
+        <div id="gate-msg" style="color:#555;font-size:13px;">Google サインイン状態のチェック中</div>
+        <button id="gate-retry" class="copy-button" style="display:none;">会社アカウントでサインイン</button>
+      </div>
+    </div>
+
+    <!-- ★ 新仕様：CL/BKモーダル（Texel.jsのIDと一致） -->
+    <div id="property-code-modal" style="position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.6); display:flex; align-items:center; justify-content:center; z-index:9999;">
+      <div style="background:#fff; padding:20px; border-radius:10px; width:320px; text-align:center; box-shadow:0 10px 30px rgba(0,0,0,.15);">
+        <h3 id="modal-title" style="margin:0 0 8px;">CL ID と BK ID を入力してください</h3>
+        <div id="modal-subtitle" style="font-size:12px; color:#666; margin-bottom:6px;">CL ID は必須です。</div>
+        <!-- CL（必須） -->
+        <input type="text" id="client-code-input" placeholder="例：S001 / R001（4桁英数字）" class="modal-input" />
+        <!-- BK（挙動により出し入れ） -->
+        <div id="bk-wrapper" style="display:none;">
+          <input type="text" id="bk-id-input" placeholder="BK ID（必要なときのみ）" class="modal-input" />
+        </div>
+        <button id="start-button" disabled style="padding:8px 16px; background:var(--tx-primary); color:#fff; border:none; border-radius:8px;">決定</button>
+      </div>
+    </div>
+
+    <!-- PDF 情報セクション -->
+    <section id="pdf-section" class="disabled">
+      <h2>
+        📝 PDFから物件情報を抽出
+      </h2>
+      <div id="pdf-drop" class="drop-zone">ここにPDFをドラッグ＆ドロップ</div>
+      <input type="file" id="pdf-file" accept=".pdf" />
+      <img id="pdf-image-preview" style="display: none; width: 100%; max-height: 240px; object-fit: contain; margin-top: 8px;" />
+      <div class="toggle-button" id="pdf-toggle">▶ 抽出結果を表示</div>
+      <div id="pdf-analysis" class="analysis-area" style="display: none;">
+        <div id="pdf-preview" style="white-space: pre-wrap;"></div>
+      </div>
+      <div id="loadingSpinner-pdf" class="spinner" style="display: none; margin-top: 8px;"></div>
+    </section>
+
+    <section id="propertyinfo-section" class="disabled">
+      <h2>🧠 AI参照用物件メモ</h2>
+      <textarea id="property-info" placeholder="例：駅徒歩3分の南向き。眺望良好で日当たり抜群。モデルルーム公開中など..." rows="5" style="width:100%; font-size:13px;"></textarea>
+    </section>
+
+    <!-- 間取図 情報セクション -->
+    <section id="floorplan-section" class="disabled">
+      <h2>
+        📐 間取図を分析
+      </h2>
+      <div id="floorplan-drop" class="drop-zone">ここに間取図をドラッグ＆ドロップ</div>
+      <input type="file" id="floorplan-file" accept="image/*" />
+      <img id="floorplan-preview" style="display: none; width: 100%; max-height: 240px; object-fit: contain; margin-top: 8px;" />
+
+      <!-- ★ IDを Texel.js に合わせて northSelectorWrap に -->
+      <div id="northSelectorWrap" style="display: none; border: 2px solid var(--tx-danger); border-radius: 10px; margin: 8px 0; padding: 8px;">
+        <label for="northVectorSelect" style="font-size: 13px;">北の方向：</label>
+        <select id="northVectorSelect" style="font-size: 13px;">
+          <option value="">-- 選択 --</option>
+          <option value="up">↑ 上（up）</option>
+          <option value="upright">↗ 右上（upright）</option>
+          <option value="right">→ 右（right）</option>
+          <option value="downright">↘ 右下（downright）</option>
+          <option value="down">↓ 下（down）</option>
+          <option value="downleft">↙ 左下（downleft）</option>
+          <option value="left">← 左（left）</option>
+          <option value="upleft">↖ 左上（upleft）</option>
+        </select>
+        <div style="text-align: center; margin-top: 8px;">
+          <button id="confirmNorthButton" class="copy-button">分析開始</button>
+        </div>
+      </div>
+
+      <div class="toggle-button" id="floorplan-toggle">▶ 分析結果を表示</div>
+      <div id="floorplan-analysis" class="analysis-area">
+        <textarea id="floorplan-preview-text" style="width:100%;min-height:120px;font-size:13px;resize:none;"></textarea>
+      </div>
+      <div id="loadingSpinner-floorplan" class="spinner" style="display: none; margin-top: 8px;"></div>
+    </section>
+
+    <section id="suggestion-section" class="disabled">
+      <h2>
+        ✨ おすすめポイント生成
+      </h2>
+      <button id="generate-suggestions" class="pressable" disabled>おすすめポイントを生成</button>
+      <div id="suggestion-area" class="analysis-area" style="margin-top: 8px;">
+        <textarea id="editable-suggestion" style="width:100%; height:20px; font-size:13px;"></textarea>
+      </div>
+      <div id="suggestion-controls" style="margin-top: 8px; display: flex; gap: 8px; flex-wrap: wrap; align-items: center;">
+        <label style="font-size: 13px;">文字数:</label>
+        <input type="number" id="summary-length" value="500" min="100" max="1000" style="width: 50px; padding: 4px;" /> 文字
+        <label style="font-size: 13px;">出力:</label>
+        <select id="summary-format" style="padding: 4px;">
+          <option value="summary">要約</option>
+          <option value="bullet">箇条書き</option>
+        </select>
+        <button id="generate-summary" class="copy-button">✨ この内容で再生成</button>
+        <button id="reset-suggestion" class="copy-button">↩ 元に戻す</button>
+      </div>
+      <div id="suggestion-tool-row" style="margin-top:4px; display:flex; justify-content:flex-end; gap:8px; align-items:center;">
+        <button id="copy-suggestion" class="copy-button">📋 おすすめポイントをコピー</button>
+        <span id="suggestion-count" style="font-size:12px; color:#555;">0</span>
+      </div>
+      <div id="loadingSpinner-suggestion" class="spinner" style="display: none; margin-top: 8px;"></div>
+
+      <!-- ポータル用キャッチ・コメント -->
+      <div style="margin-top: 16px;">
+        <div class="analysis-area" style="position: relative; margin-top: 16px;">
+          <label style="font-size: 13px;">🏷️ SUUMOキャッチコピー（37文字）</label>
+          <textarea id="suumo-catch" maxlength="37" placeholder="例：南向き・角部屋！駅徒歩3分で生活便利" style="width:100%; height:40px; font-size:13px;"></textarea>
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 4px;">
+            <button class="copy-button" id="copy-suumo-catch">📋 SUUMOキャッチコピーをコピー</button>
+            <span id="suumo-catch-count" style="font-size: 12px; color: #555;">0</span>
+          </div>
+        </div>
+        <div class="analysis-area" style="position: relative; margin-top: 16px;">
+          <label style="font-size: 13px;">💬 SUUMOネット用コメント（300文字）</label>
+          <textarea id="suumo-comment" maxlength="300" placeholder="例：通勤・通学に便利な駅近物件..." style="width:100%; height:40px; font-size:13px;"></textarea>
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 4px;">
+            <button class="copy-button" id="copy-suumo-comment">📋 SUUMOネット用コメントをコピー</button>
+            <span id="suumo-comment-count" style="font-size: 12px; color: #555;">0</span>
+          </div>
+        </div>
+        <div class="analysis-area" style="position: relative; margin-top: 16px;">
+          <label style="font-size: 13px;">🏠 スタッフコメント（100文字）</label>
+          <textarea id="athome-comment" maxlength="100" placeholder="例：日当たり良好な2LDK、収納も豊富。" style="width:100%; height:40px; font-size:13px;"></textarea>
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 4px;">
+            <button class="copy-button" id="copy-athome-comment">📋 スタッフコメントをコピー</button>
+            <span id="athome-comment-count" style="font-size: 12px; color: #555;">0</span>
+          </div>
+        </div>
+        <div class="analysis-area" style="position: relative; margin-top: 16px;">
+          <label style="font-size: 13px;">👪 athomeエンド向けアピール（500文字）</label>
+          <textarea id="athome-appeal" maxlength="500" placeholder="例：家族みんなが快適に暮らせる間取り..." style="width:100%; height:40px; font-size:13px;"></textarea>
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 4px;">
+            <button class="copy-button" id="copy-athome-appeal">📋 athomeエンド向けアピールをコピー</button>
+            <span id="athome-appeal-count" style="font-size: 12px; color: #555;">0</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 部屋写真 情報セクション -->
+    <section id="room-section" class="disabled">
+      <h2>
+        🖼️ 画像を分析
+      </h2>
+      <div id="room-drop" class="drop-zone">ここに部屋写真をドラッグ＆ドロップ</div>
+      <input type="file" id="room-file" accept="image/*" />
+      <img id="room-preview" style="display: none; width: 100%; max-height: 240px; object-fit: contain; margin-top: 8px;" />
+      <div id="analysis-result" class="analysis-area" style="display: none;"></div>
+      <div id="loadingSpinner-room" class="spinner" style="display: none; margin-top: 8px;"></div>
+    </section>
+
+    <section id="history-section" class="disabled">
+      <h2>📁 分析履歴</h2>
+      <div id="history-container"></div>
+    </section>
+
+    <div id="loadingSpinner" class="spinner" style="display: none;"></div>
+
+    <!-- ===== Gate (会社ドメインチェック) 先行実行 ===== -->
+    <script src="texel-gate.js"></script>
+
+    <!-- Texel本体（Gate後もそのまま動作します） -->
+    <script type="module" src="texel.js"></script>
+
+    <!-- 画像ポップアップ用 -->
+    <div id="image-popup-overlay" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.7);z-index:10000;justify-content:center;align-items:center;">
+      <img id="image-popup" src="" style="max-width:90%;max-height:90%;box-shadow:0 0 12px #000;border-radius:8px;" />
+    </div>
+  </body>
+</html>

@@ -1,0 +1,133 @@
+/* ===== ベース（Texelの薄緑トーン） ===== */
+:root{
+  --bg:#f4fbf6; --panel:#fff; --primary:#2bb673; --primary-weak:#d9f2e6;
+  --border:#e5ece8; --text:#233; --muted:#6b7b77; --danger:#e35b5b; --danger-weak:#fde6e6;
+  --shadow:0 1px 2px rgba(0,0,0,.04);
+}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{margin:0;background:var(--bg);color:var(--text);
+  font:14px/1.6 system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,"Noto Sans JP","Hiragino Kaku Gothic ProN",Meiryo,sans-serif}
+
+/* ===== ヘッダ ===== */
+.header{position:sticky;top:0;background:var(--panel);padding:12px 14px;border-bottom:1px solid var(--border);box-shadow:var(--shadow);z-index:10}
+.row{display:flex;align-items:center;gap:8px;margin:6px 0}
+.row.gap{gap:10px}
+.env .btn{
+  opacity:.75;
+  border-color:var(--border);
+  background:#fff;
+  color:#2a4039;
+}
+.env .btn.is-active{
+  opacity:1;
+  background:var(--primary);
+  color:#fff;
+  border-color:transparent;
+  box-shadow:0 0 0 2px rgba(43,182,115,.15) inset;
+}
+.env .btn:is(:hover,:focus-visible){
+  opacity:1;
+}
+/* ===== 入力／ラベル ===== */
+.input{
+  height:36px;padding:0 10px;border:1px solid var(--border);border-radius:8px;background:#fff;min-width:420px
+}
+.label{font-weight:600;color:var(--muted);margin-right:4px}
+.badge{background:var(--primary-weak);color:#0d5f3a;padding:2px 8px;border-radius:999px}
+.muted{color:var(--muted)}
+.meta{display:flex;gap:16px;color:var(--muted);margin-top:6px}
+.alert{margin-top:10px;padding:10px 12px;border-radius:10px;background:var(--danger-weak);color:var(--danger);}
+
+/* ===== ボタン ===== */
+.btn{
+  height:36px;padding:0 12px;border-radius:10px;border:1px solid transparent;background:#eaf7f0;color:#0f5e3b;font-weight:600;cursor:pointer;
+  transition:.15s ease;box-shadow:var(--shadow);display:inline-flex;align-items:center;justify-content:center;vertical-align:middle
+}
+.btn:hover{filter:brightness(0.98)}
+.btn.primary{background:var(--primary);color:#fff}
+.btn.ghost{background:#fff;border-color:var(--border);color:#2a4039}
+.btn.outline{background:#fff;border-color:var(--primary);color:var(--primary)}
+.btn.danger{background:var(--danger);color:#fff}
+.btn.sm{height:30px;min-width:56px;padding:0 10px;border-radius:8px;font-size:12.5px}
+
+/* ← JSON取込のズレ対策：labelをボタン同等にする */
+.fileLabel{display:inline-flex;align-items:center;justify-content:center;vertical-align:middle;line-height:1;height:36px}
+
+/* ===== テーブル ===== */
+main{padding:18px}
+.grid{width:100%;border-collapse:separate;border-spacing:0 10px}
+.grid thead th{text-align:left;font-weight:700;color:#31433d;padding:8px 12px;}
+.grid tbody tr{background:var(--panel);box-shadow:var(--shadow);border:1px solid var(--border);border-radius:12px;overflow:hidden}
+.grid tbody td{padding:10px 12px;vertical-align:middle}
+.grid .cell{width:100%;height:36px;border:1px solid var(--border);border-radius:8px;background:#fff;padding:0 10px}
+.grid select.cell{height:36px}
+
+/* ===== 操作セル（複製・削除のバランス） ===== */
+.ops{
+  display:grid;grid-template-columns:repeat(2,1fr);gap:10px;align-items:center;justify-items:center;min-width:120px;
+}
+.ops .btn{width:100%}
+
+/* カラム幅微調整 */
+.grid input.code{font-weight:700;letter-spacing:.3px}
+.grid th:first-child{width:200px}
+.grid th:nth-child(3){width:120px}
+.grid th:last-child{width:128px}
+
+/* 入力エラーの見た目（コード欄） */
+.grid .cell.is-invalid{
+  border-color: var(--danger);
+  box-shadow: 0 0 0 2px rgba(227,91,91,.08) inset;
+}
+
+/* エラーヒント */
+.hint.bad{
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--danger);
+}
+
+/* ===== “Studio” ピル（コードセル右に重ね、行ホバーで表示） ===== */
+.code-cell{ position: relative; }
+.code-cell .studio-link{
+  position: absolute; right: 8px; top: 50%; transform: translateY(-50%);
+  display: none; padding: 5px 12px; border-radius: 999px;
+  font-size: 12px; line-height: 1; cursor: pointer;
+  border: 1px solid var(--primary-weak); background: #f2fffb; color: #0b6b4f;
+  box-shadow: 0 1px 0 rgba(0,0,0,.05);
+}
+tr:hover .studio-link{ display: inline-block; }
+.code-cell .studio-link:hover{ filter: brightness(0.98); }
+
+/* ↓ 追加：新規行のテキスト入力など、プレースホルダーを薄く見せる */
+.client-table input[type="text"]::placeholder,
+.client-table input[type="url"]::placeholder,
+.client-table input[type="search"]::placeholder,
+.client-table textarea::placeholder {
+  color: #9AA4B2;   /* グレイッシュな薄色 */
+  opacity: 0.48;    /* さらに薄く */
+}
+
+/* ベンダープレフィックス（Safari/旧Edge対策） */
+.client-table input[type="text"]::-webkit-input-placeholder,
+.client-table input[type="url"]::-webkit-input-placeholder,
+.client-table input[type="search"]::-webkit-input-placeholder,
+.client-table textarea::-webkit-input-placeholder {
+  color: #9AA4B2;
+  opacity: 0.48;
+}
+.client-table input[type="text"]::-moz-placeholder,
+.client-table input[type="url"]::-moz-placeholder,
+.client-table input[type="search"]::-moz-placeholder,
+.client-table textarea::-moz-placeholder {
+  color: #9AA4B2;
+  opacity: 0.48;
+}
+.client-table input[type="text"]:-ms-input-placeholder,
+.client-table input[type="url"]:-ms-input-placeholder,
+.client-table input[type="search"]:-ms-input-placeholder,
+.client-table textarea:-ms-input-placeholder {
+  color: #9AA4B2;
+  opacity: 1;       /* IEはopacity未対応なので色だけで薄く */
+}

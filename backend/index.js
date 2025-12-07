@@ -1,1 +1,1 @@
-﻿import "./src/functions/ping.js";
+import "./src/functions/ping.js";
