@@ -627,7 +627,16 @@ async function renderFileList() {
 
     await ensurePromptIndex(clid, beh, true);
 
-    const rows = [...(promptIndex.items || [])].filter(it => !it.hidden).sort( (a, b) => (a.order ?? 0) - (b.order ?? 0));
+    const ROOM = KIND_TO_NAME["roomphoto"];
+
+    const rows = [...(promptIndex.items || [])]
+        .filter(it => !it.hidden)
+        .sort((a, b) => {
+            if (a.file === ROOM) return -1;
+            if (b.file === ROOM) return 1;
+            return (a.order ?? 0) - (b.order ?? 0);
+        });
+
 
     // drag handlers once
     if (!dragBound) {
@@ -969,12 +978,14 @@ function fixRoomphotoOrder() {
     const ROOM = KIND_TO_NAME["roomphoto"];
     if (!promptIndex || !Array.isArray(promptIndex.items)) return;
 
+    // ① roomphoto は order = 1 に固定
     const rp = promptIndex.items.find(x => x.file === ROOM);
-    if (rp) rp.order = 10;
+    if (rp) rp.order = 1;
 
-    let n = 20;
+    // ② 他の要素は 2, 3, 4... と続ける
+    let n = 2;
     promptIndex.items
         .filter(x => x.file !== ROOM)
         .sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
-        .forEach(x => x.order = n += 10);
+        .forEach(x => x.order = n++);
 }
