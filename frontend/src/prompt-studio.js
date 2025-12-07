@@ -283,6 +283,11 @@ async function ensurePromptIndex(clientId, behavior, bootstrap=true) {
             promptIndex = idx;
             promptIndexPath = path;
             promptIndexEtag = r.etag || null;
+            // 追加：クライアント名称を UI に反映
+            const clientNameEl = document.getElementById("clientName");
+            if (clientNameEl && promptIndex && promptIndex.name) {
+                clientNameEl.value = promptIndex.name;
+            }
             return promptIndex;
         }
     }
@@ -363,7 +368,7 @@ async function saveIndex() {
 async function renameIndexItem(file, newName) {
     if (!promptIndexPath || !promptIndex) {
         const clid = (els.clientId?.value || "").trim().toUpperCase();
-        const beh = (els.behavior?.value || "BASE").toUpperCase();
+        const beh = document.getElementById("behaviorLabel").textContent;
         await ensurePromptIndex(clid, beh, true);
     }
     const it = promptIndex?.items?.find(x => x.file === file);
@@ -469,41 +474,55 @@ paramKeys.forEach( ([k]) => {
 window.addEventListener("DOMContentLoaded", boot);
 let dragBound = false;
 function boot() {
-    const q = new URLSearchParams(location.hash.replace(/^#\??/, ''));
-    els.clientId && (els.clientId.value = (q.get("client") || "").toUpperCase());
-    const beh = (q.get("behavior") || "BASE").toUpperCase();
-    document.getElementById("behaviorLabel").textContent = beh;
-    els.apiBase && (els.apiBase.value = q.get("api") || DEV_API);
+  const q = new URLSearchParams(location.hash.replace(/^#\??/, ''));
+  els.clientId && (els.clientId.value = (q.get("client") || "").toUpperCase());
+  const beh = (q.get("behavior") || "BASE").toUpperCase();
+  document.getElementById("behaviorLabel").textContent = beh;
+  els.apiBase && (els.apiBase.value = q.get("api") || DEV_API);
 
-    if (els.search) {
-        els.search.style.display = 'none';
-    }
-    renderFileList();
+  if (els.search) {
+      els.search.style.display = 'none';
+  }
+  renderFileList();
 
-    window.addEventListener("keydown", (e) => {
-        if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") {
-            e.preventDefault();
-            saveCurrent();
-        }
-    }
-    );
+  window.addEventListener("keydown", (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") {
+          e.preventDefault();
+          saveCurrent();
+      }
+  }
+  );
 
-    els.search?.addEventListener("input", () => {
-        const kw = (els.search.value || "").toLowerCase();
-        [...(els.fileList?.children || [])].forEach(it => {
-            const t = it.querySelector(".name")?.textContent.toLowerCase() || "";
-            it.style.display = t.includes(kw) ? "" : "none";
-        }
-        );
-    }
-    );
+  els.search?.addEventListener("input", () => {
+      const kw = (els.search.value || "").toLowerCase();
+      [...(els.fileList?.children || [])].forEach(it => {
+          const t = it.querySelector(".name")?.textContent.toLowerCase() || "";
+          it.style.display = t.includes(kw) ? "" : "none";
+      }
+      );
+  }
+  );
 
-    els.promptEditor?.addEventListener("input", markDirty);
+  els.promptEditor?.addEventListener("input", markDirty);
 
-    if (els.btnAdd) {
-        els.btnAdd.removeEventListener("click", onClickAdd);
-        els.btnAdd.addEventListener("click", onClickAdd);
-    }
+  if (els.btnAdd) {
+      els.btnAdd.removeEventListener("click", onClickAdd);
+      els.btnAdd.addEventListener("click", onClickAdd);
+  }
+
+  document.getElementById("clientName")?.addEventListener("input", async (e) => {
+      if (!promptIndex) return;
+      promptIndex.name = e.target.value;
+      await saveIndex();
+  });
+
+  const clid = els.clientId.value.trim().toUpperCase();
+  const beh = document.getElementById("behaviorLabel").textContent;
+  ensurePromptIndex(clid, beh, false).then(idx => {
+      const nm = idx?.name || "";
+      const clientNameEl = document.getElementById("clientName");
+      if (clientNameEl) clientNameEl.value = nm;
+  });
 }
 
 function markDirty() {
@@ -569,7 +588,7 @@ async function renderFileList() {
         return;
     els.fileList.innerHTML = "";
     const clid = (els.clientId?.value || "").trim().toUpperCase();
-    const beh = (els.behavior?.value || "BASE").toUpperCase();
+    const beh = document.getElementById("behaviorLabel").textContent;
 
     await ensurePromptIndex(clid, beh, true);
 
@@ -706,7 +725,7 @@ async function openByFilename(filename) {
     setStatus("読込中…", "orange");
 
     const clid = (els.clientId?.value || "").trim().toUpperCase();
-    const beh = (els.behavior?.value || "BASE").toUpperCase();
+    const beh = document.getElementById("behaviorLabel").textContent;
 
     const clientTarget = `client/${clid}/${filename}`;
     const titleEl = document.getElementById("fileTitle");
@@ -826,7 +845,7 @@ function setBadges(stateText, etag, mode) {
 async function onClickAdd() {
     try {
         const clid = (els.clientId?.value || "").trim().toUpperCase();
-        const beh = (els.behavior?.value || "BASE").toUpperCase();
+        const beh = document.getElementById("behaviorLabel").textContent;
         if (!clid) {
             alert("Client ID が未設定です。左上で選択してください。");
             return;
