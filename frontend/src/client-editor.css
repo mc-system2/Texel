@@ -28,6 +28,7 @@ body {
 }
 
 /* ===== ヘッダ ===== */
+<<<<<<< Updated upstream
 .header {
     position: sticky;
     top: 0;
@@ -43,6 +44,26 @@ body {
     align-items: center;
     gap: 8px;
     margin: 6px 0
+=======
+.header{position:sticky;top:0;background:var(--panel);padding:12px 14px;border-bottom:1px solid var(--border);box-shadow:var(--shadow);z-index:10}
+.row{display:flex;align-items:center;gap:8px;margin:6px 0}
+.row.gap{gap:10px}
+.env .btn{
+  opacity:.75;
+  border-color:var(--border);
+  background:#fff;
+  color:#2a4039;
+  cursor: default;          /* マウスカーソルを通常矢印に */
+  pointer-events: none;     /* クリックなどを無効化 */
+}
+
+.env .btn.is-active{
+  opacity:1;
+  background:var(--primary);
+  color:#fff;
+  border-color:transparent;
+  box-shadow:0 0 0 2px rgba(43,182,115,.15) inset;
+>>>>>>> Stashed changes
 }
 
 .row.gap {
