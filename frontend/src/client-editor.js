@@ -353,28 +353,71 @@ els.addRow.addEventListener("click", addRow);
 function join(base, path){ return (base||"").replace(/\/+$/,"") + "/" + String(path||"").replace(/^\/+/,""); }
 
 // ===== プロンプト同期（保存後） =====
+// ===== プロンプト同期（保存後） =====
 async function syncClientPromptsAfterSave(currentClients){
   const nowMap = new Map(currentClients.map(c => [c.code, normalizeBehavior(c.behavior||"")]));
-  const deletes = []; for (const code of previousCatalogCodes.keys()) { if (!nowMap.has(code)) deletes.push(code); }
-  const adds = []; for (const [code, behavior] of nowMap.entries()) { adds.push({ code, behavior }); }
+
+  const deletes = [];
+  for (const code of previousCatalogCodes.keys()) {
+    if (!nowMap.has(code)) deletes.push(code);
+  }
+
+  // ★ ここを修正（name / spreadsheetId / createdAt を API に渡す）
+  const adds = [];
+  for (const c of currentClients) {
+    adds.push({
+      code: c.code,
+      behavior: normalizeBehavior(c.behavior || ""),
+      name: c.name || "",
+      spreadsheetId: c.spreadsheetId || "",
+      createdAt: c.createdAt || ""
+    });
+  }
+
   if (adds.length === 0 && deletes.length === 0) return;
 
   setStatus("プロンプト同期中…");
   const url = join(els.apiBase.value, "SyncClientPrompts");
   const payload = { adds, deletes };
+
   try{
-    const res = await fetch(url, { method:"POST", headers:{ "Content-Type":"application/json; charset=utf-8" }, body: JSON.stringify(payload) });
+    const res = await fetch(url, {
+      method:"POST",
+      headers:{ "Content-Type":"application/json; charset=utf-8" },
+      body: JSON.stringify(payload)
+    });
+
     const ctype = (res.headers.get("content-type") || "").toLowerCase();
-    let result = {}; let rawText = "";
-    try{ if (ctype.includes("application/json")) { result = await res.json(); } else { rawText = await res.text(); try { result = JSON.parse(rawText); } catch {} } }catch{}
-    if (!res.ok) { const reason = result?.error || rawText || `HTTP ${res.status}`; throw new Error(reason); }
+    let result = {};
+    let rawText = "";
+
+    try {
+      if (ctype.includes("application/json")) {
+        result = await res.json();
+      } else {
+        rawText = await res.text();
+        try { result = JSON.parse(rawText); } catch {}
+      }
+    } catch {}
+
+    if (!res.ok) {
+      const reason = result?.error || rawText || `HTTP ${res.status}`;
+      throw new Error(reason);
+    }
+
     const created = Array.isArray(result.created) ? result.created.length : 0;
     const skipped = Array.isArray(result.skipped) ? result.skipped.length : 0;
     const deleted = Array.isArray(result.deleted) ? result.deleted.length : 0;
     const errors  = Array.isArray(result.errors)  ? result.errors.length  : 0;
-    showAlert(`プロンプト同期 完了（新規${created} / 既存${skipped} / 削除${deleted} / エラー${errors}）`, errors ? "error" : "ok");
-  }catch(err){ showAlert(`プロンプト同期 失敗：${err.message||err}`,"error"); }
-  finally{ setStatus(""); }
+
+    showAlert(`プロンプト同期 完了（新規${created} / 既存${skipped} / 削除${deleted} / エラー${errors}）`,
+              errors ? "error" : "ok");
+
+  } catch (err) {
+    showAlert(`プロンプト同期 失敗：${err.message||err}`,"error");
+  } finally {
+    setStatus("");
+  }
 }
 
 // ---- 起動時自動読込 ----

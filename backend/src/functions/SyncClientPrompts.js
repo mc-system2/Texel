@@ -1,5 +1,5 @@
-const { app } = require('@azure/functions');
-const { BlobServiceClient } = require('@azure/storage-blob');
+const { app } = require("@azure/functions");
+const { BlobServiceClient } = require("@azure/storage-blob");
 
 const connectionString = process.env["AzureWebJobsStorage"];
 const CONTAINER = "prompts";
@@ -31,11 +31,12 @@ const TEMPLATE_MAP = {
 };
 
 // ======================= メイン処理 =========================
-app.http('SyncClientPrompts', {
-  methods: ['POST'],
-  authLevel: 'anonymous',
+app.http("SyncClientPrompts", {
+  methods: ["POST"],
+  authLevel: "anonymous",
   handler: async (request, context) => {
     context.log("◆ SyncClientPrompts START");
+
     let body;
     try {
       body = await request.json();
@@ -53,14 +54,21 @@ app.http('SyncClientPrompts', {
 
       const results = { created: [], skipped: [], deleted: [], errors: [] };
 
-      // --- 1) 新規コピー ---
+      // ================================================================
+      // ① 新規クライアントのプロンプトコピー & prompt-index.json 生成
+      // ================================================================
       for (const a of adds) {
         const code = String(a.code || "").trim().toUpperCase();
         const behavior = String(a.behavior || "").trim().toUpperCase();
+        const name = a.name || "";
+        const spreadsheetId = a.spreadsheetId || "";
+
         if (!/^[A-Z0-9]{4}$/.test(code)) continue;
-        if (!["TYPE-R","TYPE-S","BASE"].includes(behavior)) continue;
+        if (!["TYPE-R", "TYPE-S", "BASE"].includes(behavior)) continue;
 
         const pairs = TEMPLATE_MAP[behavior] || [];
+
+        // --- 各テンプレート JSON をコピー ---
         for (const [src, dstFn] of pairs) {
           const dst = dstFn(code);
           const dstBlob = container.getBlobClient(dst);
@@ -78,19 +86,62 @@ app.http('SyncClientPrompts', {
 
           const dl = await srcBlob.download();
           const buf = await streamToBuffer(dl.readableStreamBody);
+
           const blockBlobClient = container.getBlockBlobClient(dst);
           await blockBlobClient.upload(buf, buf.length, {
             blobHTTPHeaders: { blobContentType: "application/json; charset=utf-8" }
           });
+
           results.created.push({ code, dst });
         }
+
+        // =======================================================
+        // prompt-index.json を生成する
+        // =======================================================
+
+        const createdAt = new Date().toISOString().substring(0, 10);
+        const updatedAt = new Date().toISOString();
+
+        const items = pairs.map(([src], i) => ({
+          file: src.replace(/^texel-(s-|r-)?/, "texel-"), // プレーン化
+          name: "",          // UI側で編集可能
+          order: (i + 1) * 10,
+          hidden: false,
+          lock: false
+        }));
+
+        const indexObj = {
+          version: 1,
+          clientId: code,
+          name,
+          behavior,
+          spreadsheetId,
+          createdAt,
+          updatedAt,
+          items
+        };
+
+        const indexJson = JSON.stringify(indexObj, null, 2);
+
+        const indexBlob = container.getBlockBlobClient(`client/${code}/prompt-index.json`);
+        await indexBlob.upload(
+          Buffer.from(indexJson, "utf8"),
+          Buffer.byteLength(indexJson),
+          { blobHTTPHeaders: { blobContentType: "application/json; charset=utf-8" } }
+        );
+
+        results.created.push({ code, dst: `client/${code}/prompt-index.json` });
       }
 
-      // --- 2) 削除 ---
+      // ================================================================
+      // ② クライアントフォルダ削除
+      // ================================================================
       for (const codeRaw of deletes) {
         const code = String(codeRaw || "").trim().toUpperCase();
         if (!/^[A-Z0-9]{4}$/.test(code)) continue;
+
         const prefix = `client/${code}/`;
+
         for await (const blob of container.listBlobsFlat({ prefix })) {
           await container.deleteBlob(blob.name);
           results.deleted.push({ name: blob.name });
@@ -119,8 +170,8 @@ app.http('SyncClientPrompts', {
 async function streamToBuffer(readable) {
   return new Promise((resolve, reject) => {
     const chunks = [];
-    readable.on('data', (d) => chunks.push(Buffer.isBuffer(d) ? d : Buffer.from(d)));
-    readable.on('end', () => resolve(Buffer.concat(chunks)));
-    readable.on('error', reject);
+    readable.on("data", d => chunks.push(Buffer.isBuffer(d) ? d : Buffer.from(d)));
+    readable.on("end", () => resolve(Buffer.concat(chunks)));
+    readable.on("error", reject);
   });
 }
