@@ -131,3 +131,7 @@ tr:hover .studio-link{ display: inline-block; }
   color: #9AA4B2;
   opacity: 1;       /* IEはopacity未対応なので色だけで薄く */
 }
+header .row input#apiBase {
+  flex: 1;
+  min-width: 300px;
+}

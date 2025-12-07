@@ -76,16 +76,30 @@ const normalizeBehavior = (b)=>{
 const behaviorToPayload = (v)=> v==="TYPE-R" ? "R" : v==="TYPE-S" ? "S" : "";
 
 // ---- 行生成 & 監視 ----
-function makeRow(item = {code:"",name:"",behavior:"BASE",spreadsheetId:"",createdAt:""}){
+function makeRow(item = { code:"", name:"", behavior:"BASE", spreadsheetId:"", createdAt:"" }) {
   const tr = rowTmpl.content.firstElementChild.cloneNode(true);
+
   tr.querySelector(".code").value  = item.code || "";
   tr.querySelector(".name").value  = item.name || "";
   tr.querySelector(".behavior").value = normalizeBehavior(item.behavior);
-  tr.querySelector(".sheet").value = item.spreadsheetId || item.sheetId || "";
+  tr.querySelector(".sheet").value = item.spreadsheetId || "";
   tr.querySelector(".created").value = item.createdAt || "";
+
+  // ★ 既存行のみ「複製」「削除」ボタン
+  const ops = tr.querySelector(".ops");
+  if (item.code) {
+    ops.innerHTML = `
+      <button class="btn sm outline btn-dup">複製</button>
+      <button class="btn sm danger btn-del">削除</button>
+    `;
+  } else {
+    // 新規行は addRow() が ops を書き換える
+  }
+
   attachCodeWatcher(tr);
   return tr;
 }
+
 function attachCodeWatcher(tr){
   const codeInput = tr.querySelector(".code"); if (!codeInput) return;
   let hint = tr.querySelector(".code-hint");
@@ -120,7 +134,25 @@ async function loadCatalog(){
   finally{ setStatus(""); }
 }
 function clearTable(){ els.gridBody.innerHTML = ""; }
-function addRow(){ els.gridBody.appendChild(makeRow()); els.count.textContent = String(els.gridBody.querySelectorAll("tr").length); validateGrid(); }
+function addRow() {
+  const tr = makeRow({
+    code: issueNewCode(),              // ★ ランダムコード自動生成
+    name: "",
+    behavior: "BASE",
+    spreadsheetId: "",
+    createdAt: new Date().toISOString().slice(0, 10) // ★ 今日の日付
+  });
+
+  // ★ 新規行は「削除」を消し、「登録」ボタンを出す
+  const ops = tr.querySelector(".ops");
+  ops.innerHTML = `
+    <button class="btn sm primary btn-register">登録</button>
+  `;
+
+  els.gridBody.appendChild(tr);
+  els.count.textContent = String(els.gridBody.querySelectorAll("tr").length);
+  validateGrid();
+}
 
 // ---- 保存 ----
 async function saveCatalog(){
@@ -177,57 +209,120 @@ function validateGrid(){
 }
 
 // ---- 行内操作 + Studio 起動 ----
-els.gridBody.addEventListener("click",(e)=>{
-  const tr = e.target.closest("tr"); if(!tr) return;
-if (e.target.classList.contains("btn-del")) {
+els.gridBody.addEventListener("click", async (e) => {
+  const tr = e.target.closest("tr");
+  if (!tr) return;
+
+  // ==========================
+  // ★ 新規クライアント登録
+  // ==========================
+  if (e.target.classList.contains("btn-register")) {
+    const code = tr.querySelector(".code").value.trim().toUpperCase();
+    const name = tr.querySelector(".name").value.trim();
+    const behavior = tr.querySelector(".behavior").value.trim();
+    const sheet = extractSheetId(tr.querySelector(".sheet").value.trim());
+    const createdAt = tr.querySelector(".created").value.trim();
+
+    // ---- バリデーション ----
+    if (!/^[A-Z0-9]{4}$/.test(code)) {
+      showAlert("コードが不正です", "error");
+      return;
+    }
+    if (!name) {
+      showAlert("名称が未入力です", "error");
+      return;
+    }
+    if (!sheet) {
+      showAlert("Spreadsheet ID が未入力です", "error");
+      return;
+    }
+
+    showAlert("登録中…", "ok");
+
+    // ---- UI 側で既存行と同じ形に戻す（opsを更新）----
+    const ops = tr.querySelector(".ops");
+    ops.innerHTML = `
+      <button class="btn sm outline btn-dup">複製</button>
+      <button class="btn sm danger btn-del">削除</button>
+    `;
+
+    // ---- カタログ保存（全体保存）----
+    await saveCatalog();
+
+    // saveCatalog() 内で SyncClientPrompts(adds) が自動実行される
+
+    return;
+  }
+
+  // ==========================
+  // ★ 既存行：削除
+  // ==========================
+  if (e.target.classList.contains("btn-del")) {
     const code = tr.querySelector(".code").value.trim().toUpperCase();
     if (!/^[A-Z0-9]{4}$/.test(code)) {
-        showAlert("コードが不正です","error");
-        return;
+      showAlert("コードが不正です", "error");
+      return;
     }
 
     if (!confirm(`クライアント「${code}」を削除しますか？\n\nBlob上のフォルダも物理削除されます。`)) {
-        return;
+      return;
     }
 
     const prefix = `client/${code}/`;
     const apiBase = els.apiBase.value.trim();
 
-    (async () => {
-        setStatus("削除中…");
-        try {
-            const url = apiBase.replace(/\/+$/,"") + "/DeleteClientFolder";
-            const body = { prefix };
+    setStatus("削除中…");
 
-            const res = await fetch(url, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify(body)
-            });
+    try {
+      const url = apiBase.replace(/\/+$/, "") + "/DeleteClientFolder";
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ prefix })
+      });
 
-            if (!res.ok) {
-                const t = await res.text().catch(()=>"");
-                throw new Error(`DeleteClientFolder 失敗: ${t}`);
-            }
+      if (!res.ok) {
+        const t = await res.text().catch(() => "");
+        throw new Error(`DeleteClientFolder 失敗: ${t}`);
+      }
 
-            // 成功：UI から行削除
-            tr.remove();
-            els.count.textContent = String(els.gridBody.querySelectorAll("tr").length);
-            validateGrid();
-            showAlert(`削除完了（${code}）`, "ok");
+      tr.remove();
+      els.count.textContent = String(els.gridBody.querySelectorAll("tr").length);
+      validateGrid();
+      showAlert(`削除完了（${code}）`, "ok");
 
-        } catch (err) {
-            showAlert(err.message || "削除に失敗しました", "error");
-        } finally {
-            setStatus("");
-        }
-    })();
+    } catch (err) {
+      showAlert(err.message || "削除に失敗しました", "error");
+    } finally {
+      setStatus("");
+    }
 
     return;
-}
-  if(e.target.classList.contains("btn-dup")){ const copy = tr.cloneNode(true); copy.querySelectorAll(".code-hint").forEach(h=>h.remove()); els.gridBody.insertBefore(copy, tr.nextSibling); attachCodeWatcher(copy); copy.querySelector(".code").value = issueNewCode(); els.count.textContent = String(els.gridBody.querySelectorAll("tr").length); validateGrid(); return; }
-  if(e.target.classList.contains("studio-link")){ openPromptStudioForRow(tr); return; }
+  }
+
+  // ==========================
+  // ★ 既存行：複製
+  // ==========================
+  if (e.target.classList.contains("btn-dup")) {
+    const copy = tr.cloneNode(true);
+    copy.querySelectorAll(".code-hint").forEach(h => h.remove());
+    els.gridBody.insertBefore(copy, tr.nextSibling);
+    attachCodeWatcher(copy);
+    copy.querySelector(".code").value = issueNewCode();
+    els.count.textContent = String(els.gridBody.querySelectorAll("tr").length);
+    validateGrid();
+    return;
+  }
+
+  // ==========================
+  // ★ Studio 起動
+  // ==========================
+  if (e.target.classList.contains("studio-link")) {
+    openPromptStudioForRow(tr);
+    return;
+  }
 });
+
 els.gridBody.addEventListener("dblclick",(e)=>{ const tr = e.target.closest("tr"); if(!tr) return; if(e.target.matches('input, select, textarea')) return; openPromptStudioForRow(tr); });
 function openPromptStudioForRow(tr){
   const code = tr.querySelector(".code").value.trim().toUpperCase(); if(!/^[A-Z0-9]{4}$/.test(code)){ showAlert("コードが不正です","error"); return; }
