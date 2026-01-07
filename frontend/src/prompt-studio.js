@@ -1,4 +1,4 @@
-/* build:ps-20260107-existsOnly+dirMerge */
+/* build:ps-20260107-existsOnly+dirMerge+bootstrapAll */
 /* ===== Prompt Studio – logic (index-safe add, robust reload, field-only edit) ===== */
 const DEV_API = "https://func-texel-api-dev-jpe-001-b2f6fec8fzcbdrc3.japaneast-01.azurewebsites.net/api/";
 const PROD_API = "https://func-texel-api-prod-jpe-001-dsgfhtafbfbxawdz.japaneast-01.azurewebsites.net/api/";
@@ -315,12 +315,46 @@ async function ensurePromptIndex(clientId, behavior, bootstrap=true) {
     }
 
     // Bootstrap: create a minimal index from FAMILY defaults
-    const kinds = [...FAMILY[behavior]];
     const items = [];
+    const ROOM_FILE = KIND_TO_NAME["roomphoto"];
+
+    // ★ When prompt-index.json is missing, bootstrap should include ALL prompt JSONs that exist in the directory.
+    // If directory listing is available, use it to include custom prompts (e.g., texel-custom-*.json).
+    // If listing is not available, fall back to standard FAMILY-based bootstrap.
+    let dirFiles = null;
+    try {
+        dirFiles = await apiListClientPromptFiles(clientId);
+    } catch {}
+    const hasDirFiles = Array.isArray(dirFiles) && dirFiles.length > 0;
+
+    let orderedFiles = [];
+    if (hasDirFiles) {
+        const fileSet = new Set(dirFiles);
+
+        // Preferred order: standard prompts (that actually exist) in FAMILY order.
+        const preferred = [...FAMILY[behavior]]
+            .map(k => KIND_TO_NAME[k])
+            .filter(f => fileSet.has(f));
+
+        // Remaining: anything else in the folder (custom etc.) appended in name order.
+        const preferredSet = new Set(preferred);
+        const remaining = dirFiles
+            .filter(f => !preferredSet.has(f))
+            .slice()
+            .sort((a, b) => a.localeCompare(b));
+
+        orderedFiles = [...preferred, ...remaining];
+    } else {
+        // Fallback: standard prompts only
+        orderedFiles = [...FAMILY[behavior]].map(k => KIND_TO_NAME[k]);
+    }
+
     let order = 10;
-    for (const k of kinds) {
-        const file = KIND_TO_NAME[k];
-        const isRoom = (k === "roomphoto");
+    for (const file of orderedFiles) {
+        if (!file || file === "prompt-index.json")
+            continue;
+
+        const isRoom = (file === ROOM_FILE);
         items.push({
             file,
             name: isRoom ? "画像分析プロンプト" : prettifyNameFromFile(file),
