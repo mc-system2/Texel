@@ -1077,14 +1077,13 @@ async function renderFileList() {
         // --- single click: do not focus/select input (display only) ---
         input.addEventListener("mousedown", (e) => {
             if (input.readOnly) {
-                e.preventDefault();
-                e.stopPropagation();
+                e.preventDefault(); // prevent focus/selection only
             }
         });
         input.addEventListener("click", (e) => {
             if (input.readOnly) {
                 e.preventDefault();
-                e.stopPropagation();
+                li.click(); // delegate selection to li
             }
         });
 
