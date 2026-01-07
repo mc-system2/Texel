@@ -304,6 +304,50 @@ function normalizeIndex(x) {
     return null;
 }
 
+
+/**
+ * Save raw text (no toFlat/no prompt wrapper). Used for prompt-index.json and other non-prompt JSON.
+ * Tries SaveText / SaveBLOB first. Falls back to SavePromptText/SavePrompt with raw text payload.
+ */
+async function apiSaveRawText(filename, rawText, etag) {
+    const text = (rawText == null) ? "" : String(rawText);
+    const candidates = ["SaveText", "SaveBLOB", "SavePromptText", "SavePrompt"];
+    for (const fn of candidates) {
+        try {
+            let body = null;
+
+            // Endpoints with "Text/BLOB" are expected to accept { filename, text }
+            if (fn === "SaveText" || fn === "SaveBLOB") {
+                body = { filename, text };
+            } else {
+                // Prompt endpoints accept { filename, prompt }, but we pass raw JSON text as-is
+                body = { filename, prompt: text };
+            }
+            if (etag) body.etag = etag;
+
+            const r = await fetch(join(els.apiBase.value, fn), {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(body)
+            });
+            if (!r.ok) continue;
+
+            // best-effort parse to keep symmetry with apiSaveText
+            const raw = await r.text();
+            let j = {};
+            try { j = raw ? JSON.parse(raw) : {}; } catch {}
+            if (els.badgeEtag) {
+                const ne = j?.etag || r.headers.get("ETag") || r.headers.get("etag") || null;
+                if (ne) els.badgeEtag.textContent = "ETag: " + ne;
+            }
+            return j;
+        } catch {
+            // try next
+        }
+    }
+    throw new Error("Save failed: no available save endpoint (SaveText/SaveBLOB/SavePromptText/SavePrompt).");
+}
+
 async function ensurePromptIndex(clientId, behavior, bootstrap=true) {
     const path = indexClientPath(clientId);
     // 1) Try POST/GET loader
@@ -394,7 +438,7 @@ async function ensurePromptIndex(clientId, behavior, bootstrap=true) {
     promptIndexEtag = null;
 
     try {
-        await apiSaveText(promptIndexPath, promptIndex, null);
+        await apiSaveRawText(promptIndexPath, JSON.stringify(promptIndex, null, 2), null);
     } catch (e) {
         console.error("bootstrap save failed:", e);
         setStatus("インデックス新規作成に失敗しました。API設定をご確認ください。", "red");
