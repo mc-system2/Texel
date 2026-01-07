@@ -902,29 +902,93 @@ async function renderFileList() {
 
         const input = li.querySelector(".name-input");
 
-        // ★ roomphoto でも名前変更は許可するので常に blur を登録
-        input.addEventListener("blur", async (e) => {
-            const nv = (e.target.value || "").trim();
-            if (!nv || nv === name) return;
+        // ===== 名前編集：通常クリック＝選択/表示、ダブルクリック＝編集開始 =====
+        // 初期状態は readOnly（クリックで編集モードに入らない）
+        input.readOnly = true;
+        input.dataset.editing = "0";
+        input.classList.add("rename-field");
+
+        // 通常クリック：そのまま「選択して表示」へ（入力欄にフォーカスさせない）
+        input.addEventListener("mousedown", (e) => {
+            if (input.readOnly) {
+                // フォーカス/カーソル移動を抑止（クリック=選択にする）
+                e.preventDefault();
+            }
+        });
+        input.addEventListener("click", async (e) => {
+            if (!input.readOnly) return; // 編集中は何もしない
+            e.preventDefault();
+            e.stopPropagation();
+            await openByFilename(it.file);
+        });
+
+        // ダブルクリック：編集開始
+        input.addEventListener("dblclick", (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            if (input.dataset.editing === "1") return;
+            input.dataset.editing = "1";
+            input.dataset.original = input.value;
+            input.readOnly = false;
+            input.classList.add("editing");
+            // カーソルを末尾へ
             try {
-                setStatus('名称を変更中…', 'orange');
+                input.focus();
+                const v = input.value || "";
+                input.setSelectionRange(v.length, v.length);
+            } catch {}
+            setStatus("名称を編集しています（Enterで確定 / Escで取消）", "#666");
+        });
+
+        // blur：編集モードのときだけ確定（通常クリック→フォーカス移動で rename が走らないようにする）
+        input.addEventListener("blur", async (e) => {
+            if (input.dataset.editing !== "1") return;
+
+            input.dataset.editing = "0";
+            input.readOnly = true;
+            input.classList.remove("editing");
+
+            const nv = (e.target.value || "").trim();
+            if (!nv || nv === name) {
+                // 空 or 変更なし → 元に戻す（空は不許可）
+                input.value = name;
+                return;
+            }
+
+            try {
+                setStatus("名称を変更中…", "orange");
                 await renameIndexItem(it.file, nv);
-                setStatus('名称を変更しました。', 'green');
+                setStatus("名称を変更しました。", "green");
                 await reloadIndex();
                 await renderFileList();
             } catch (err) {
                 console.error(err);
-                setStatus('名称変更に失敗: ' + (err?.message || err), 'red');
+                setStatus("名称変更に失敗: " + (err?.message || err), "red");
+                // 元に戻す
+                input.value = name;
                 await reloadIndex();
                 await renderFileList();
             }
         });
 
-        // Enter → blur
+        // Enter：確定（blurへ） / Esc：キャンセル
         input.addEventListener("keydown", (e) => {
             if (e.key === "Enter") {
                 e.preventDefault();
                 input.blur();
+                return;
+            }
+            if (e.key === "Escape") {
+                if (input.dataset.editing === "1") {
+                    e.preventDefault();
+                    // 元に戻して終了
+                    input.value = input.dataset.original || name;
+                    input.dataset.editing = "0";
+                    input.readOnly = true;
+                    input.classList.remove("editing");
+                    input.blur();
+                    setStatus("名称変更を取り消しました。", "#666");
+                }
             }
         });
 
