@@ -1025,7 +1025,7 @@ async function renderFileList() {
         <div class="name">
             ${icon}
             <input type="text"
-                  class="name-input"
+                  class="name-input"" readonly
                   value="${name}"
                   title="${it.file}">
         </div>
@@ -1081,20 +1081,48 @@ async function renderFileList() {
 
 
         li.addEventListener("click", async (e) => {
-            if (e.target.closest("button") || e.target.closest("input"))
-                return; // ボタンと名前入力中は open しない
+            const inp = e.target.closest("input");
+            if (e.target.closest("button") || (inp && !inp.readOnly))
+                return; // ボタン or 編集中は open しない
             await openByFilename(it.file);
         });
 
         const input = li.querySelector(".name-input");
 
+        // dblclick: enable rename (unlocked only)
+        input.addEventListener("dblclick", (e) => {
+            if (locked) return;
+            e.preventDefault();
+            e.stopPropagation();
+            input.readOnly = false;
+            input.focus();
+            input.select();
+        });
+
+        // enter/escape handling while editing
+        input.addEventListener("keydown", (e) => {
+            if (input.readOnly) return;
+            if (e.key === "Enter") {
+                e.preventDefault();
+                input.blur(); // blur handler commits
+            }
+            if (e.key === "Escape") {
+                e.preventDefault();
+                input.value = name;
+                input.readOnly = true;
+                input.blur();
+            }
+        });
+
         // ★ roomphoto でも名前変更は許可するので常に blur を登録
         input.addEventListener("blur", async (e) => {
+            if (input.readOnly) return; // 編集モード以外は無視
             const nv = (e.target.value || "").trim();
-            if (!nv || nv === name) return;
+            if (!nv || nv === name) { input.value = name; input.readOnly = true; return; }
             try {
                 setStatus('名称を変更中…', 'orange');
                 await renameIndexItem(it.file, nv);
+                input.readOnly = true;
                 setStatus('名称を変更しました。', 'green');
                 await reloadIndex();
                 await renderFileList();
