@@ -414,8 +414,27 @@ async function ensurePromptIndex(clientId, behavior, bootstrap=true) {
       promptIndexPath = path;
       promptIndexEtag = r.etag || null;
 
-      applyClientMetaToUi({ name: idx.name || "", spreadsheetId: idx.spreadsheetId || "" });
+      // If header fields are missing in index, backfill from client-catalog and persist (index is canonical thereafter)
+      if ((!idx.name || !idx.spreadsheetId) && typeof loadClientCatalogSafe === "function") {
+        try {
+          const catalog = await loadClientCatalogSafe();
+          const meta = findClientMetaFromCatalog(catalog, clientId);
+          if (meta) {
+            let changedMeta = false;
+            if (!idx.name && meta.name) { idx.name = meta.name; changedMeta = true; }
+            if (!idx.spreadsheetId && meta.spreadsheetId) { idx.spreadsheetId = meta.spreadsheetId; changedMeta = true; }
+            if (!idx.behavior && (meta.behavior || behavior)) { idx.behavior = meta.behavior || behavior; changedMeta = true; }
+            if (!idx.createdAt && meta.createdAt) { idx.createdAt = meta.createdAt; changedMeta = true; }
+            if (changedMeta) {
+              idx.updatedAt = new Date().toISOString();
+              const savedMeta = await apiSavePromptIndex(path, idx, promptIndexEtag).catch(() => null);
+              if (savedMeta && savedMeta.ok) promptIndexEtag = savedMeta.etag || promptIndexEtag;
+            }
+          }
+        } catch {}
+      }
 
+      applyClientMetaToUi({ name: idx.name || "", spreadsheetId: idx.spreadsheetId || "" });
       // Reconcile: if folder has additional JSON files (e.g. texel-custom-*.json) not listed, append them
       const rec = await reconcileIndexWithDirectory(clientId, promptIndex);
       if (rec.changed) {
@@ -515,23 +534,23 @@ async function reloadIndex() {
 }
 
 async function saveIndex() {
-    if (!promptIndex)
-        return;
-    promptIndex.updatedAt = new Date().toISOString();
-    try {
-        const res = await apiSaveText(promptIndexPath, promptIndex, promptIndexEtag);
-        promptIndexEtag = res?.etag || promptIndexEtag || null;
-    } catch (e) {
-        const msg = String(e || "");
-        if (msg.includes("412")) {
-            await reloadIndex();
-            const res2 = await apiSaveText(promptIndexPath, promptIndex, promptIndexEtag);
-            promptIndexEtag = res2?.etag || promptIndexEtag || null;
-        } else {
-            throw e;
-        }
+  if (!promptIndex) return;
+  promptIndex.updatedAt = new Date().toISOString();
+  try {
+    const res = await apiSavePromptIndex(promptIndexPath, promptIndex, promptIndexEtag);
+    if (res && res.ok) promptIndexEtag = res.etag || promptIndexEtag || null;
+  } catch (e) {
+    const msg = String(e || "");
+    if (msg.includes("412")) {
+      await reloadIndex();
+      const res2 = await apiSavePromptIndex(promptIndexPath, promptIndex, promptIndexEtag);
+      if (res2 && res2.ok) promptIndexEtag = res2.etag || promptIndexEtag || null;
+    } else {
+      throw e;
     }
+  }
 }
+
 
 async function renameIndexItem(file, newName) {
     if (!promptIndexPath || !promptIndex) {
