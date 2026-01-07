@@ -268,6 +268,47 @@ function normalizeIndex(x) {
     return null;
 }
 
+// ===== Client Catalog (texel-client-catalog.json) helper =====
+async function loadClientCatalogJson() {
+    // Try multiple candidate paths (environment / past conventions)
+    const candidates = [
+        "texel-client-catalog.json",
+        "files/texel-client-catalog.json",
+        "client/texel-client-catalog.json",
+        "client-catalog.json",
+        "files/client-catalog.json"
+    ];
+    for (const p of candidates) {
+        try {
+            const r = await apiLoadText(p);
+            if (!r?.data) continue;
+            const j = (typeof r.data === "string") ? JSON.parse(r.data) : r.data;
+            if (j && (Array.isArray(j.clients) || Array.isArray(j.items) || Array.isArray(j))) return j;
+        } catch {}
+    }
+    return null;
+}
+
+function findClientMeta(catalog, clientId) {
+    if (!catalog) return null;
+    const clid = String(clientId || "").trim().toUpperCase();
+    const arr =
+        Array.isArray(catalog) ? catalog :
+        Array.isArray(catalog.clients) ? catalog.clients :
+        Array.isArray(catalog.items) ? catalog.items :
+        null;
+    if (!arr) return null;
+    return arr.find(x => String(x?.clientId || "").trim().toUpperCase() === clid) || null;
+}
+
+function todayYmd() {
+    const d = new Date();
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, "0");
+    const da = String(d.getDate()).padStart(2, "0");
+    return `${y}-${m}-${da}`;
+}
+
 async function ensurePromptIndex(clientId, behavior, bootstrap=true) {
     const path = indexClientPath(clientId);
     // 1) Try POST/GET loader
@@ -329,18 +370,25 @@ async function ensurePromptIndex(clientId, behavior, bootstrap=true) {
         const isRoom = (file === KIND_TO_NAME["roomphoto"]);
         items.push({
             file,
-            name: isRoom ? "画像分析プロンプト" : prettifyNameFromFile(file),
+            name: "",
             order: order,
             hidden: false,
-            lock: isRoom
+            lock: false
         });
         order += 10;
     }
 
+    // client catalog を参照してメタ情報を補完（従来フォーマット維持）
+    const catalog = await loadClientCatalogJson();
+    const meta = findClientMeta(catalog, clientId);
+
     promptIndex = {
         version: 1,
         clientId,
-        behavior,
+        name: meta?.name ?? "",
+        behavior: meta?.behavior ?? behavior,
+        spreadsheetId: meta?.spreadsheetId ?? "",
+        createdAt: meta?.createdAt ?? todayYmd(),
         updatedAt: new Date().toISOString(),
         items
     };
