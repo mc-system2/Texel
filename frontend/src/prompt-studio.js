@@ -1,4 +1,4 @@
-/* build:ps-20260107-existsOnly+dirMerge+bootstrapAll */
+/* build:ps-20251112-idxfix+pathfix+field-only-edit */
 /* ===== Prompt Studio – logic (index-safe add, robust reload, field-only edit) ===== */
 const DEV_API = "https://func-texel-api-dev-jpe-001-b2f6fec8fzcbdrc3.japaneast-01.azurewebsites.net/api/";
 const PROD_API = "https://func-texel-api-prod-jpe-001-dsgfhtafbfbxawdz.japaneast-01.azurewebsites.net/api/";
@@ -270,91 +270,63 @@ function normalizeIndex(x) {
 
 async function ensurePromptIndex(clientId, behavior, bootstrap=true) {
     const path = indexClientPath(clientId);
-
-    // ★ Rule: bootstrap ONLY when prompt-index.json does NOT exist.
-    // If it exists but cannot be parsed, DO NOT overwrite or recreate automatically.
-    const exists = await blobExistsByLoadPromptText(path);
-
-    if (exists === true) {
-        // Try load (best effort) but never bootstrap-save here.
-        let r = await apiLoadText(path);
-        if (!r) {
-            const g = await tryLoad(path);
-            if (g) r = g;
-        }
-        if (r) {
-            const idx = normalizeIndex(r.data);
-            if (idx) {
-                promptIndex = idx;
-                promptIndexPath = path;
-                promptIndexEtag = r.etag || null;
-
-                // reflect client name if provided
-                const clientNameEl = document.getElementById("clientName");
-                if (clientNameEl && promptIndex && promptIndex.name) clientNameEl.value = promptIndex.name;
-
-                return promptIndex;
+    // 1) Try POST/GET loader
+    let r = await apiLoadText(path);
+    if (!r) {
+        const g = await tryLoad(path);
+        if (g)
+            r = g;
+    }
+    if (r) {
+        const idx = normalizeIndex(r.data);
+        if (idx) {
+            promptIndex = idx;
+            promptIndexPath = path;
+            promptIndexEtag = r.etag || null;
+            // 追加：クライアント名称を UI に反映
+            const clientNameEl = document.getElementById("clientName");
+            if (clientNameEl && promptIndex && promptIndex.name) {
+                clientNameEl.value = promptIndex.name;
             }
+            return promptIndex;
         }
-
-        console.warn("prompt-index.json exists but failed to parse. Skip bootstrap to avoid reset/overwrite.");
-        setStatus("prompt-index.json は存在しますが読み込めません（自動再構築はしません）。", "orange");
+    }
+    if (!bootstrap && promptIndex && promptIndexPath === path) {
         return promptIndex;
     }
-
-    if (exists === null) {
-        console.warn("prompt-index.json existence is unknown (network/permission/server). Skip bootstrap for safety.");
-        setStatus("インデックスの存在確認に失敗しました（安全のため再構築しません）。", "orange");
-        return promptIndex;
-    }
-
-    // exists === false  -> not found (404): bootstrap allowed if requested
     if (!bootstrap) {
-        setStatus("prompt-index.json が存在しません（再構築は未実施）。", "orange");
+        console.warn("ensurePromptIndex: load failed; skipped bootstrap to avoid overwrite. Check API base or function name.");
+        setStatus("インデックスの読込に失敗（再構築は未実施）。API設定をご確認ください。", "orange");
         return promptIndex;
     }
+    // Bootstrap (index新規作成) ※ indexが無い(=404)ときだけここに来る想定
+    // まずディレクトリ実体を取得できれば、それを正として items を構築する（custom含む）
+    const dirFiles = await apiListClientPromptFiles(clientId); // relative filenames, excluding prompt-index.json
+    const hasDir = Array.isArray(dirFiles) && dirFiles.length > 0;
 
-    // Bootstrap: create a minimal index from FAMILY defaults
-    const items = [];
-    const ROOM_FILE = KIND_TO_NAME["roomphoto"];
+    // 基本順序（標準プロンプト）
+    const kinds = [...FAMILY[behavior]];
+    const standardFiles = kinds.map(k => KIND_TO_NAME[k]).filter(Boolean);
 
-    // ★ When prompt-index.json is missing, bootstrap should include ALL prompt JSONs that exist in the directory.
-    // If directory listing is available, use it to include custom prompts (e.g., texel-custom-*.json).
-    // If listing is not available, fall back to standard FAMILY-based bootstrap.
-    let dirFiles = null;
-    try {
-        dirFiles = await apiListClientPromptFiles(clientId);
-    } catch {}
-    const hasDirFiles = Array.isArray(dirFiles) && dirFiles.length > 0;
-
-    let orderedFiles = [];
-    if (hasDirFiles) {
-        const fileSet = new Set(dirFiles);
-
-        // Preferred order: standard prompts (that actually exist) in FAMILY order.
-        const preferred = [...FAMILY[behavior]]
-            .map(k => KIND_TO_NAME[k])
-            .filter(f => fileSet.has(f));
-
-        // Remaining: anything else in the folder (custom etc.) appended in name order.
-        const preferredSet = new Set(preferred);
-        const remaining = dirFiles
-            .filter(f => !preferredSet.has(f))
-            .slice()
-            .sort((a, b) => a.localeCompare(b));
-
-        orderedFiles = [...preferred, ...remaining];
+    // 実体が取れた場合：標準が存在するものだけ採用 + 残り（custom等）を末尾に追加
+    const ordered = [];
+    if (hasDir) {
+        const set = new Set(dirFiles);
+        for (const f of standardFiles) {
+            if (set.has(f)) ordered.push(f);
+        }
+        for (const f of dirFiles) {
+            if (!ordered.includes(f)) ordered.push(f);
+        }
     } else {
-        // Fallback: standard prompts only
-        orderedFiles = [...FAMILY[behavior]].map(k => KIND_TO_NAME[k]);
+        // 実体が取れない場合：安全フォールバック（標準のみ）
+        ordered.push(...standardFiles);
     }
 
+    const items = [];
     let order = 10;
-    for (const file of orderedFiles) {
-        if (!file || file === "prompt-index.json")
-            continue;
-
-        const isRoom = (file === ROOM_FILE);
+    for (const file of ordered) {
+        const isRoom = (file === KIND_TO_NAME["roomphoto"]);
         items.push({
             file,
             name: isRoom ? "画像分析プロンプト" : prettifyNameFromFile(file),
@@ -381,7 +353,6 @@ async function ensurePromptIndex(clientId, behavior, bootstrap=true) {
         console.error("bootstrap save failed:", e);
         setStatus("インデックス新規作成に失敗しました。API設定をご確認ください。", "red");
     }
-
     return promptIndex;
 }
 
@@ -622,6 +593,109 @@ function templateFromFilename(filename, behavior) {
     return filename;
 }
 
+
+/* ===== Directory listing (for bootstrap + auto include custom prompts) =====
+   Uses backend ListBLOB if available.
+   Expected: ListBLOB returns either:
+   - { prompt:[{name:"client/A001/texel-....json", ...}, ...] }
+   - { files:[...names...] } or { items:[...] } or { blobs:[...] }
+   We treat "directory truth" as authoritative for which JSON files exist.
+*/
+async function apiListClientPromptFiles(clientId) {
+    const clid = String(clientId || "").trim().toUpperCase();
+    if (!clid) return [];
+    const container = "prompts";
+    const folder1 = `client/${clid}`;       // folder param style
+    const prefix1 = `client/${clid}/`;      // prefix param style
+
+    const candidates = [
+        // GET patterns
+        { method: "GET", name: "ListBLOB", qs: { container, folder: folder1 } },
+        { method: "GET", name: "ListBLOB", qs: { container, prefix: prefix1 } },
+        { method: "GET", name: "ListBLOB", qs: { folder: folder1 } },
+        { method: "GET", name: "ListBLOB", qs: { prefix: prefix1 } },
+        // POST patterns
+        { method: "POST", name: "ListBLOB", body: { container, folder: folder1 } },
+        { method: "POST", name: "ListBLOB", body: { container, prefix: prefix1 } },
+        { method: "POST", name: "ListBLOB", body: { folder: folder1 } },
+        { method: "POST", name: "ListBLOB", body: { prefix: prefix1 } },
+    ];
+
+    for (const c of candidates) {
+        try {
+            const url = join(els.apiBase.value, c.name);
+            let res;
+            if (c.method === "GET") {
+                const qs = new URLSearchParams();
+                for (const [k,v] of Object.entries(c.qs||{})) {
+                    if (v != null && v !== "") qs.set(k, v);
+                }
+                res = await fetch(url + "?" + qs.toString(), { cache: "no-store" });
+            } else {
+                res = await fetch(url, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify(c.body || {})
+                });
+            }
+            if (!res.ok) continue;
+
+            const j = await res.json().catch(() => ({}));
+            const names = normalizeListNames(j);
+
+            // strip folder/prefix and keep only filenames under client/<ID>/
+            const out = [];
+            for (const name of names) {
+                if (!name) continue;
+                const n = String(name);
+                // we want only within client/<ID>/
+                let rel = null;
+                if (n.startsWith(prefix1)) rel = n.slice(prefix1.length);
+                else if (n.startsWith(folder1 + "/")) rel = n.slice((folder1 + "/").length);
+                else if (!n.includes("/")) rel = n; // already relative
+                else continue;
+
+                if (!rel.toLowerCase().endsWith(".json")) continue;
+                if (rel === "prompt-index.json") continue;
+                out.push(rel);
+            }
+
+            // de-dup
+            return [...new Set(out)];
+        } catch {
+            // try next
+        }
+    }
+    return [];
+}
+
+function normalizeListNames(j) {
+    // common shapes
+    const pools = [];
+    if (Array.isArray(j)) pools.push(j);
+    if (Array.isArray(j?.prompt)) pools.push(j.prompt);
+    if (Array.isArray(j?.files)) pools.push(j.files);
+    if (Array.isArray(j?.items)) pools.push(j.items);
+    if (Array.isArray(j?.blobs)) pools.push(j.blobs);
+    if (Array.isArray(j?.data?.prompt)) pools.push(j.data.prompt);
+    if (Array.isArray(j?.data?.files)) pools.push(j.data.files);
+    if (Array.isArray(j?.data?.items)) pools.push(j.data.items);
+    if (Array.isArray(j?.data?.blobs)) pools.push(j.data.blobs);
+
+    const names = [];
+    for (const arr of pools) {
+        for (const x of arr) {
+            if (!x) continue;
+            if (typeof x === "string") { names.push(x); continue; }
+            if (typeof x?.name === "string") { names.push(x.name); continue; }
+            if (typeof x?.filename === "string") { names.push(x.filename); continue; }
+            if (typeof x?.path === "string") { names.push(x.path); continue; }
+        }
+    }
+    return names;
+}
+
+
 async function tryLoad(filename) {
     const clid = (els.clientId?.value || "").trim().toUpperCase();
     const beh = document.getElementById("behaviorLabel").textContent;
@@ -657,184 +731,6 @@ async function tryLoad(filename) {
     return null;
 }
 
-// ============================================================
-// Safe existence check for prompt-index.json
-// - returns true  : exists (HTTP 200/2xx)
-// - returns false : not exists (all candidates 404)
-// - returns null  : unknown (network error / non-404 non-2xx)
-// ============================================================
-async function blobExistsByLoadPromptText(filenameOrPath) {
-    const clid = (els.clientId?.value || "").trim().toUpperCase();
-    const beh = document.getElementById("behaviorLabel").textContent;
-
-    const candidates = [];
-    if (typeof filenameOrPath === "string" && !filenameOrPath.includes("/")) {
-        candidates.push(`client/${clid}/${filenameOrPath}`);
-        candidates.push(`prompt/${clid}/${filenameOrPath}`);
-        candidates.push(templateFromFilename(filenameOrPath, beh));
-    } else {
-        candidates.push(filenameOrPath);
-    }
-
-    let saw404 = false;
-
-    for (const f of candidates) {
-        const url = join(els.apiBase.value, "LoadPromptText") + `?filename=${encodeURIComponent(f)}`;
-        const res = await fetch(url, { cache: "no-store" }).catch(() => null);
-        if (!res) return null;
-
-        if (res.status === 404) {
-            saw404 = true;
-            continue;
-        }
-        if (res.ok) return true;
-
-        // 403/500 などは「不明」
-        return null;
-    }
-
-    return saw404 ? false : null;
-}
-
-// ============================================================
-// Directory listing (best-effort)
-// This enables auto-including newly added files (e.g., texel-custom-*.json)
-// without overwriting prompt-index.json automatically.
-// ============================================================
-const LIST_CANDIDATES = ["ListBLOB", "ListBlobs", "ListFiles", "ListPromptFiles", "ListPromptIndexFiles"];
-
-function normalizeListResponse(j, prefix) {
-    // wide acceptance
-    const arr =
-        j?.files ||
-        j?.items ||
-        j?.blobs ||
-        j?.data?.files ||
-        j?.data?.items ||
-        j?.data?.blobs ||
-        j?.prompt ||
-        j?.knowledge ||
-        [];
-
-    const names = (Array.isArray(arr) ? arr : [])
-        .map(x => (typeof x === "string" ? x : (x?.name || x?.filename || x?.path || "")))
-        .filter(Boolean)
-        .map(name => name.startsWith(prefix) ? name.slice(prefix.length) : name);
-
-    return names;
-}
-
-function isPromptJsonFile(name) {
-    if (!name) return false;
-    const low = name.toLowerCase();
-    if (!low.endsWith(".json")) return false;
-    if (low === "prompt-index.json") return false;
-    return true;
-}
-
-async function apiListClientPromptFiles(clientId) {
-    const container = "prompts"; // Azure Blob container name (known in portal)
-    const prefix = `client/${clientId}/`;
-    const folder = `client/${clientId}`;
-
-    const bases = [
-        // Most common patterns
-        { method: "GET", query: (fn) => `?prefix=${encodeURIComponent(prefix)}` },
-        { method: "GET", query: (fn) => `?container=${encodeURIComponent(container)}&prefix=${encodeURIComponent(prefix)}` },
-        { method: "GET", query: (fn) => `?container=${encodeURIComponent(container)}&folder=${encodeURIComponent(folder)}` },
-        { method: "GET", query: (fn) => `?folder=${encodeURIComponent(folder)}` },
-
-        // POST bodies
-        { method: "POST", body: { prefix } },
-        { method: "POST", body: { container, prefix } },
-        { method: "POST", body: { container, folder } },
-        { method: "POST", body: { folder } },
-    ];
-
-    for (const fn of LIST_CANDIDATES) {
-        for (const spec of bases) {
-            const url = join(els.apiBase.value, fn) + (spec.method === "GET" ? spec.query(fn) : "");
-            try {
-                let res;
-                if (spec.method === "GET") {
-                    res = await fetch(url, { cache: "no-store" });
-                } else {
-                    res = await fetch(url, {
-                        method: "POST",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify(spec.body)
-                    });
-                }
-
-                if (!res || !res.ok) {
-                    // keep trying other shapes, but log once per endpoint for debug
-                    if (res) console.debug(`[list] ${fn} ${spec.method} ${res.status}`);
-                    continue;
-                }
-
-                const j = await res.json().catch(() => ({}));
-                const names = normalizeListResponse(j, prefix) || [];
-
-                // normalizeListResponse may return full paths; ensure just filenames
-                const files = names
-                    .map(n => (n.startsWith(prefix) ? n.slice(prefix.length) : n))
-                    .filter(isPromptJsonFile);
-
-                return files;
-            } catch (e) {
-                console.debug(`[list] ${fn} ${spec.method} failed`, e);
-                // continue
-            }
-        }
-    }
-    return null;
-}
-
-function buildEffectiveIndexItems(indexItems, dirFiles) {
-    const list = Array.isArray(indexItems) ? indexItems : [];
-    const files = Array.isArray(dirFiles) ? dirFiles : [];
-    const fileSet = new Set(files);
-
-    // index -> keep only existing
-    const kept = list
-        .filter(it => it && it.file && fileSet.has(it.file))
-        .map(it => ({ ...it, autoAdded: false }));
-
-    const used = new Set(kept.map(it => it.file));
-
-    // directory -> append missing (e.g., texel-custom-*.json)
-    const additions = files
-        .filter(f => !used.has(f))
-        .map(f => ({
-            file: f,
-            name: prettifyNameFromFile(f),
-            order: 999999,
-            hidden: false,
-            lock: false,
-            autoAdded: true
-        }));
-
-    // keep order as much as possible; roomphoto pinned later in render sort
-    const merged = [...kept, ...additions];
-
-    // Normalize order for new items only (do not perturb existing orders)
-    let maxOrder = 0;
-    for (const it of kept) {
-        const o = Number(it.order);
-        if (Number.isFinite(o)) maxOrder = Math.max(maxOrder, o);
-    }
-    let next = (maxOrder > 0 ? maxOrder : 0) + 10;
-    for (const it of merged) {
-        if (it.order === 999999) {
-            it.order = next;
-            next += 10;
-        }
-    }
-
-    return merged;
-}
-
-
 async function renderFileList() {
     if (!els.fileList)
         return;
@@ -844,16 +740,7 @@ async function renderFileList() {
 
     await ensurePromptIndex(clid, beh, true);
 
-    
-
-    // ★ Directory reality is authoritative: include any JSON files that exist in the folder
-    // (e.g., texel-custom-*.json) even if prompt-index.json doesn't list them.
-    const dirFiles = await apiListClientPromptFiles(clid).catch(() => null);
-    if (dirFiles && promptIndex && Array.isArray(promptIndex.items)) {
-        // Update in-memory items only (no auto-save) to reflect current directory state.
-        promptIndex.items = buildEffectiveIndexItems(promptIndex.items, dirFiles);
-    }
-const ROOM = KIND_TO_NAME["roomphoto"];
+    const ROOM = KIND_TO_NAME["roomphoto"];
 
     const rows = [...(promptIndex.items || [])]
         .filter(it => !it.hidden)
