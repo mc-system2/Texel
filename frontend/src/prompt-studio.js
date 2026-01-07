@@ -63,8 +63,8 @@ function join(base, path) {
     return (base || "").replace(/\/+$/, "") + "/" + String(path || "").replace(/^\/+/, "");
 }
 
-const LOAD_CANDIDATES = ["LoadPromptText", "LoadBLOB", "LoadPrompt", "LoadText"];
-const SAVE_CANDIDATES = ["SavePromptText", "SaveBLOB", "SavePrompt", "SaveText"];
+const LOAD_CANDIDATES = ["LoadPromptText"];
+const SAVE_CANDIDATES = ["SavePromptText"];
 
 /* ---------- helpers: normalize/patch prompt docs ---------- */
 function normalizePromptDoc(doc) {
@@ -305,48 +305,6 @@ function normalizeIndex(x) {
 }
 
 
-/**
- * Save raw text (no toFlat/no prompt wrapper). Used for prompt-index.json and other non-prompt JSON.
- * Tries SaveText / SaveBLOB first. Falls back to SavePromptText/SavePrompt with raw text payload.
- */
-async function apiSaveRawText(filename, rawText, etag) {
-    const text = (rawText == null) ? "" : String(rawText);
-    const candidates = ["SaveText", "SaveBLOB", "SavePromptText", "SavePrompt"];
-    for (const fn of candidates) {
-        try {
-            let body = null;
-
-            // Endpoints with "Text/BLOB" are expected to accept { filename, text }
-            if (fn === "SaveText" || fn === "SaveBLOB") {
-                body = { filename, text };
-            } else {
-                // Prompt endpoints accept { filename, prompt }, but we pass raw JSON text as-is
-                body = { filename, prompt: text };
-            }
-            if (etag) body.etag = etag;
-
-            const r = await fetch(join(els.apiBase.value, fn), {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify(body)
-            });
-            if (!r.ok) continue;
-
-            // best-effort parse to keep symmetry with apiSaveText
-            const raw = await r.text();
-            let j = {};
-            try { j = raw ? JSON.parse(raw) : {}; } catch {}
-            if (els.badgeEtag) {
-                const ne = j?.etag || r.headers.get("ETag") || r.headers.get("etag") || null;
-                if (ne) els.badgeEtag.textContent = "ETag: " + ne;
-            }
-            return j;
-        } catch {
-            // try next
-        }
-    }
-    throw new Error("Save failed: no available save endpoint (SaveText/SaveBLOB/SavePromptText/SavePrompt).");
-}
 
 async function ensurePromptIndex(clientId, behavior, bootstrap=true) {
     const path = indexClientPath(clientId);
@@ -354,10 +312,15 @@ async function ensurePromptIndex(clientId, behavior, bootstrap=true) {
     let r = await apiLoadText(path);
     if (!r) {
         const g = await tryLoad(path);
-        if (g)
+        if (g && g.status === 404 && g.missingFile === true) {
+            // ✅ indexが存在しない（正常系）→ bootstrap を許可
+            r = null;
+        } else if (g) {
+            // 404でも missingFile=false の場合は API/関数名不整合の可能性が高い
             r = g;
+        }
     }
-    if (r) {
+    if (r && r.status === 200) {
         const idx = normalizeIndex(r.data);
         if (idx) {
             promptIndex = idx;
@@ -800,23 +763,35 @@ async function tryLoad(filename) {
     }
     for (const f of candidates) {
         const url = join(els.apiBase.value, "LoadPromptText") + `?filename=${encodeURIComponent(f)}`;
-        const res = await fetch(url, {
-            cache: "no-store"
-        }).catch( () => null);
-        if (!res || !res.ok)
+        const res = await fetch(url, { cache: "no-store" }).catch(() => null);
+        if (!res) continue;
+
+        // 404 を「ファイル未存在」と「関数/経路不整合」に切り分ける
+        if (!res.ok) {
+            if (res.status === 404) {
+                const ct = (res.headers.get("content-type") || "").toLowerCase();
+                let bodyText = "";
+                try { bodyText = await res.text(); } catch { bodyText = ""; }
+
+                // JSONエラー（= 関数は生きていて blob が無い）の場合のみ「missingFile」として返す
+                if (ct.includes("application/json")) {
+                    try {
+                        const j = bodyText ? JSON.parse(bodyText) : {};
+                        return { status: 404, missingFile: true, data: j, etag: null, used: f };
+                    } catch {
+                        return { status: 404, missingFile: true, data: {}, etag: null, used: f };
+                    }
+                }
+                // HTML等（= 関数名/ベースURLが違う可能性）→ missingFile扱いしない
+                return { status: 404, missingFile: false, data: {}, etag: null, used: f };
+            }
             continue;
+        }
+
         const etag = res.headers.get("etag") || null;
         let data = {};
-        try {
-            data = await res.json();
-        } catch {
-            data = {};
-        }
-        return {
-            data,
-            etag,
-            used: f
-        };
+        try { data = await res.json(); } catch { data = {}; }
+        return { status: 200, data, etag, used: f };
     }
     return null;
 }
