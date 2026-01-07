@@ -733,58 +733,59 @@ function isPromptJsonFile(name) {
 }
 
 async function apiListClientPromptFiles(clientId) {
+    const container = "prompts"; // Azure Blob container name (known in portal)
     const prefix = `client/${clientId}/`;
+    const folder = `client/${clientId}`;
+
+    const bases = [
+        // Most common patterns
+        { method: "GET", query: (fn) => `?prefix=${encodeURIComponent(prefix)}` },
+        { method: "GET", query: (fn) => `?container=${encodeURIComponent(container)}&prefix=${encodeURIComponent(prefix)}` },
+        { method: "GET", query: (fn) => `?container=${encodeURIComponent(container)}&folder=${encodeURIComponent(folder)}` },
+        { method: "GET", query: (fn) => `?folder=${encodeURIComponent(folder)}` },
+
+        // POST bodies
+        { method: "POST", body: { prefix } },
+        { method: "POST", body: { container, prefix } },
+        { method: "POST", body: { container, folder } },
+        { method: "POST", body: { folder } },
+    ];
 
     for (const fn of LIST_CANDIDATES) {
-        // --- GET: prefix ---
-        try {
-            const url = join(els.apiBase.value, fn) + `?prefix=${encodeURIComponent(prefix)}`;
-            let res = await fetch(url, { cache: "no-store" }).catch(() => null);
-            if (res && res.ok) {
-                const j = await res.json().catch(() => ({}));
-                const names = normalizeListResponse(j, prefix);
-                return names.filter(isPromptJsonFile);
-            }
-        } catch {}
+        for (const spec of bases) {
+            const url = join(els.apiBase.value, fn) + (spec.method === "GET" ? spec.query(fn) : "");
+            try {
+                let res;
+                if (spec.method === "GET") {
+                    res = await fetch(url, { cache: "no-store" });
+                } else {
+                    res = await fetch(url, {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify(spec.body)
+                    });
+                }
 
-        // --- GET: folder ---
-        try {
-            const url = join(els.apiBase.value, fn) + `?folder=${encodeURIComponent(prefix.replace(/\/$/, ""))}`;
-            let res = await fetch(url, { cache: "no-store" }).catch(() => null);
-            if (res && res.ok) {
-                const j = await res.json().catch(() => ({}));
-                const names = normalizeListResponse(j, prefix);
-                return names.filter(isPromptJsonFile);
-            }
-        } catch {}
+                if (!res || !res.ok) {
+                    // keep trying other shapes, but log once per endpoint for debug
+                    if (res) console.debug(`[list] ${fn} ${spec.method} ${res.status}`);
+                    continue;
+                }
 
-        // --- POST: prefix ---
-        try {
-            let res = await fetch(join(els.apiBase.value, fn), {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ prefix })
-            }).catch(() => null);
-            if (res && res.ok) {
                 const j = await res.json().catch(() => ({}));
-                const names = normalizeListResponse(j, prefix);
-                return names.filter(isPromptJsonFile);
-            }
-        } catch {}
+                const names = normalizeListResponse(j, prefix) || [];
 
-        // --- POST: container+folder (common pattern) ---
-        try {
-            let res = await fetch(join(els.apiBase.value, fn), {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ container: "prompts", folder: prefix.replace(/\/$/, "") })
-            }).catch(() => null);
-            if (res && res.ok) {
-                const j = await res.json().catch(() => ({}));
-                const names = normalizeListResponse(j, prefix);
-                return names.filter(isPromptJsonFile);
+                // normalizeListResponse may return full paths; ensure just filenames
+                const files = names
+                    .map(n => (n.startsWith(prefix) ? n.slice(prefix.length) : n))
+                    .filter(isPromptJsonFile);
+
+                return files;
+            } catch (e) {
+                console.debug(`[list] ${fn} ${spec.method} failed`, e);
+                // continue
             }
-        } catch {}
+        }
     }
     return null;
 }
