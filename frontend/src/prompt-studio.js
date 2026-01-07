@@ -252,7 +252,13 @@ function normalizeIndex(x) {
     try {
         if (!x)
             return null;
-        const pick = (o) => (o && Array.isArray(o.items)) ? o : null;
+        const pick = (o) => {
+            if (!(o && Array.isArray(o.items))) return null;
+            // cleanup: index should not carry prompt/params fields
+            try { delete o.prompt; } catch {}
+            try { delete o.params; } catch {}
+            return o;
+        };
         if (x.items)
             return pick(x);
         if (x.prompt?.items)
@@ -753,6 +759,7 @@ async function tryLoad(filename) {
         candidates.push(`client/${clid}/${filename}`);
         candidates.push(`prompt/${clid}/${filename}`);
         candidates.push(templateFromFilename(filename, beh));
+            candidates.push(filename); // root fallback
     } else {
         candidates.push(filename);
     }
