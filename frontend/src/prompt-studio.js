@@ -20,6 +20,7 @@ const FAMILY = {
 
 const els = {
     clientId: document.getElementById("clientId"),
+    clientName: document.getElementById("clientName"),
     behaviorLabel: document.getElementById("behaviorLabel"),
     apiBase: document.getElementById("apiBase"),
     fileList: document.getElementById("fileList"),
