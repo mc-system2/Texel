@@ -2,74 +2,71 @@ const { app } = require("@azure/functions");
 const { BlobServiceClient } = require("@azure/storage-blob");
 
 const connectionString = process.env["AzureWebJobsStorage"];
-const containerName = "prompts";
+const CONTAINER = "prompts";
 
-function validateIndexFilename(filename) {
-  const f = String(filename || "");
-  // expected: client/XXXX/prompt-index.json
-  if (!/^client\/[A-Z0-9]{4}\/prompt-index\.json$/.test(f)) {
-    throw new Error("filename must be like client/AB12/prompt-index.json");
-  }
-  return f;
-}
-
-function normalizeIndexShape(idx) {
-  if (!idx || typeof idx !== "object") throw new Error("index must be an object");
-  if (!Array.isArray(idx.items)) idx.items = [];
-  // Enforce forbidden keys
-  if ("prompt" in idx) delete idx.prompt;
-  if ("params" in idx) delete idx.params;
-
-  // Minimal required keys
-  if (typeof idx.version !== "number") idx.version = 1;
-  if (typeof idx.clientId !== "string") idx.clientId = "";
-  if (typeof idx.name !== "string") idx.name = "";
-  if (typeof idx.behavior !== "string") idx.behavior = "";
-  if (typeof idx.spreadsheetId !== "string") idx.spreadsheetId = "";
-  if (typeof idx.createdAt !== "string") idx.createdAt = "";
-  idx.updatedAt = new Date().toISOString();
-
-  // Normalize items
-  idx.items = idx.items.map((it) => ({
-    file: String(it?.file || ""),
-    name: typeof it?.name === "string" ? it.name : "",
-    order: Number(it?.order || 0),
-    hidden: !!it?.hidden,
-    lock: !!it?.lock,
-  })).filter(it => it.file);
-
-  // Keep stable sort by order then file
-  idx.items.sort((a,b) => (a.order - b.order) || a.file.localeCompare(b.file));
-  return idx;
-}
-
+/**
+ * POST /api/SavePromptIndex
+ * Body:
+ *  - { filename: "client/A001/prompt-index.json", index: { ...pure index... }, etag?: "..." }
+ *  - OR { filename, text: "{...pure index json...}", etag?: "..." }
+ *
+ * Always saves as pure JSON (no {prompt,params} wrapper).
+ */
 app.http("SavePromptIndex", {
   methods: ["POST"],
-  authLevel: "function",
+  authLevel: "anonymous",
   handler: async (request, context) => {
     try {
-      const body = await request.json();
-      const filename = validateIndexFilename(body?.filename);
-      const indexObj = normalizeIndexShape(body?.index);
+      const body = await request.json().catch(() => null);
+      if (!body || !body.filename) {
+        return { status: 400, body: { error: "filename is required" } };
+      }
+      const filename = body.filename;
+      const etag = body.etag || body.eTag || body.ETag || null;
+
+      let jsonText = null;
+      if (typeof body.text === "string") {
+        jsonText = body.text;
+      } else if (typeof body.index === "object" && body.index) {
+        // Strip accidental foreign keys defensively
+        const idx = { ...body.index };
+        delete idx.prompt;
+        delete idx.params;
+        jsonText = JSON.stringify(idx, null, 2);
+      } else if (typeof body === "object" && body.version && body.items) {
+        // Allow directly posting the index object
+        const idx = { ...body };
+        delete idx.prompt;
+        delete idx.params;
+        jsonText = JSON.stringify(idx, null, 2);
+      } else {
+        return { status: 400, body: { error: "index (object) or text (string) is required" } };
+      }
+
+      // Validate JSON
+      try { JSON.parse(jsonText); } catch (e) {
+        return { status: 400, body: { error: "Invalid JSON", details: e.message } };
+      }
 
       const blobServiceClient = BlobServiceClient.fromConnectionString(connectionString);
-      const container = blobServiceClient.getContainerClient(containerName);
-      const blockBlobClient = container.getBlockBlobClient(filename);
+      const containerClient = blobServiceClient.getContainerClient(CONTAINER);
+      const blockBlobClient = containerClient.getBlockBlobClient(filename);
 
-      const jsonText = JSON.stringify(indexObj, null, 2);
-
-      await blockBlobClient.upload(jsonText, Buffer.byteLength(jsonText, "utf8"), {
-        blobHTTPHeaders: { blobContentType: "application/json; charset=utf-8" },
-      });
-
-      context.log(`◆ SavePromptIndex OK: ${filename}`);
-      return {
-        status: 200,
-        jsonBody: { message: "保存成功", filename }
+      const options = {
+        blobHTTPHeaders: { blobContentType: "application/json; charset=utf-8" }
       };
+      if (etag) options.conditions = { ifMatch: etag };
+
+      await blockBlobClient.upload(jsonText, Buffer.byteLength(jsonText, "utf8"), options);
+
+      return { status: 200, body: { message: "saved", filename } };
     } catch (err) {
-      context.log("◆ SavePromptIndex NG:", err);
-      return { status: 500, jsonBody: { error: "保存中にエラーが発生しました", details: String(err?.message || err) } };
+      context.log("SavePromptIndex error:", err);
+      // Concurrency error
+      if (err && (err.statusCode === 412 || err.code === "ConditionNotMet")) {
+        return { status: 412, body: { error: "ETag mismatch", details: err.message } };
+      }
+      return { status: 500, body: { error: "Failed to save prompt index", details: err.message } };
     }
   }
 });

@@ -1,4 +1,4 @@
-/* build:ps-20251112-idxfix+pathfix+field-only-edit */
+/* build:ps-20260107-catalog-bootstrap+ui-dblclick */
 /* ===== Prompt Studio – logic (index-safe add, robust reload, field-only edit) ===== */
 const DEV_API = "https://func-texel-api-dev-jpe-001-b2f6fec8fzcbdrc3.japaneast-01.azurewebsites.net/api/";
 const PROD_API = "https://func-texel-api-prod-jpe-001-dsgfhtafbfbxawdz.japaneast-01.azurewebsites.net/api/";
@@ -154,16 +154,109 @@ function toFlat(doc) {
     return out;
 }
 /* ---------- API wrappers ---------- */
-async function apiLoadText(filename) {
-    const getRes = await tryLoad(filename);
-    if (!getRes) return null;
-    return {
-        etag: getRes.etag ?? null,
-        data: getRes.data,
-        used: "LoadPromptText"
-    };
+// ---- Client Catalog (texel-client-catalog.json) ----
+// Prompt Studio の index bootstrap 時に、client-editor.js と同じ API（LoadClientCatalog）で取得する
+async function loadClientCatalogMeta(clientId) {
+    try {
+        const fname = "texel-client-catalog.json";
+        const url = join(els.apiBase.value, "LoadClientCatalog") + `?filename=${encodeURIComponent(fname)}`;
+        const res = await fetch(url, { cache: "no-cache" });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const ctype = (res.headers.get("content-type") || "").toLowerCase();
+        const data = ctype.includes("application/json") ? await res.json() : JSON.parse(await res.text());
+
+        // catalog 形状差を吸収（配列直下 / items / clients）
+        const list = Array.isArray(data) ? data
+            : (Array.isArray(data.items) ? data.items
+            : (Array.isArray(data.clients) ? data.clients : []));
+
+        const hit = list.find(x => String(x?.clientId || x?.code || "") === String(clientId));
+        if (!hit) return null;
+
+        return {
+            clientId: hit.clientId || clientId,
+            name: hit.name || "",
+            behavior: hit.behavior || hit.type || "",
+            spreadsheetId: hit.spreadsheetId || hit.sheetId || "",
+            createdAt: hit.createdAt || ""
+        };
+    } catch (e) {
+        console.warn("loadClientCatalogMeta failed:", e);
+        return null;
+    }
 }
 
+async function apiLoadText(filename) {
+    // Try GET first (cache disabled)
+    const getRes = await tryLoad(filename);
+    if (getRes) {
+        getRes.used = "GET";
+        return {
+            etag: getRes.etag ?? null,
+            data: getRes.data,
+            used: "GET"
+        };
+    }
+
+    // Try POST with multiple function names
+    for (const fn of LOAD_CANDIDATES) {
+        try {
+            const r = await fetch(join(els.apiBase.value, fn), {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json"
+                },
+                body: JSON.stringify({
+                    filename
+                })
+            });
+            if (!r.ok)
+                continue;
+            const j = await r.json().catch( () => null);
+            let data = null;
+            const t = j?.text ?? j?.prompt ?? null;
+            if (typeof t === "string") {
+                try {
+                    data = JSON.parse(t)
+                } catch {
+                    data = t
+                }
+            } else if (j?.prompt)
+                data = j.prompt;
+            else if (j && typeof j === "object")
+                data = j;
+            return {
+                etag: j?.etag ?? null,
+                data,
+                used: fn
+            };
+        } catch {/* ignore and try next */
+        }
+    }
+    return null;
+}
+
+// ===== Prompt Index (pure JSON) dedicated APIs =====
+async function apiLoadPromptIndex(filename) {
+  const url = join(els.apiBase.value, "LoadPromptIndex") + "?filename=" + encodeURIComponent(filename);
+  const res = await fetch(url, { cache: "no-store" });
+  const text = await res.text().catch(() => "");
+  let data = null;
+  try { data = text ? JSON.parse(text) : null; } catch { data = null; }
+  return { status: res.status, ok: res.ok, data, etag: res.headers.get("etag") || res.headers.get("ETag") || null };
+}
+
+async function apiSavePromptIndex(filename, indexObj, etag) {
+  const url = join(els.apiBase.value, "SavePromptIndex");
+  const headers = { "Content-Type": "application/json" };
+  if (etag) headers["If-Match"] = etag;
+  const body = { filename, index: indexObj }; // backend will store raw pure JSON
+  const res = await fetch(url, { method: "POST", headers, body: JSON.stringify(body) });
+  const text = await res.text().catch(() => "");
+  let data = null;
+  try { data = text ? JSON.parse(text) : null; } catch { data = null; }
+  return { status: res.status, ok: res.ok, data, etag: res.headers.get("etag") || res.headers.get("ETag") || null };
+}
 async function apiSaveText(filename, payload, etag) {
     const flat = (typeof payload === "string") ? ( () => {
         try {
@@ -209,141 +302,215 @@ async function apiSaveText(filename, payload, etag) {
     throw new Error("保存APIが見つかりません（候補: " + SAVE_CANDIDATES.join(",") + "）");
 }
 
-
-async function tryLoadIndex(filename) {
-    const url = join(els.apiBase.value, "LoadPromptIndex") + `?filename=${encodeURIComponent(filename)}`;
-    const res = await fetch(url, { cache: "no-store" });
-    if (res.status === 404) return null;
-    if (!res.ok) {
-        const t = await res.text().catch(() => "");
-        throw new Error(`LoadPromptIndex failed (${res.status}): ${t}`);
-    }
-    const etag = res.headers.get("etag") || res.headers.get("ETag") || null;
-    const data = await res.json().catch(() => ({}));
-    return { data, etag, used: "LoadPromptIndex" };
+/** Apply client metadata to UI (client name / sheet id). */
+function applyClientMetaToUi(meta) {
+  if (!meta) return;
+  try {
+    if (els.clientName) els.clientName.value = meta.name || "";
+    if (els.clientSheetId) els.clientSheetId.value = meta.spreadsheetId || "";
+  } catch {}
 }
 
-async function apiLoadIndex(filename) {
-    const r = await tryLoadIndex(filename);
-    if (!r) return null;
-    return { etag: r.etag ?? null, data: r.data, used: "LoadPromptIndex" };
+async function loadClientCatalogSafe() {
+  const filename = "texel-client-catalog.json";
+  const url = join(els.apiBase.value, `LoadClientCatalog?filename=${encodeURIComponent(filename)}`);
+  const r = await fetch(url, { method: "GET" });
+  if (!r.ok) {
+    const t = await r.text().catch(() => "");
+    throw new Error(`LoadClientCatalog failed (${r.status}): ${t}`);
+  }
+  const raw = await r.text();
+  try { return raw ? JSON.parse(raw) : null; } catch { return null; }
 }
 
-async function apiSaveIndex(filename, indexObj, etag) {
-    const body = { filename, index: indexObj };
-    if (etag) body.etag = etag;
-    const r = await fetch(join(els.apiBase.value, "SavePromptIndex"), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body)
-    });
-    const raw = await r.text().catch(() => "");
-    if (!r.ok) {
-        throw new Error(`SavePromptIndex failed (${r.status}): ${raw}`);
-    }
-    // Optionally return {etag}
-    let j = {};
-    try { j = raw ? JSON.parse(raw) : {}; } catch { j = {}; }
-    return { etag: j?.etag || r.headers.get("etag") || r.headers.get("ETag") || null, body: j };
+function findClientMetaFromCatalog(catalog, clientId) {
+  if (!catalog || !clientId) return null;
+  const arr =
+    Array.isArray(catalog) ? catalog :
+    Array.isArray(catalog.items) ? catalog.items :
+    Array.isArray(catalog.clients) ? catalog.clients :
+    Array.isArray(catalog.data) ? catalog.data : [];
+  return arr.find(x => (x?.clientId || x?.id || "") === clientId) || null;
 }
-
 
 function normalizeIndex(x) {
     try {
-        if (!x)
-            return null;
-        const pick = (o) => (o && Array.isArray(o.items)) ? o : null;
-        if (x.items)
-            return pick(x);
-        if (x.prompt?.items)
-            return pick(x.prompt);
+        if (!x) return null;
+
+        const sanitize = (o) => {
+            if (!o || !Array.isArray(o.items)) return null;
+            // 余計なフィールド（他形式の名残）を除去
+            if ("prompt" in o) delete o.prompt;
+            if ("params" in o) delete o.params;
+            return o;
+        };
+
+        if (x.items) return sanitize(x);
+        if (x.prompt?.items) return sanitize(x.prompt);
+
         if (typeof x === "string") {
             const p = JSON.parse(x);
-            if (p.items)
-                return pick(p);
-            if (p.prompt?.items)
-                return pick(p.prompt);
+            if (p.items) return sanitize(p);
+            if (p.prompt?.items) return sanitize(p.prompt);
         }
     } catch {}
     return null;
 }
 
-async function ensurePromptIndex(clientId, behavior, bootstrap=true) {
-    const path = indexClientPath(clientId);
-    // 1) Try POST/GET loader
-    let r = await apiLoadIndex(path);
-    if (!r) {
-        const g = await tryLoadIndex(path);
-        if (g)
-            r = g;
+async function reconcileIndexWithDirectory(clientId, idx) {
+  // Adds missing json files (e.g., texel-custom-*.json) that exist in the client folder but not in index.
+  // Keeps existing orders; appends new files at the end (10-step).
+  try {
+    const dirFiles = await apiListClientPromptFiles(clientId);
+    if (!Array.isArray(dirFiles) || dirFiles.length === 0) return { changed: false, idx };
+
+    const existing = new Set((idx.items || []).map(it => String(it.file || "")));
+    let maxOrder = 0;
+    for (const it of (idx.items || [])) maxOrder = Math.max(maxOrder, Number(it.order) || 0);
+    let nextOrder = Math.ceil((maxOrder || 0) / 10) * 10;
+    if (nextOrder <= maxOrder) nextOrder = maxOrder + 10;
+    let changed = false;
+
+    for (const f of dirFiles) {
+      if (!f || f === "prompt-index.json") continue;
+      if (!String(f).toLowerCase().endsWith(".json")) continue;
+      if (existing.has(f)) continue;
+      idx.items = idx.items || [];
+      idx.items.push({ file: f, name: "", order: nextOrder, hidden: false, lock: false });
+      existing.add(f);
+      nextOrder += 10;
+      changed = true;
     }
-    if (r) {
-        const idx = normalizeIndex(r.data);
-        if (idx) {
-            promptIndex = idx;
-            promptIndexPath = path;
-            promptIndexEtag = r.etag || null;
-            // 追加：クライアント名称を UI に反映
-            const clientNameEl = document.getElementById("clientName");
-            if (clientNameEl && promptIndex && promptIndex.name) {
-                clientNameEl.value = promptIndex.name;
-            }
-            return promptIndex;
-        }
+
+    // Keep deterministic ordering by order then file
+    if (Array.isArray(idx.items)) {
+      idx.items.sort((a, b) => {
+        const oa = Number(a?.order) || 0, ob = Number(b?.order) || 0;
+        if (oa !== ob) return oa - ob;
+        return String(a?.file || "").localeCompare(String(b?.file || ""), "en");
+      });
     }
-    if (!bootstrap && promptIndex && promptIndexPath === path) {
-        return promptIndex;
-    }
-    if (!bootstrap) {
-        console.warn("ensurePromptIndex: load failed; skipped bootstrap to avoid overwrite. Check API base or function name.");
-        setStatus("インデックスの読込に失敗（再構築は未実施）。API設定をご確認ください。", "orange");
-        return promptIndex;
-    }
-    // Bootstrap (index新規作成)
-    const kinds = [...FAMILY[behavior]];
-    const items = [];
-    let order = 10;
-    for (const k of kinds) {
-        const file = KIND_TO_NAME[k];
-        const isRoom = (k === "roomphoto");
-        items.push({
-            file,
-            name: isRoom ? "画像分析プロンプト" : prettifyNameFromFile(file),
-            order: order,
-            hidden: false,
-            lock: isRoom
-        });
-        order += 10;
-    }
-    promptIndex = {
-        version: 1,
-        clientId,
-        behavior,
-        updatedAt: new Date().toISOString(),
-        items
-    };
-    promptIndexPath = path;
-    promptIndexEtag = null;
-    try {
-        await apiSaveIndex(promptIndexPath, promptIndex, null);
-    } catch (e) {
-        console.error("bootstrap save failed:", e);
-        setStatus("インデックス新規作成に失敗しました。API設定をご確認ください。", "red");
-    }
-    return promptIndex;
+    return { changed, idx };
+  } catch {
+    return { changed: false, idx };
+  }
 }
 
-async function reloadIndex() {
-    if (!promptIndexPath) return;
-    const res = await tryLoadIndex(promptIndexPath);
-    if (!res) return;
-    const idx = normalizeIndex(res.data);
+
+
+
+async function ensurePromptIndex(clientId, behavior, bootstrap=true) {
+  const path = indexClientPath(clientId);
+
+  // 1) Try load via dedicated index API (pure JSON)
+  const r = await apiLoadPromptIndex(path).catch(() => null);
+
+  if (r && r.status === 200) {
+    const idx = normalizeIndex(r.data);
     if (idx) {
-        promptIndex = idx;
-        promptIndexEtag = res.etag || null;
-        // index側を正としてUI反映
-        try { reflectClientMetaToUI(promptIndex); } catch {}
+      // When index exists, index is source of truth for name/sheet
+      promptIndex = idx;
+      promptIndexPath = path;
+      promptIndexEtag = r.etag || null;
+
+      applyClientMetaToUi({ name: idx.name || "", spreadsheetId: idx.spreadsheetId || "" });
+
+      // Reconcile: if folder has additional JSON files (e.g. texel-custom-*.json) not listed, append them
+      const rec = await reconcileIndexWithDirectory(clientId, promptIndex);
+      if (rec.changed) {
+        promptIndex.updatedAt = new Date().toISOString();
+        const saved = await apiSavePromptIndex(promptIndexPath, promptIndex, promptIndexEtag).catch(() => null);
+        if (saved && saved.ok) promptIndexEtag = saved.etag || promptIndexEtag;
+      }
+      return promptIndex;
     }
+  }
+
+  // 404 is normal: index missing
+  const isMissing = (r && r.status === 404);
+
+  if (!bootstrap) {
+    if (!isMissing) {
+      console.warn("ensurePromptIndex: load failed; skipped bootstrap. Check API base or function name.");
+      setStatus("インデックスの読込に失敗。API設定をご確認ください。", "orange");
+    }
+    return promptIndex;
+  }
+
+  if (!isMissing && r) {
+    // Non-404 failures should not bootstrap (avoid overwriting)
+    console.warn("ensurePromptIndex: load failed; skipped bootstrap to avoid overwrite.", r.status);
+    setStatus("インデックスの読込に失敗（再構築は未実施）。API設定をご確認ください。", "orange");
+    return promptIndex;
+  }
+
+  // 2) Index missing -> use client-catalog for header fields in UI, then bootstrap
+  let meta = null;
+  try {
+    const catalog = await loadClientCatalogSafe();
+    meta = findClientMetaFromCatalog(catalog, clientId);
+    applyClientMetaToUi(meta);
+  } catch {}
+
+  const dirFiles = await apiListClientPromptFiles(clientId);
+  const hasDir = Array.isArray(dirFiles) && dirFiles.length > 0;
+
+  const kinds = [...FAMILY[behavior]];
+  const standardFiles = kinds.map(k => KIND_TO_NAME[k]).filter(Boolean);
+
+  const ordered = [];
+  if (hasDir) {
+    const set = new Set(dirFiles);
+    for (const f of standardFiles) if (set.has(f)) ordered.push(f);
+    for (const f of dirFiles) if (!ordered.includes(f)) ordered.push(f);
+  } else {
+    ordered.push(...standardFiles);
+  }
+
+  const items = [];
+  let order = 10;
+  for (const file of ordered) {
+    items.push({ file, name: "", order, hidden: false, lock: false });
+    order += 10;
+  }
+
+  const ymd = new Date().toISOString().slice(0, 10);
+  promptIndex = {
+    version: 1,
+    clientId,
+    name: meta?.name || "",
+    behavior: meta?.behavior || behavior || "",
+    spreadsheetId: meta?.spreadsheetId || "",
+    createdAt: meta?.createdAt || ymd,
+    updatedAt: new Date().toISOString(),
+    items
+  };
+  promptIndexPath = path;
+  promptIndexEtag = null;
+
+  const saved = await apiSavePromptIndex(promptIndexPath, promptIndex, null).catch(e => {
+    console.error("bootstrap save failed:", e);
+    return null;
+  });
+  if (saved && saved.ok) promptIndexEtag = saved.etag || null;
+
+  return promptIndex;
+}
+
+
+async function reloadIndex() {
+  if (!promptIndexPath) return null;
+  const r = await apiLoadPromptIndex(promptIndexPath).catch(() => null);
+  if (r && r.status === 200) {
+    const idx = normalizeIndex(r.data);
+    if (idx) {
+      promptIndex = idx;
+      promptIndexEtag = r.etag || promptIndexEtag || null;
+      applyClientMetaToUi({ name: idx.name || "", spreadsheetId: idx.spreadsheetId || "" });
+      return promptIndex;
+    }
+  }
+  return null;
 }
 
 async function saveIndex() {
@@ -351,13 +518,13 @@ async function saveIndex() {
         return;
     promptIndex.updatedAt = new Date().toISOString();
     try {
-        const res = await apiSaveIndex(promptIndexPath, promptIndex, promptIndexEtag);
+        const res = await apiSaveText(promptIndexPath, promptIndex, promptIndexEtag);
         promptIndexEtag = res?.etag || promptIndexEtag || null;
     } catch (e) {
         const msg = String(e || "");
         if (msg.includes("412")) {
             await reloadIndex();
-            const res2 = await apiSaveIndex(promptIndexPath, promptIndex, promptIndexEtag);
+            const res2 = await apiSaveText(promptIndexPath, promptIndex, promptIndexEtag);
             promptIndexEtag = res2?.etag || promptIndexEtag || null;
         } else {
             throw e;
@@ -570,6 +737,109 @@ function templateFromFilename(filename, behavior) {
     return filename;
 }
 
+
+/* ===== Directory listing (for bootstrap + auto include custom prompts) =====
+   Uses backend ListBLOB if available.
+   Expected: ListBLOB returns either:
+   - { prompt:[{name:"client/A001/texel-....json", ...}, ...] }
+   - { files:[...names...] } or { items:[...] } or { blobs:[...] }
+   We treat "directory truth" as authoritative for which JSON files exist.
+*/
+async function apiListClientPromptFiles(clientId) {
+    const clid = String(clientId || "").trim().toUpperCase();
+    if (!clid) return [];
+    const container = "prompts";
+    const folder1 = `client/${clid}`;       // folder param style
+    const prefix1 = `client/${clid}/`;      // prefix param style
+
+    const candidates = [
+        // GET patterns
+        { method: "GET", name: "ListBLOB", qs: { container, folder: folder1 } },
+        { method: "GET", name: "ListBLOB", qs: { container, prefix: prefix1 } },
+        { method: "GET", name: "ListBLOB", qs: { folder: folder1 } },
+        { method: "GET", name: "ListBLOB", qs: { prefix: prefix1 } },
+        // POST patterns
+        { method: "POST", name: "ListBLOB", body: { container, folder: folder1 } },
+        { method: "POST", name: "ListBLOB", body: { container, prefix: prefix1 } },
+        { method: "POST", name: "ListBLOB", body: { folder: folder1 } },
+        { method: "POST", name: "ListBLOB", body: { prefix: prefix1 } },
+    ];
+
+    for (const c of candidates) {
+        try {
+            const url = join(els.apiBase.value, c.name);
+            let res;
+            if (c.method === "GET") {
+                const qs = new URLSearchParams();
+                for (const [k,v] of Object.entries(c.qs||{})) {
+                    if (v != null && v !== "") qs.set(k, v);
+                }
+                res = await fetch(url + "?" + qs.toString(), { cache: "no-store" });
+            } else {
+                res = await fetch(url, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify(c.body || {})
+                });
+            }
+            if (!res.ok) continue;
+
+            const j = await res.json().catch(() => ({}));
+            const names = normalizeListNames(j);
+
+            // strip folder/prefix and keep only filenames under client/<ID>/
+            const out = [];
+            for (const name of names) {
+                if (!name) continue;
+                const n = String(name);
+                // we want only within client/<ID>/
+                let rel = null;
+                if (n.startsWith(prefix1)) rel = n.slice(prefix1.length);
+                else if (n.startsWith(folder1 + "/")) rel = n.slice((folder1 + "/").length);
+                else if (!n.includes("/")) rel = n; // already relative
+                else continue;
+
+                if (!rel.toLowerCase().endsWith(".json")) continue;
+                if (rel === "prompt-index.json") continue;
+                out.push(rel);
+            }
+
+            // de-dup
+            return [...new Set(out)];
+        } catch {
+            // try next
+        }
+    }
+    return [];
+}
+
+function normalizeListNames(j) {
+    // common shapes
+    const pools = [];
+    if (Array.isArray(j)) pools.push(j);
+    if (Array.isArray(j?.prompt)) pools.push(j.prompt);
+    if (Array.isArray(j?.files)) pools.push(j.files);
+    if (Array.isArray(j?.items)) pools.push(j.items);
+    if (Array.isArray(j?.blobs)) pools.push(j.blobs);
+    if (Array.isArray(j?.data?.prompt)) pools.push(j.data.prompt);
+    if (Array.isArray(j?.data?.files)) pools.push(j.data.files);
+    if (Array.isArray(j?.data?.items)) pools.push(j.data.items);
+    if (Array.isArray(j?.data?.blobs)) pools.push(j.data.blobs);
+
+    const names = [];
+    for (const arr of pools) {
+        for (const x of arr) {
+            if (!x) continue;
+            if (typeof x === "string") { names.push(x); continue; }
+            if (typeof x?.name === "string") { names.push(x.name); continue; }
+            if (typeof x?.filename === "string") { names.push(x.filename); continue; }
+            if (typeof x?.path === "string") { names.push(x.path); continue; }
+        }
+    }
+    return names;
+}
+
+
 async function tryLoad(filename) {
     const clid = (els.clientId?.value || "").trim().toUpperCase();
     const beh = document.getElementById("behaviorLabel").textContent;
@@ -584,23 +854,35 @@ async function tryLoad(filename) {
     }
     for (const f of candidates) {
         const url = join(els.apiBase.value, "LoadPromptText") + `?filename=${encodeURIComponent(f)}`;
-        const res = await fetch(url, {
-            cache: "no-store"
-        }).catch( () => null);
-        if (!res || !res.ok)
+        const res = await fetch(url, { cache: "no-store" }).catch(() => null);
+        if (!res) continue;
+
+        // 404 を「ファイル未存在」と「関数/経路不整合」に切り分ける
+        if (!res.ok) {
+            if (res.status === 404) {
+                const ct = (res.headers.get("content-type") || "").toLowerCase();
+                let bodyText = "";
+                try { bodyText = await res.text(); } catch { bodyText = ""; }
+
+                // JSONエラー（= 関数は生きていて blob が無い）の場合のみ「missingFile」として返す
+                if (ct.includes("application/json")) {
+                    try {
+                        const j = bodyText ? JSON.parse(bodyText) : {};
+                        return { status: 404, missingFile: true, data: j, etag: null, used: f };
+                    } catch {
+                        return { status: 404, missingFile: true, data: {}, etag: null, used: f };
+                    }
+                }
+                // HTML等（= 関数名/ベースURLが違う可能性）→ missingFile扱いしない
+                return { status: 404, missingFile: false, data: {}, etag: null, used: f };
+            }
             continue;
+        }
+
         const etag = res.headers.get("etag") || null;
         let data = {};
-        try {
-            data = await res.json();
-        } catch {
-            data = {};
-        }
-        return {
-            data,
-            etag,
-            used: f
-        };
+        try { data = await res.json(); } catch { data = {}; }
+        return { status: 200, data, etag, used: f };
     }
     return null;
 }

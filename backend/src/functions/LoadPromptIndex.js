@@ -2,55 +2,43 @@ const { app } = require("@azure/functions");
 const { BlobServiceClient } = require("@azure/storage-blob");
 
 const connectionString = process.env["AzureWebJobsStorage"];
-const containerName = "prompts";
+const CONTAINER = "prompts";
 
-function validateIndexFilename(filename) {
-  const f = String(filename || "");
-  if (!/^client\/[A-Z0-9]{4}\/prompt-index\.json$/.test(f)) {
-    throw new Error("filename must be like client/AB12/prompt-index.json");
-  }
-  return f;
-}
-
+/**
+ * GET /api/LoadPromptIndex?filename=client%2FA001%2Fprompt-index.json
+ * - Returns the raw (pure) prompt-index.json (no {prompt,params} wrapper).
+ */
 app.http("LoadPromptIndex", {
   methods: ["GET"],
-  authLevel: "function",
+  authLevel: "anonymous",
   handler: async (request, context) => {
     try {
-      const filename = validateIndexFilename(request.query.get("filename"));
-      const blobServiceClient = BlobServiceClient.fromConnectionString(connectionString);
-      const container = blobServiceClient.getContainerClient(containerName);
-      const blockBlobClient = container.getBlockBlobClient(filename);
-
-      const exists = await blockBlobClient.exists();
-      if (!exists) {
-        return { status: 404, jsonBody: { error: "Not Found" } };
+      const url = new URL(request.url);
+      const filename = url.searchParams.get("filename");
+      if (!filename) {
+        return { status: 400, body: { error: "filename is required" } };
       }
 
-      const dl = await blockBlobClient.download(0);
-      const etag = dl?.etag || null;
-      const text = await streamToString(dl.readableStreamBody);
+      const blobServiceClient = BlobServiceClient.fromConnectionString(connectionString);
+      const containerClient = blobServiceClient.getContainerClient(CONTAINER);
+      const blobClient = containerClient.getBlobClient(filename);
 
-      let obj = {};
-      try { obj = text ? JSON.parse(text) : {}; } catch { obj = {}; }
+      const exists = await blobClient.exists();
+      if (!exists) return { status: 404, body: { error: "Not Found", filename } };
+
+      const download = await blobClient.download();
+      const chunks = [];
+      for await (const c of download.readableStreamBody) chunks.push(c);
+      const text = Buffer.concat(chunks).toString("utf8");
 
       return {
         status: 200,
-        headers: etag ? { "etag": etag, "ETag": etag } : {},
-        jsonBody: obj
+        headers: { "Content-Type": "application/json; charset=utf-8" },
+        body: text
       };
     } catch (err) {
-      context.log("◆ LoadPromptIndex NG:", err);
-      return { status: 500, jsonBody: { error: "読み込み中にエラーが発生しました", details: String(err?.message || err) } };
+      context.log("LoadPromptIndex error:", err);
+      return { status: 500, body: { error: "Failed to load prompt index", details: err.message } };
     }
   }
 });
-
-async function streamToString(readable) {
-  return await new Promise((resolve, reject) => {
-    const chunks = [];
-    readable.on("data", (d) => chunks.push(Buffer.from(d)));
-    readable.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
-    readable.on("error", reject);
-  });
-}
