@@ -280,33 +280,61 @@ async function apiSaveText(filename, payload, etag) {
     throw new Error("保存APIが見つかりません（候補: " + SAVE_CANDIDATES.join(",") + "）");
 }
 
-function normalizeIndex(x) {
-    try {
-        if (!x) return null;
 
-        const sanitize = (o) => {
-            if (!o || !Array.isArray(o.items)) return null;
-            // 余計なフィールド（他形式の名残）を除去
-            if ("prompt" in o) delete o.prompt;
-            if ("params" in o) delete o.params;
-            return o;
-        };
+async function loadClientCatalogSafe() {
+    const filename = "texel-client-catalog.json";
+    // Use LoadClientCatalog (guaranteed in this environment)
+    const url = join(els.apiBase.value, `LoadClientCatalog?filename=${encodeURIComponent(filename)}`);
+    const r = await fetch(url, { method: "GET" });
+    if (!r.ok) {
+        const t = await r.text().catch(() => "");
+        throw new Error(`LoadClientCatalog failed (${r.status}): ${t}`);
+    }
+    const raw = await r.text();
+    try { return raw ? JSON.parse(raw) : null; } catch { return null; }
+}
 
-        if (x.items) return sanitize(x);
-        if (x.prompt?.items) return sanitize(x.prompt);
-
-        if (typeof x === "string") {
-            const p = JSON.parse(x);
-            if (p.items) return sanitize(p);
-            if (p.prompt?.items) return sanitize(p.prompt);
-        }
-    } catch {}
-    return null;
+function findClientMetaFromCatalog(catalog, clientId) {
+    if (!catalog || !clientId) return null;
+    // Accept common shapes: {items:[...]}, {clients:[...]}, array
+    const arr =
+        Array.isArray(catalog) ? catalog :
+        Array.isArray(catalog.items) ? catalog.items :
+        Array.isArray(catalog.clients) ? catalog.clients :
+        Array.isArray(catalog.data) ? catalog.data :
+        [];
+    return arr.find(x => (x?.clientId || x?.id || "") === clientId) || null;
 }
 
 
+/** Apply client metadata to UI (client name / sheet id). */
+function applyClientMetaToUi(meta) {
+    if (!meta) return;
+    try {
+        if (els.clientName) els.clientName.value = meta.name || "";
+        if (els.clientSheetId) els.clientSheetId.value = meta.spreadsheetId || "";
+    } catch {}
+}
 
-async function ensurePromptIndex(clientId, behavior, bootstrap=true) {
+/**
+ * Save prompt-index.json using existing SavePromptText endpoint only.
+ * NOTE: To store "pure index JSON" without {prompt,params}, server-side SavePromptText must support raw-save for prompt-index.json.
+ * Until then, this saves the JSON as prompt text (wrapper may appear depending on server implementation).
+ */
+async function apiSaveIndexText(filename, indexObj, etag) {
+    const text = JSON.stringify(indexObj, null, 2);
+    // SavePromptText is the only guaranteed endpoint in this environment.
+    const body = { filename, prompt: text };
+    if (etag) body.etag = etag;
+    const r = await fetch(join(els.apiBase.value, "SavePromptTasync function ensurePromptIndex(clientId, behavior, bootstrap=true) {
+
+    // ★ 先に client-catalog を読み、UI のクライアント名称/スプシIDを確定（index生成前でも表示できる）
+    let clientMeta = null;
+    try {
+        const catalog = await loadClientCatalogSafe();
+        clientMeta = findClientMetaFromCatalog(catalog, clientId);
+        applyClientMetaToUi(clientMeta);
+    } catch {}
     const path = indexClientPath(clientId);
     // 1) Try POST/GET loader
     let r = await apiLoadText(path);
@@ -401,7 +429,58 @@ async function ensurePromptIndex(clientId, behavior, bootstrap=true) {
     promptIndexEtag = null;
 
     try {
-        await apiSaveRawText(promptIndexPath, JSON.stringify(promptIndex, null, 2), null);
+        await apiSaveIndexText(promptIndexPath, JSON.stringify(promptIndex, null, 2), null);
+        // 再読込してUIと内部状態を確定
+        try {
+            const rr2 = await apiLoadText(promptIndexPath);
+            if (rr2 && rr2.data) {
+                const nidx2 = normalizeIndex(rr2.data);
+                if (nidx2) {
+                    promptIndex = nidx2;
+                    promptIndexEtag = rr2.etag || null;
+                    applyClientMetaToUi({ name: promptIndex.name, spreadsheetId: promptIndex.spreadsheetId });
+                }
+            }
+        } catch {}
+    } catch (e) {
+        console.error("bootstrap save failed:", e);
+        setStatus("インデックス新規作成に失敗しました。API設定をご確認ください。", "red");
+    }
+    return promptIndex;
+}
+ (file === KIND_TO_NAME["roomphoto"]);
+        items.push({
+            file,
+            name: "",
+            order: order,
+            hidden: false,
+            lock: false
+        });
+        order += 10;
+    }
+
+    // ★ インデックス作成時は、まず Client Catalog を参照してメタ情報を補完
+    const meta = await loadClientCatalogMeta(clientId);
+
+    // createdAt は YYYY-MM-DD 形式（従来互換）
+    const ymd = new Date().toISOString().slice(0, 10);
+
+
+    promptIndex = {
+        version: 1,
+        clientId,
+        name: meta?.name || "",
+        behavior: meta?.behavior || behavior || "",
+        spreadsheetId: meta?.spreadsheetId || "",
+        createdAt: meta?.createdAt || ymd,
+        updatedAt: new Date().toISOString(),
+        items
+    };
+    promptIndexPath = path;
+    promptIndexEtag = null;
+
+    try {
+        await apiSaveIndexText(promptIndexPath, JSON.stringify(promptIndex, null, 2), null);
     } catch (e) {
         console.error("bootstrap save failed:", e);
         setStatus("インデックス新規作成に失敗しました。API設定をご確認ください。", "red");
