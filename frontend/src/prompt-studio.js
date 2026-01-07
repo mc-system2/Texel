@@ -307,8 +307,10 @@ async function apiSaveText(filename, payload, etag) {
 function applyClientMetaToUi(meta) {
   if (!meta) return;
   try {
+    // name / spreadsheetId are sourced from texel-client-catalog.json
     if (els.clientName) els.clientName.value = meta.name || "";
-    if (els.clientSheetId) els.clientSheetId.value = meta.spreadsheetId || "";
+    // Some catalog variants use "sheetId" instead of "spreadsheetId".
+    if (els.clientSheetId) els.clientSheetId.value = meta.spreadsheetId || meta.sheetId || "";
   } catch {}
 }
 
@@ -331,7 +333,14 @@ function findClientMetaFromCatalog(catalog, clientId) {
     Array.isArray(catalog.items) ? catalog.items :
     Array.isArray(catalog.clients) ? catalog.clients :
     Array.isArray(catalog.data) ? catalog.data : [];
-  return arr.find(x => (x?.clientId || x?.id || "") === clientId) || null;
+
+  // NOTE:
+  // client-editor.js matches by clientId / code (and sometimes id). Prompt-Studio must do the same.
+  const key = String(clientId).trim().toLowerCase();
+  return (
+    arr.find(x => String(x?.clientId || x?.code || x?.id || "").trim().toLowerCase() === key) ||
+    null
+  );
 }
 
 function normalizeIndex(x) {
@@ -422,7 +431,8 @@ async function ensurePromptIndex(clientId, behavior, bootstrap=true) {
           if (meta) {
             let changedMeta = false;
             if (!idx.name && meta.name) { idx.name = meta.name; changedMeta = true; }
-            if (!idx.spreadsheetId && meta.spreadsheetId) { idx.spreadsheetId = meta.spreadsheetId; changedMeta = true; }
+            const sheet = meta.spreadsheetId || meta.sheetId;
+            if (!idx.spreadsheetId && sheet) { idx.spreadsheetId = sheet; changedMeta = true; }
             if (!idx.behavior && (meta.behavior || behavior)) { idx.behavior = meta.behavior || behavior; changedMeta = true; }
             if (!idx.createdAt && meta.createdAt) { idx.createdAt = meta.createdAt; changedMeta = true; }
             if (changedMeta) {
@@ -434,7 +444,7 @@ async function ensurePromptIndex(clientId, behavior, bootstrap=true) {
         } catch {}
       }
 
-      applyClientMetaToUi({ name: idx.name || "", spreadsheetId: idx.spreadsheetId || "" });
+      applyClientMetaToUi({ name: idx.name || "", spreadsheetId: idx.spreadsheetId || "", sheetId: idx.spreadsheetId || "" });
       // Reconcile: if folder has additional JSON files (e.g. texel-custom-*.json) not listed, append them
       const rec = await reconcileIndexWithDirectory(clientId, promptIndex);
       if (rec.changed) {
@@ -500,7 +510,7 @@ async function ensurePromptIndex(clientId, behavior, bootstrap=true) {
     clientId,
     name: meta?.name || "",
     behavior: meta?.behavior || behavior || "",
-    spreadsheetId: meta?.spreadsheetId || "",
+    spreadsheetId: (meta?.spreadsheetId || meta?.sheetId) || "",
     createdAt: meta?.createdAt || ymd,
     updatedAt: new Date().toISOString(),
     items
