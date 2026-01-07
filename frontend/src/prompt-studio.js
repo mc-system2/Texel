@@ -1,4 +1,4 @@
-/* build:ps-20251112-idxfix+pathfix+field-only-edit */
+/* build:ps-20260107-catalog-bootstrap+ui-dblclick */
 /* ===== Prompt Studio – logic (index-safe add, robust reload, field-only edit) ===== */
 const DEV_API = "https://func-texel-api-dev-jpe-001-b2f6fec8fzcbdrc3.japaneast-01.azurewebsites.net/api/";
 const PROD_API = "https://func-texel-api-prod-jpe-001-dsgfhtafbfbxawdz.japaneast-01.azurewebsites.net/api/";
@@ -154,6 +154,38 @@ function toFlat(doc) {
     return out;
 }
 /* ---------- API wrappers ---------- */
+// ---- Client Catalog (texel-client-catalog.json) ----
+// Prompt Studio の index bootstrap 時に、client-editor.js と同じ API（LoadClientCatalog）で取得する
+async function loadClientCatalogMeta(clientId) {
+    try {
+        const fname = "texel-client-catalog.json";
+        const url = join(els.apiBase.value, "LoadClientCatalog") + `?filename=${encodeURIComponent(fname)}`;
+        const res = await fetch(url, { cache: "no-cache" });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const ctype = (res.headers.get("content-type") || "").toLowerCase();
+        const data = ctype.includes("application/json") ? await res.json() : JSON.parse(await res.text());
+
+        // catalog 形状差を吸収（配列直下 / items / clients）
+        const list = Array.isArray(data) ? data
+            : (Array.isArray(data.items) ? data.items
+            : (Array.isArray(data.clients) ? data.clients : []));
+
+        const hit = list.find(x => String(x?.clientId || x?.code || "") === String(clientId));
+        if (!hit) return null;
+
+        return {
+            clientId: hit.clientId || clientId,
+            name: hit.name || "",
+            behavior: hit.behavior || hit.type || "",
+            spreadsheetId: hit.spreadsheetId || hit.sheetId || "",
+            createdAt: hit.createdAt || ""
+        };
+    } catch (e) {
+        console.warn("loadClientCatalogMeta failed:", e);
+        return null;
+    }
+}
+
 async function apiLoadText(filename) {
     // Try GET first (cache disabled)
     const getRes = await tryLoad(filename);
@@ -250,69 +282,26 @@ async function apiSaveText(filename, payload, etag) {
 
 function normalizeIndex(x) {
     try {
-        if (!x)
-            return null;
-        const pick = (o) => {
-            if (!(o && Array.isArray(o.items))) return null;
-            // cleanup: index should not carry prompt/params fields
-            try { delete o.prompt; } catch {}
-            try { delete o.params; } catch {}
+        if (!x) return null;
+
+        const sanitize = (o) => {
+            if (!o || !Array.isArray(o.items)) return null;
+            // 余計なフィールド（他形式の名残）を除去
+            if ("prompt" in o) delete o.prompt;
+            if ("params" in o) delete o.params;
             return o;
         };
-        if (x.items)
-            return pick(x);
-        if (x.prompt?.items)
-            return pick(x.prompt);
+
+        if (x.items) return sanitize(x);
+        if (x.prompt?.items) return sanitize(x.prompt);
+
         if (typeof x === "string") {
             const p = JSON.parse(x);
-            if (p.items)
-                return pick(p);
-            if (p.prompt?.items)
-                return pick(p.prompt);
+            if (p.items) return sanitize(p);
+            if (p.prompt?.items) return sanitize(p.prompt);
         }
     } catch {}
     return null;
-}
-
-// ===== Client Catalog (texel-client-catalog.json) helper =====
-async function loadClientCatalogJson() {
-    // Try multiple candidate paths (environment / past conventions)
-    const candidates = [
-        "texel-client-catalog.json",
-        "files/texel-client-catalog.json",
-        "client/texel-client-catalog.json",
-        "client-catalog.json",
-        "files/client-catalog.json"
-    ];
-    for (const p of candidates) {
-        try {
-            const r = await apiLoadText(p);
-            if (!r?.data) continue;
-            const j = (typeof r.data === "string") ? JSON.parse(r.data) : r.data;
-            if (j && (Array.isArray(j.clients) || Array.isArray(j.items) || Array.isArray(j))) return j;
-        } catch {}
-    }
-    return null;
-}
-
-function findClientMeta(catalog, clientId) {
-    if (!catalog) return null;
-    const clid = String(clientId || "").trim().toUpperCase();
-    const arr =
-        Array.isArray(catalog) ? catalog :
-        Array.isArray(catalog.clients) ? catalog.clients :
-        Array.isArray(catalog.items) ? catalog.items :
-        null;
-    if (!arr) return null;
-    return arr.find(x => String(x?.clientId || "").trim().toUpperCase() === clid) || null;
-}
-
-function todayYmd() {
-    const d = new Date();
-    const y = d.getFullYear();
-    const m = String(d.getMonth() + 1).padStart(2, "0");
-    const da = String(d.getDate()).padStart(2, "0");
-    return `${y}-${m}-${da}`;
 }
 
 async function ensurePromptIndex(clientId, behavior, bootstrap=true) {
@@ -384,17 +373,20 @@ async function ensurePromptIndex(clientId, behavior, bootstrap=true) {
         order += 10;
     }
 
-    // client catalog を参照してメタ情報を補完（従来フォーマット維持）
-    const catalog = await loadClientCatalogJson();
-    const meta = findClientMeta(catalog, clientId);
+    // ★ インデックス作成時は、まず Client Catalog を参照してメタ情報を補完
+    const meta = await loadClientCatalogMeta(clientId);
+
+    // createdAt は YYYY-MM-DD 形式（従来互換）
+    const ymd = new Date().toISOString().slice(0, 10);
+
 
     promptIndex = {
         version: 1,
         clientId,
-        name: meta?.name ?? "",
-        behavior: meta?.behavior ?? behavior,
-        spreadsheetId: meta?.spreadsheetId ?? "",
-        createdAt: meta?.createdAt ?? todayYmd(),
+        name: meta?.name || "",
+        behavior: meta?.behavior || behavior || "",
+        spreadsheetId: meta?.spreadsheetId || "",
+        createdAt: meta?.createdAt || ymd,
         updatedAt: new Date().toISOString(),
         items
     };
@@ -759,7 +751,6 @@ async function tryLoad(filename) {
         candidates.push(`client/${clid}/${filename}`);
         candidates.push(`prompt/${clid}/${filename}`);
         candidates.push(templateFromFilename(filename, beh));
-            candidates.push(filename); // root fallback
     } else {
         candidates.push(filename);
     }
@@ -957,93 +948,29 @@ async function renderFileList() {
 
         const input = li.querySelector(".name-input");
 
-        // ===== 名前編集：通常クリック＝選択/表示、ダブルクリック＝編集開始 =====
-        // 初期状態は readOnly（クリックで編集モードに入らない）
-        input.readOnly = true;
-        input.dataset.editing = "0";
-        input.classList.add("rename-field");
-
-        // 通常クリック：そのまま「選択して表示」へ（入力欄にフォーカスさせない）
-        input.addEventListener("mousedown", (e) => {
-            if (input.readOnly) {
-                // フォーカス/カーソル移動を抑止（クリック=選択にする）
-                e.preventDefault();
-            }
-        });
-        input.addEventListener("click", async (e) => {
-            if (!input.readOnly) return; // 編集中は何もしない
-            e.preventDefault();
-            e.stopPropagation();
-            await openByFilename(it.file);
-        });
-
-        // ダブルクリック：編集開始
-        input.addEventListener("dblclick", (e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            if (input.dataset.editing === "1") return;
-            input.dataset.editing = "1";
-            input.dataset.original = input.value;
-            input.readOnly = false;
-            input.classList.add("editing");
-            // カーソルを末尾へ
-            try {
-                input.focus();
-                const v = input.value || "";
-                input.setSelectionRange(v.length, v.length);
-            } catch {}
-            setStatus("名称を編集しています（Enterで確定 / Escで取消）", "#666");
-        });
-
-        // blur：編集モードのときだけ確定（通常クリック→フォーカス移動で rename が走らないようにする）
+        // ★ roomphoto でも名前変更は許可するので常に blur を登録
         input.addEventListener("blur", async (e) => {
-            if (input.dataset.editing !== "1") return;
-
-            input.dataset.editing = "0";
-            input.readOnly = true;
-            input.classList.remove("editing");
-
             const nv = (e.target.value || "").trim();
-            if (!nv || nv === name) {
-                // 空 or 変更なし → 元に戻す（空は不許可）
-                input.value = name;
-                return;
-            }
-
+            if (!nv || nv === name) return;
             try {
-                setStatus("名称を変更中…", "orange");
+                setStatus('名称を変更中…', 'orange');
                 await renameIndexItem(it.file, nv);
-                setStatus("名称を変更しました。", "green");
+                setStatus('名称を変更しました。', 'green');
                 await reloadIndex();
                 await renderFileList();
             } catch (err) {
                 console.error(err);
-                setStatus("名称変更に失敗: " + (err?.message || err), "red");
-                // 元に戻す
-                input.value = name;
+                setStatus('名称変更に失敗: ' + (err?.message || err), 'red');
                 await reloadIndex();
                 await renderFileList();
             }
         });
 
-        // Enter：確定（blurへ） / Esc：キャンセル
+        // Enter → blur
         input.addEventListener("keydown", (e) => {
             if (e.key === "Enter") {
                 e.preventDefault();
                 input.blur();
-                return;
-            }
-            if (e.key === "Escape") {
-                if (input.dataset.editing === "1") {
-                    e.preventDefault();
-                    // 元に戻して終了
-                    input.value = input.dataset.original || name;
-                    input.dataset.editing = "0";
-                    input.readOnly = true;
-                    input.classList.remove("editing");
-                    input.blur();
-                    setStatus("名称変更を取り消しました。", "#666");
-                }
             }
         });
 
