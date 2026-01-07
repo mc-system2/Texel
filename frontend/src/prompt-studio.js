@@ -307,10 +307,8 @@ async function apiSaveText(filename, payload, etag) {
 function applyClientMetaToUi(meta) {
   if (!meta) return;
   try {
-    // name / spreadsheetId are sourced from texel-client-catalog.json
     if (els.clientName) els.clientName.value = meta.name || "";
-    // Some catalog variants use "sheetId" instead of "spreadsheetId".
-    if (els.clientSheetId) els.clientSheetId.value = meta.spreadsheetId || meta.sheetId || "";
+    if (els.clientSheetId) els.clientSheetId.value = meta.spreadsheetId || "";
   } catch {}
 }
 
@@ -333,14 +331,7 @@ function findClientMetaFromCatalog(catalog, clientId) {
     Array.isArray(catalog.items) ? catalog.items :
     Array.isArray(catalog.clients) ? catalog.clients :
     Array.isArray(catalog.data) ? catalog.data : [];
-
-  // NOTE:
-  // client-editor.js matches by clientId / code (and sometimes id). Prompt-Studio must do the same.
-  const key = String(clientId).trim().toLowerCase();
-  return (
-    arr.find(x => String(x?.clientId || x?.code || x?.id || "").trim().toLowerCase() === key) ||
-    null
-  );
+  return arr.find(x => (x?.clientId || x?.id || "") === clientId) || null;
 }
 
 function normalizeIndex(x) {
@@ -431,8 +422,7 @@ async function ensurePromptIndex(clientId, behavior, bootstrap=true) {
           if (meta) {
             let changedMeta = false;
             if (!idx.name && meta.name) { idx.name = meta.name; changedMeta = true; }
-            const sheet = meta.spreadsheetId || meta.sheetId;
-            if (!idx.spreadsheetId && sheet) { idx.spreadsheetId = sheet; changedMeta = true; }
+            if (!idx.spreadsheetId && meta.spreadsheetId) { idx.spreadsheetId = meta.spreadsheetId; changedMeta = true; }
             if (!idx.behavior && (meta.behavior || behavior)) { idx.behavior = meta.behavior || behavior; changedMeta = true; }
             if (!idx.createdAt && meta.createdAt) { idx.createdAt = meta.createdAt; changedMeta = true; }
             if (changedMeta) {
@@ -444,7 +434,7 @@ async function ensurePromptIndex(clientId, behavior, bootstrap=true) {
         } catch {}
       }
 
-      applyClientMetaToUi({ name: idx.name || "", spreadsheetId: idx.spreadsheetId || "", sheetId: idx.spreadsheetId || "" });
+      applyClientMetaToUi({ name: idx.name || "", spreadsheetId: idx.spreadsheetId || "" });
       // Reconcile: if folder has additional JSON files (e.g. texel-custom-*.json) not listed, append them
       const rec = await reconcileIndexWithDirectory(clientId, promptIndex);
       if (rec.changed) {
@@ -510,7 +500,7 @@ async function ensurePromptIndex(clientId, behavior, bootstrap=true) {
     clientId,
     name: meta?.name || "",
     behavior: meta?.behavior || behavior || "",
-    spreadsheetId: (meta?.spreadsheetId || meta?.sheetId) || "",
+    spreadsheetId: meta?.spreadsheetId || "",
     createdAt: meta?.createdAt || ymd,
     updatedAt: new Date().toISOString(),
     items
@@ -1024,10 +1014,7 @@ async function renderFileList() {
         <span class="drag">≡</span>
         <div class="name">
             ${icon}
-            <input type="text"
-                  class="name-input"" readonly
-                  value="${name}"
-                  title="${it.file}">
+            <input type="text" class="name-input" value="${name}" title="${it.file}" readonly tabindex="-1">
         </div>
         <div class="meta">
             ${locked ? "" : '<button class="delete" title="一覧から削除">🗑</button>'}
@@ -1081,56 +1068,56 @@ async function renderFileList() {
 
 
         li.addEventListener("click", async (e) => {
-            const inp = e.target.closest("input");
-            if (e.target.closest("button") || (inp && !inp.readOnly))
-                return; // ボタン or 編集中は open しない
+            if (e.target.closest("button") || e.target.closest("input"))
+                return; // ボタンと名前入力中は open しない
             await openByFilename(it.file);
         });
 
         const input = li.querySelector(".name-input");
+        // --- single click: do not focus/select input (display only) ---
+        input.addEventListener("mousedown", (e) => {
+            if (input.readOnly) {
+                e.preventDefault();
+                e.stopPropagation();
+            }
+        });
+        input.addEventListener("click", (e) => {
+            if (input.readOnly) {
+                e.preventDefault();
+                e.stopPropagation();
+            }
+        });
 
-        // dblclick: enable rename (unlocked only)
+        // --- double click: enable edit mode ---
         input.addEventListener("dblclick", (e) => {
-            if (locked) return;
             e.preventDefault();
             e.stopPropagation();
             input.readOnly = false;
+            input.tabIndex = 0;
             input.focus();
             input.select();
         });
 
-        // enter/escape handling while editing
-        input.addEventListener("keydown", (e) => {
-            if (input.readOnly) return;
-            if (e.key === "Enter") {
-                e.preventDefault();
-                input.blur(); // blur handler commits
-            }
-            if (e.key === "Escape") {
-                e.preventDefault();
-                input.value = name;
-                input.readOnly = true;
-                input.blur();
-            }
-        });
 
         // ★ roomphoto でも名前変更は許可するので常に blur を登録
         input.addEventListener("blur", async (e) => {
-            if (input.readOnly) return; // 編集モード以外は無視
             const nv = (e.target.value || "").trim();
-            if (!nv || nv === name) { input.value = name; input.readOnly = true; return; }
+            if (!nv || nv === name) return;
             try {
                 setStatus('名称を変更中…', 'orange');
                 await renameIndexItem(it.file, nv);
-                input.readOnly = true;
                 setStatus('名称を変更しました。', 'green');
                 await reloadIndex();
                 await renderFileList();
+                input.readOnly = true;
+                input.tabIndex = -1;
             } catch (err) {
                 console.error(err);
                 setStatus('名称変更に失敗: ' + (err?.message || err), 'red');
                 await reloadIndex();
                 await renderFileList();
+                input.readOnly = true;
+                input.tabIndex = -1;
             }
         });
 
@@ -1152,6 +1139,8 @@ async function renderFileList() {
                 await deleteIndexItem(it.file);
                 await reloadIndex();
                 await renderFileList();
+                input.readOnly = true;
+                input.tabIndex = -1;
             });
         }
     }
@@ -1330,6 +1319,8 @@ async function onClickAdd() {
         await addIndexItemRaw(file, dname);
         await reloadIndex();
         await renderFileList();
+                input.readOnly = true;
+                input.tabIndex = -1;
         await openByFilename(file);
         setStatus("新しいプロンプトを追加しました。", "green");
     } catch (e) {
