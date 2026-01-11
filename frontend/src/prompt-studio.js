@@ -55,6 +55,15 @@ let promptIndex = null;
 let promptIndexPath = null;
 let promptIndexEtag = null;
 
+// One-generation backup for prompt-index
+function indexBackupPath(clientId) {
+    return `client/${clientId}/prompt-index.backup.json`;
+}
+
+function sleep(ms) {
+    return new Promise(r => setTimeout(r, ms));
+}
+
 function indexClientPath(clientId) {
     return `client/${clientId}/prompt-index.json`;
 }
@@ -259,6 +268,38 @@ async function apiSavePromptIndex(filename, indexObj, etag) {
   try { data = text ? JSON.parse(text) : null; } catch { data = null; }
   return { status: res.status, ok: res.ok, data, etag: res.headers.get("etag") || res.headers.get("ETag") || null };
 }
+
+// Save index with 1-generation backup (prompt-index.backup.json)
+// - If prompt-index.json exists, overwrite backup first.
+// - Then save prompt-index.json (with If-Match when provided).
+async function apiSavePromptIndexWithBackup(clientId, filename, indexObj, etag) {
+  try {
+    const main = await apiLoadPromptIndex(filename).catch(() => null);
+    if (main && main.status === 200) {
+      const cur = normalizeIndex(main.data);
+      if (cur) {
+        const bpath = indexBackupPath(clientId);
+        // backup overwrite is unconditional; no If-Match to reduce friction
+        await apiSavePromptIndex(bpath, cur, null).catch(() => null);
+      }
+    }
+  } catch {}
+
+  return await apiSavePromptIndex(filename, indexObj, etag);
+}
+
+function buildIndexMissingMessage({ clientId, behavior, apiBase, path }) {
+  const env = (String(apiBase || '').includes('prod') ? 'PROD' : 'DEV');
+  return (
+    `インデックスJSONが見つかりません。\n\n` +
+    `clientId: ${clientId}\n` +
+    `behavior: ${behavior}\n` +
+    `env: ${env}\n` +
+    `path: ${path}\n\n` +
+    `バックアップがない場合は初期テンプレートで新規作成します。\n` +
+    `（誤判定の可能性があるため、作成前に再度存在確認します）`
+  );
+}
 async function apiSaveText(filename, payload, etag) {
     const flat = (typeof payload === "string") ? ( () => {
         try {
@@ -428,7 +469,7 @@ async function ensurePromptIndex(clientId, behavior, bootstrap=true) {
             if (!idx.createdAt && meta.createdAt) { idx.createdAt = meta.createdAt; changedMeta = true; }
             if (changedMeta) {
               idx.updatedAt = new Date().toISOString();
-              const savedMeta = await apiSavePromptIndex(path, idx, promptIndexEtag).catch(() => null);
+              const savedMeta = await apiSavePromptIndexWithBackup(clientId, path, idx, promptIndexEtag).catch(() => null);
               if (savedMeta && savedMeta.ok) promptIndexEtag = savedMeta.etag || promptIndexEtag;
             }
           }
@@ -440,7 +481,7 @@ async function ensurePromptIndex(clientId, behavior, bootstrap=true) {
       const rec = await reconcileIndexWithDirectory(clientId, promptIndex);
       if (rec.changed) {
         promptIndex.updatedAt = new Date().toISOString();
-        const saved = await apiSavePromptIndex(promptIndexPath, promptIndex, promptIndexEtag).catch(() => null);
+        const saved = await apiSavePromptIndexWithBackup(clientId, promptIndexPath, promptIndex, promptIndexEtag).catch(() => null);
         if (saved && saved.ok) promptIndexEtag = saved.etag || promptIndexEtag;
       }
       return promptIndex;
@@ -450,22 +491,101 @@ async function ensurePromptIndex(clientId, behavior, bootstrap=true) {
   // 404 is normal: index missing
   const isMissing = (r && r.status === 404);
 
+  // bootstrap=false: never create/restore; just report failure (or missing) and return null.
   if (!bootstrap) {
     if (!isMissing) {
-      console.warn("ensurePromptIndex: load failed; skipped bootstrap. Check API base or function name.");
+      console.warn("ensurePromptIndex: load failed; skipped recovery. Check API base or function name.");
       setStatus("インデックスの読込に失敗。API設定をご確認ください。", "orange");
     }
-    return promptIndex;
+    return null;
   }
 
-  if (!isMissing && r) {
-    // Non-404 failures should not bootstrap (avoid overwriting)
-    console.warn("ensurePromptIndex: load failed; skipped bootstrap to avoid overwrite.", r.status);
-    setStatus("インデックスの読込に失敗（再構築は未実施）。API設定をご確認ください。", "orange");
-    return promptIndex;
+  // Non-404 failures should not bootstrap (avoid overwriting)
+  if (!isMissing) {
+    console.warn("ensurePromptIndex: load failed; skipped recovery to avoid overwrite.", r?.status);
+    setStatus("インデックスの読込に失敗（復元/新規作成は未実施）。API設定をご確認ください。", "orange");
+    return null;
   }
 
-  // 2) Index missing -> use client-catalog for header fields in UI, then bootstrap
+  // ===== Interactive recovery flow =====
+  // Missing -> (1) backup exists? -> restore
+  // else -> ask create? -> before create: re-check exists -> if still missing -> create
+  const bpath = indexBackupPath(clientId);
+
+  // 1) Check backup
+  const br = await apiLoadPromptIndex(bpath).catch(() => null);
+  const bidx = br && br.status === 200 ? normalizeIndex(br.data) : null;
+  if (bidx) {
+    const msg = buildIndexMissingMessage({
+      clientId,
+      behavior,
+      apiBase: els.apiBase?.value,
+      path
+    }) + "\n\nバックアップ（prompt-index.backup.json）が見つかりました。復元しますか？";
+
+    if (confirm(msg)) {
+      // Gate: re-check existence right before restore
+      await sleep(300);
+      const again = await apiLoadPromptIndex(path).catch(() => null);
+      if (again && again.status === 200) {
+        const aidx = normalizeIndex(again.data);
+        if (aidx) {
+          promptIndex = aidx;
+          promptIndexPath = path;
+          promptIndexEtag = again.etag || null;
+          applyClientMetaToUi({ name: aidx.name || "", spreadsheetId: aidx.spreadsheetId || "" });
+          return promptIndex;
+        }
+      }
+
+      // Restore
+      const restored = await apiSavePromptIndex(path, bidx, null).catch(() => null);
+      if (restored && restored.ok) {
+        const rr = await apiLoadPromptIndex(path).catch(() => null);
+        const ridx = rr && rr.status === 200 ? normalizeIndex(rr.data) : null;
+        if (ridx) {
+          promptIndex = ridx;
+          promptIndexPath = path;
+          promptIndexEtag = rr.etag || null;
+          applyClientMetaToUi({ name: ridx.name || "", spreadsheetId: ridx.spreadsheetId || "" });
+          setStatus("バックアップから復元しました。", "green");
+          return promptIndex;
+        }
+      }
+      setStatus("復元に失敗しました。API設定をご確認ください。", "red");
+      return null;
+    }
+    // User declined restore -> continue to create prompt
+  }
+
+  // 2) Ask create
+  const msg2 = buildIndexMissingMessage({
+    clientId,
+    behavior,
+    apiBase: els.apiBase?.value,
+    path
+  }) + "\n\n新規作成しますか？";
+  if (!confirm(msg2)) {
+    setStatus("インデックスが無いため、操作を中止しました。", "orange");
+    return null;
+  }
+
+  // 3) Gate: re-check existence right before create
+  await sleep(300);
+  const again2 = await apiLoadPromptIndex(path).catch(() => null);
+  if (again2 && again2.status === 200) {
+    const aidx2 = normalizeIndex(again2.data);
+    if (aidx2) {
+      promptIndex = aidx2;
+      promptIndexPath = path;
+      promptIndexEtag = again2.etag || null;
+      applyClientMetaToUi({ name: aidx2.name || "", spreadsheetId: aidx2.spreadsheetId || "" });
+      setStatus("インデックスが見つかったため、新規作成は行いませんでした。", "green");
+      return promptIndex;
+    }
+  }
+
+  // 4) Create new
   let meta = null;
   try {
     const catalog = await loadClientCatalogSafe();
@@ -509,12 +629,13 @@ async function ensurePromptIndex(clientId, behavior, bootstrap=true) {
   promptIndexPath = path;
   promptIndexEtag = null;
 
-  const saved = await apiSavePromptIndex(promptIndexPath, promptIndex, null).catch(e => {
+  const saved = await apiSavePromptIndex(path, promptIndex, null).catch(e => {
     console.error("bootstrap save failed:", e);
     return null;
   });
   if (saved && saved.ok) promptIndexEtag = saved.etag || null;
 
+  setStatus("インデックスを新規作成しました。", "green");
   return promptIndex;
 }
 
@@ -538,13 +659,15 @@ async function saveIndex() {
   if (!promptIndex) return;
   promptIndex.updatedAt = new Date().toISOString();
   try {
-    const res = await apiSavePromptIndex(promptIndexPath, promptIndex, promptIndexEtag);
+    const clid = (els.clientId?.value || "").trim().toUpperCase();
+    const res = await apiSavePromptIndexWithBackup(clid, promptIndexPath, promptIndex, promptIndexEtag);
     if (res && res.ok) promptIndexEtag = res.etag || promptIndexEtag || null;
   } catch (e) {
     const msg = String(e || "");
     if (msg.includes("412")) {
       await reloadIndex();
-      const res2 = await apiSavePromptIndex(promptIndexPath, promptIndex, promptIndexEtag);
+      const clid = (els.clientId?.value || "").trim().toUpperCase();
+      const res2 = await apiSavePromptIndexWithBackup(clid, promptIndexPath, promptIndex, promptIndexEtag);
       if (res2 && res2.ok) promptIndexEtag = res2.etag || promptIndexEtag || null;
     } else {
       throw e;
@@ -959,7 +1082,11 @@ async function renderFileList() {
     const clid = (els.clientId?.value || "").trim().toUpperCase();
     const beh = document.getElementById("behaviorLabel").textContent;
 
-    await ensurePromptIndex(clid, beh, true);
+    const ensured = await ensurePromptIndex(clid, beh, true);
+    if (!ensured) {
+        // user cancelled recovery / create, or API trouble
+        return;
+    }
 
     updateTrashButtonLabel();
     if (els.fileList) els.fileList.classList.toggle("trash-mode", trashMode);

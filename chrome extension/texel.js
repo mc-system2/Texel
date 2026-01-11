@@ -1446,7 +1446,7 @@ function applyPromptIndexOrderToSuggestionDom(promptIndex) {
     // ---------------------------
     // Known outputs (既存5枠)
     // ---------------------------
-    const KNOWN_OUTPUT_FILES = new Set(["texel-suggestion.json", "texel-suumo-catch.json", "texel-suumo-comment.json", "texel-athome-comment.json", "texel-athome-appeal.json", ]);
+    const KNOWN_OUTPUT_FILES = new Set(["texel-suggestion.json", "texel-suumo-catch.json", "texel-suumo-comment.json", "texel-athome-comment.json", "texel-athome-appeal.json"]);
 
     function isCustomPromptFile(file) {
         if (!file)
@@ -1642,12 +1642,23 @@ function applyPromptIndexOrderToSuggestionDom(promptIndex) {
     }
 
     // ---------------------------
-    // Safety: index に無い既存ブロックは最後に回す（壊さない）
-    // ※「indexが絶対」なら、ここを削ってもOK
+    // Existing blocks not in index:
+    // - For known outputs, hide them (Type-S などで出力枠を減らすため)
+    // - For unknown/legacy blocks, keep them at the end (壊さない)
     // ---------------------------
-    for (const [file,block] of map.entries()) {
-        if (moved.has(file))
+    const indexFiles = new Set(promptIndex.items.map(it => it?.file).filter(Boolean));
+
+    for (const [file, block] of map.entries()) {
+        if (moved.has(file)) continue;
+
+        if (KNOWN_OUTPUT_FILES.has(file) && !indexFiles.has(file)) {
+            block.style.display = "none";
+            block.querySelectorAll("textarea").forEach(t => {
+                t.disabled = true; // 送信・保存対象から外す
+            });
             continue;
+        }
+
         wrap.appendChild(block);
     }
 }
