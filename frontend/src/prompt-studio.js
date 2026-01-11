@@ -1318,8 +1318,6 @@ async function onClickAdd() {
         await addIndexItemRaw(file, dname);
         await reloadIndex();
         await renderFileList();
-                input.readOnly = true;
-                input.tabIndex = -1;
         await openByFilename(file);
         setStatus("新しいプロンプトを追加しました。", "green");
     } catch (e) {
