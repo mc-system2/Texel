@@ -101,33 +101,26 @@ const TEMPLATE_FAMILIES = {
  *  3) 最後の保険として、従来のファイル名（呼出し側が渡してきた P.*）
  */
 function resolvePromptCandidates(keyLike, fallbackFilename) {
+    // ここは「候補ファイル名（＝BLOB名）」を返すだけ（client/配下探索は fetchPromptTextFile 側で行う）
     const name = KEY_TO_NAME[keyLike];
     const list = [];
-
-    // クライアント配下に置く「クライアント固有プロンプト」だけ client/<id>/ を試す
-    // ※ floorplan 等の Texel 共通はここに含めない（client配下に無いので 404 の原因）
-    const CLIENT_SCOPED_PROMPT_NAMES = new Set(["roomphoto", "suggestion", "suumo-catch", "suumo-comment", "athome-comment", "athome-appeal"]);
-
-    if (clientId && name && CLIENT_SCOPED_PROMPT_NAMES.has(name)) {
-        list.push(`client/${clientId}/texel-${name}.json`);
-    }
-
-    // Behavior に応じた既定（Texel共通・テンプレ）を試す
     const beh = (CURRENT_BEHAVIOR || "BASE").toUpperCase();
+
     if (name) {
-        if (beh === "TYPE-R" && TEMPLATE_FAMILIES["TYPE-R"].has(name)) {
+        if (beh === "TYPE-R" && TEMPLATE_FAMILIES["TYPE-R"]?.has(name)) {
+            // Type-R 専用 → 共通へフォールバック
             list.push(`texel-r-${name}.json`);
-        } else if (beh === "TYPE-S" && TEMPLATE_FAMILIES["TYPE-S"].has(name)) {
+            list.push(`texel-${name}.json`);
+        } else if (beh === "TYPE-S" && TEMPLATE_FAMILIES["TYPE-S"]?.has(name)) {
+            // Type-S 専用 → 共通へフォールバック
             list.push(`texel-s-${name}.json`);
-        } else if (beh === "BASE" && TEMPLATE_FAMILIES["BASE"].has(name)) {
             list.push(`texel-${name}.json`);
         } else {
-            // 念のため、behavior未定義/未知でも texel-<name>.json を試す
+            // BASE など
             list.push(`texel-${name}.json`);
         }
     }
 
-    // 明示 fallback（すでに client/<id>/ が付いているケースもあり得る）
     if (fallbackFilename)
         list.push(fallbackFilename);
 
@@ -1058,22 +1051,28 @@ function isSharedPromptFilename(filename) {
     // client/A001/... が来ても最後だけ見る
     return SHARED_PROMPT_FILES.has(base);
 }
+function normalizePromptFilename(filename) {
+    const f = String(filename || "").trim().replace(/^\/+/, "");
+    return f;
+}
 
-function resolvePromptBlobPath(filename, clientId) {
-    const f = (filename || "").replace(/^\/+/, "");
+function resolvePromptFetchCandidates(filename, clientId) {
+    // 仕様：
+    // 1) clientId がある場合は「client/<clientId>/」を先に探索
+    // 2) 見つからなければ Texel 共通（直下）へフォールバック
+    // 3) 既に client/ 配下が明示されている場合はそのまま（フォールバックしない）
+    const f = normalizePromptFilename(filename);
+    if (!f)
+        return [];
 
-    // すでに client/ 指定なら尊重
     if (f.toLowerCase().startsWith("client/"))
-        return f;
+        return [f];
 
-    // shared はトップ直下
-    if (isSharedPromptFilename(f))
-        return f;
-
-    // それ以外は client/<ID>/ 配下（clientId必須）
-    if (!clientId)
-        throw new Error("clientId が未指定のため client/ 配下のプロンプトを解決できません: " + f);
-    return `client/${clientId}/${f}`;
+    const list = [];
+    if (clientId)
+        list.push(`client/${clientId}/${f}`);
+    list.push(f);
+    return Array.from(new Set(list));
 }
 
 // ===== Prompt Index: Safe Loader =====
@@ -1086,6 +1085,7 @@ async function loadPromptIndexSafe(cid) {
     return null;
   }
 }
+
 
 async function fetchPromptIndexJson(clientId) {
     if (!clientId)
@@ -1113,32 +1113,47 @@ async function fetchPromptIndexJson(clientId) {
  * 期待：API の LoadPromptText が prompts コンテナ/filename を読む
  */
 async function fetchPromptTextFile(filename, clientId) {
-    const resolved = resolvePromptBlobPath(filename, clientId);
+    const candidates = resolvePromptFetchCandidates(filename, clientId);
+    if (!candidates.length)
+        return null;
 
-    // ここはあなたの既存のAPIルーティングに合わせて維持（例：LoadPromptText）
-    const url = `${FUNCTION_BASE.replace(/\/+$/, "")}/LoadPromptText?filename=${encodeURIComponent(resolved)}`;
+    const base = `${FUNCTION_BASE.replace(/\/+$/, "")}/LoadPromptText?filename=`;
 
-    console.log(`[prompt] BLOB使用: ${resolved}`);
-
-    const res = await fetch(url, {
-        method: "GET"
-    });
-    if (!res.ok) {
-        const t = await res.text().catch( () => "");
-        throw new Error(`LoadPromptText failed (${res.status}) for ${resolved}${t ? " :: " + t : ""}`);
-    }
-
-    const ct = (res.headers.get("content-type") || "").toLowerCase();
-    const text = await res.text();
-
-    // JSONならparse、そうでなければ生テキスト
-    if (ct.includes("application/json") || text.trim().startsWith("{") || text.trim().startsWith("[")) {
+    for (const resolved of candidates) {
+        const url = base + encodeURIComponent(resolved);
+        let res;
         try {
-            return JSON.parse(text);
-        } catch {/* fallthrough */
+            res = await fetch(url, {
+                method: "GET"
+            });
+        } catch (e) {
+            console.warn(`[prompt] LoadPromptText fetch failed: ${resolved}`, e);
+            continue;
         }
+
+        if (!res.ok) {
+            // 404/400 など「存在しない」扱いは次候補へ（= client → root フォールバック）
+            console.warn(`[prompt] miss: ${resolved} (${res.status})`);
+            continue;
+        }
+
+        console.log(`[prompt] BLOB使用: ${resolved}`);
+
+        const ct = (res.headers.get("content-type") || "").toLowerCase();
+        const text = await res.text();
+
+        // JSONならparse、そうでなければ生テキスト
+        if (ct.includes("application/json") || text.trim().startsWith("{") || text.trim().startsWith("[")) {
+            try {
+                return JSON.parse(text);
+            } catch {
+                // fallthrough
+            }
+        }
+        return text;
     }
-    return text;
+
+    return null;
 }
 
 async function getPromptObj(keyLike, fallbackFilename) {
@@ -1146,11 +1161,9 @@ async function getPromptObj(keyLike, fallbackFilename) {
     const candidates = resolvePromptCandidates(keyLike, fallbackFilename);
     let fetched = null;
     for (const filename of candidates) {
-        fetched = await fetchPromptTextFile(filename);
-        if (fetched) {
-            console.info(`[prompt] BLOB使用: ${filename}`);
+        fetched = await fetchPromptTextFile(filename, clientId);
+        if (fetched)
             break;
-        }
     }
     // すべて失敗 → 安全なデフォルト
     const obj = fetched || defaultPrompt(keyLike);
@@ -2503,7 +2516,8 @@ async function handlePdfFile(file) {
                 throw new Error("pdfjsLib not loaded");
             // 1) Open PDF
             pdfDocRef = await pdfjsLib.getDocument({
-                data: typedarray
+                data: typedarray,
+                disableWorker: true
             }).promise;
             pdfPageCount = pdfDocRef.numPages;
             pdfCurrentIndex = 0;
@@ -4183,7 +4197,8 @@ function onClickResetSuggestion() {
             showSpinner("floorplan");
             const bytes = await readFileAsArrayBuffer(file);
             const pdfDoc = await pdfjsLib.getDocument({
-                data: bytes
+                data: bytes,
+                disableWorker: true
             }).promise;
             const pageCount = pdfDoc.numPages;
 
@@ -4296,7 +4311,8 @@ function onClickResetSuggestion() {
             showSpinner("room");
             const bytes = await readFileAsArrayBuffer(file);
             const pdfDoc = await pdfjsLib.getDocument({
-                data: bytes
+                data: bytes,
+                disableWorker: true
             }).promise;
             const pageCount = pdfDoc.numPages;
             for (let i = 0; i < pageCount; i++) {
