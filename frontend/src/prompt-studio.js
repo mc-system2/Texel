@@ -40,6 +40,7 @@ const els = {
     diffRight: document.getElementById("diffRight"),
     status: document.getElementById("statusMessage"),
     btnAdd: document.getElementById("btnAdd"),
+    btnTrash: document.getElementById("btnTrash"),
 };
 
 let currentEtag = null;
@@ -47,6 +48,34 @@ let currentLoadShape = "flat";
 // 'flat' => {prompt:"", params:{}}, 'nested' => {prompt:{prompt:"",params:{}}, ...}
 let templateText = "";
 let dirty = false;
+
+// Trash (logical delete) UI state
+const LS_SHOW_TRASH = "prompt_studio_show_trash";
+let showTrash = false;
+
+function loadShowTrash() {
+    try {
+        showTrash = localStorage.getItem(LS_SHOW_TRASH) === "1";
+    } catch {
+        showTrash = false;
+    }
+}
+function saveShowTrash() {
+    try {
+        localStorage.setItem(LS_SHOW_TRASH, showTrash ? "1" : "0");
+    } catch {}
+}
+function updateTrashButton(count) {
+    if (!els.btnTrash) return;
+    const n = typeof count === "number" ? count : (promptIndex?.items || []).filter(x => x.hidden).length;
+    els.btnTrash.textContent = `ゴミ箱 (${n})`;
+    els.btnTrash.classList.toggle("active", !!showTrash);
+}
+async function toggleTrashView() {
+    showTrash = !showTrash;
+    saveShowTrash();
+    await renderFileList();
+}
 
 /* ---------- Prompt Index (order & display name) ---------- */
 let promptIndex = null;
@@ -573,13 +602,55 @@ async function renameIndexItem(file, newName) {
 }
 
 async function deleteIndexItem(file) {
-    const i = promptIndex.items.findIndex(x => x.file === file);
-    if (i < 0 || promptIndex.items[i].lock)
-        return;
-    promptIndex.items.splice(i, 1);
-    promptIndex.items.sort( (a, b) => (a.order ?? 0) - (b.order ?? 0)).forEach( (x, i) => x.order = (i + 1) * 10);
+    // Logical delete: move to trash (keep file & keep index entry)
+    const it = promptIndex?.items?.find(x => x.file === file);
+    if (!it || it.lock) return;
+
+    // already trashed
+    if (it.hidden) return;
+
+    // keep prior order for potential restore logic; push to the bottom to avoid order collisions
+    const maxOrder = Math.max(0, ...promptIndex.items.map(x => x.order || 0));
+    it.prevOrder = (it.order ?? null);
+    it.order = maxOrder + 100;
+
+    it.hidden = true;
+    it.trashed = true;
+    it.deletedAt = new Date().toISOString();
+
     await saveIndex();
 }
+
+async function restoreIndexItem(file) {
+    const it = promptIndex?.items?.find(x => x.file === file);
+    if (!it) return;
+
+    // Roomphoto is never allowed to be trashed.
+    const ROOM = KIND_TO_NAME["roomphoto"];
+    if (it.file === ROOM) {
+        it.hidden = false;
+        it.trashed = false;
+        delete it.deletedAt;
+        delete it.prevOrder;
+        it.lock = true;
+        await saveIndex();
+        return;
+    }
+
+    if (!it.hidden) return;
+
+    // restore to the bottom (predictable)
+    const maxOrderVisible = Math.max(0, ...promptIndex.items.filter(x => !x.hidden).map(x => x.order || 0));
+    it.order = maxOrderVisible + 10;
+
+    it.hidden = false;
+    it.trashed = false;
+    delete it.deletedAt;
+    delete it.prevOrder;
+
+    await saveIndex();
+}
+
 async function addIndexItemRaw(fileName, displayName) {
     let file = (fileName || "").trim();
     if (!file.endsWith(".json"))
@@ -686,6 +757,9 @@ function boot() {
         els.search.style.display = "none";
     }
 
+    // Trash view state
+    loadShowTrash();
+
     // 左側リスト描画（内部で ensurePromptIndex が呼ばれる）
     renderFileList();
 
@@ -704,6 +778,13 @@ function boot() {
     if (els.btnAdd) {
         els.btnAdd.removeEventListener("click", onClickAdd);
         els.btnAdd.addEventListener("click", onClickAdd);
+    }
+
+    // ゴミ箱（論理削除）トグル
+    if (els.btnTrash) {
+        els.btnTrash.removeEventListener("click", toggleTrashView);
+        els.btnTrash.addEventListener("click", toggleTrashView);
+        updateTrashButton();
     }
 
     // -------------------------------------------------
@@ -908,9 +989,9 @@ async function tryLoad(filename) {
 }
 
 async function renderFileList() {
-    if (!els.fileList)
-        return;
+    if (!els.fileList) return;
     els.fileList.innerHTML = "";
+
     const clid = (els.clientId?.value || "").trim().toUpperCase();
     const beh = document.getElementById("behaviorLabel").textContent;
 
@@ -918,7 +999,23 @@ async function renderFileList() {
 
     const ROOM = KIND_TO_NAME["roomphoto"];
 
-    const rows = [...(promptIndex.items || [])]
+    // Safety: roomphoto is always visible + locked
+    const roomIt = (promptIndex.items || []).find(x => x.file === ROOM);
+    if (roomIt) {
+        roomIt.lock = true;
+        if (roomIt.hidden) {
+            roomIt.hidden = false;
+            roomIt.trashed = false;
+            delete roomIt.deletedAt;
+            delete roomIt.prevOrder;
+            await saveIndex();
+            await reloadIndex();
+        }
+    }
+
+    const allItems = [...(promptIndex.items || [])];
+
+    const activeRows = allItems
         .filter(it => !it.hidden)
         .sort((a, b) => {
             if (a.file === ROOM) return -1;
@@ -926,106 +1023,96 @@ async function renderFileList() {
             return (a.order ?? 0) - (b.order ?? 0);
         });
 
-    rows.forEach(it => {
-        if (it.file === ROOM && !it.lock) {
-            it.lock = true;      // 既存 index でも強制的に lock を立てる
-        }
-    });
+    const trashRows = allItems
+        .filter(it => it.hidden)
+        .sort((a, b) => {
+            const ad = Date.parse(a.deletedAt || "") || 0;
+            const bd = Date.parse(b.deletedAt || "") || 0;
+            if (bd !== ad) return bd - ad;
+            return (a.order ?? 0) - (b.order ?? 0);
+        });
 
-    // drag handlers once
+    updateTrashButton(trashRows.length);
+
+    // drag handlers once (operate only on non-trashed items)
     if (!dragBound) {
         dragBound = true;
 
-        // ============================
-        // ★ dragover で「Roomphoto の上に入る」操作を禁止
-        // ============================
+        // dragover: do not allow placing above Roomphoto
         els.fileList.addEventListener('dragover', (e) => {
             e.preventDefault();
 
             const dragging = document.querySelector('.fileitem.dragging');
             if (!dragging) return;
 
-            const ROOM = KIND_TO_NAME["roomphoto"];
+            // only allow dragging among active items
+            if (dragging.classList.contains('trashed')) return;
 
-            // Roomphoto のDOM要素を取得
-            const roomEl = [...els.fileList.children].find(x => x.dataset.file === ROOM);
-            if (!roomEl) return;
-
-            const roomBox = roomEl.getBoundingClientRect();
-
-            // ★ もしカーソル位置が roomphoto より上なら → いれない
-            if (e.clientY < roomBox.bottom) {
-                return; // ← ここで placement を拒否
+            const roomEl = els.fileList.querySelector(`.fileitem[data-file="${ROOM}"]:not(.trashed)`);
+            if (roomEl) {
+                const roomBox = roomEl.getBoundingClientRect();
+                if (e.clientY < roomBox.bottom) {
+                    return;
+                }
             }
 
-            // 通常のドラッグ処理
             const after = getDragAfterElement(els.fileList, e.clientY);
             if (!after) {
-                els.fileList.appendChild(dragging);
+                const firstTrashed = els.fileList.querySelector('.fileitem.trashed');
+                if (firstTrashed) els.fileList.insertBefore(dragging, firstTrashed);
+                else els.fileList.appendChild(dragging);
             } else {
                 els.fileList.insertBefore(dragging, after);
             }
         });
 
-
-        // ============================
-        // drop 時の処理（順番再計算）
-        // ============================
+        // drop: recompute order for active items only
         els.fileList.addEventListener('drop', async () => {
-            const lis = [...els.fileList.querySelectorAll('.fileitem')];
-
+            const lis = [...els.fileList.querySelectorAll('.fileitem:not(.trashed)')];
             lis.forEach((el, i) => {
                 const f = el.dataset.file;
                 const it2 = promptIndex.items.find(x => x.file === f);
                 if (!it2) return;
-
-                // 一旦ドラッグ後の順番で 10,20,30... を付ける
                 it2.order = (i + 1) * 10;
             });
-
-            // ★ 最後に Roomphoto の順番を order=1 に強制固定
             fixRoomphotoOrder();
-
             await saveIndex();
         });
     }
 
-    for (const it of rows) {
-    const name = it.name || prettifyNameFromFile(it.file);
-    const isRoom = (it.file === ROOM);
-    if (isRoom && !it.lock) it.lock = true;     // 念のためここでも lock を保証
-    const locked = !!it.lock;
+    // ---------- render active rows ----------
+    for (const it of activeRows) {
+        const name = it.name || prettifyNameFromFile(it.file);
+        const isRoom = (it.file === ROOM);
+        if (isRoom && !it.lock) it.lock = true;
+        const locked = !!it.lock;
 
-    const li = document.createElement("div");
-    li.className = "fileitem" + (locked ? " locked" : "");
-    li.dataset.file = it.file;
-    li.draggable = !locked;
+        const li = document.createElement('div');
+        li.className = 'fileitem' + (locked ? ' locked' : '');
+        li.dataset.file = it.file;
+        li.draggable = !locked;
 
-    if (locked) {
-        li.draggable = false;
-        li.setAttribute("draggable", "false");
-    }
+        if (locked) {
+            li.draggable = false;
+            li.setAttribute('draggable', 'false');
+        }
 
-    const icon = locked
-        ? `<span class="lock-icon" title="固定プロンプト">🔒</span>`
-        : "";   // ロックしていなければ何も表示しない
+        const icon = locked ? `<span class="lock-icon" title="固定プロンプト">🔒</span>` : '';
 
-    li.innerHTML = `
-        <span class="drag">≡</span>
-        <div class="name">
-            ${icon}
-            <input type="text" class="name-input" value="${name}" title="${it.file}" readonly tabindex="-1">
-        </div>
-        <div class="meta">
-            ${locked ? "" : '<button class="delete" title="一覧から削除">🗑</button>'}
-        </div>`;
-    els.fileList.appendChild(li);
+        li.innerHTML = `
+            <span class="drag">≡</span>
+            <div class="name">
+                ${icon}
+                <input type="text" class="name-input" value="${name}" title="${it.file}" readonly tabindex="-1">
+            </div>
+            <div class="meta">
+                ${locked ? '' : '<button class="delete" title="ゴミ箱へ移動">🗑</button>'}
+            </div>`;
 
+        els.fileList.appendChild(li);
 
-        // --- dragstart / dragend（ロック項目は一切動かないようにする） ---
+        // dragstart / dragend (only non-locked)
         if (!locked) {
-
-            // 通常アイテムのみ dragstart を許可
             li.addEventListener('dragstart', () => {
                 li.classList.add('dragging');
             });
@@ -1033,62 +1120,46 @@ async function renderFileList() {
             li.addEventListener('dragend', async () => {
                 li.classList.remove('dragging');
 
-                const ROOM = KIND_TO_NAME["roomphoto"];
-                const lis = [...els.fileList.querySelectorAll('.fileitem')];
-
+                const lis = [...els.fileList.querySelectorAll('.fileitem:not(.trashed)')];
                 lis.forEach((el, i) => {
                     const f = el.dataset.file;
                     const it2 = promptIndex.items.find(x => x.file === f);
                     if (!it2) return;
-
-                    // ★ roomphoto（lock=true）は絶対に順番変更しない（order=1固定）
                     if (it2.lock || f === ROOM) {
-                        it2.order = 1;  // 先頭固定
+                        it2.order = 1;
                         return;
                     }
-
-                    // ★ その他は 2番目以降として order を再計算
                     it2.order = i + 2;
                 });
 
                 fixRoomphotoOrder();
                 await saveIndex();
             });
-
         } else {
-
-            // ★ ロック項目（roomphoto）は dragstart そのものを禁止する
-            li.addEventListener("dragstart", (e) => {
+            li.addEventListener('dragstart', (e) => {
                 e.preventDefault();
                 e.stopImmediatePropagation();
                 return false;
             });
-            li.setAttribute("draggable", "false");
+            li.setAttribute('draggable', 'false');
         }
 
-
-        li.addEventListener("click", async (e) => {
-            if (e.target.closest("button") || e.target.closest("input"))
-                return; // ボタンと名前入力中は open しない
+        li.addEventListener('click', async (e) => {
+            if (e.target.closest('button') || e.target.closest('input')) return;
             await openByFilename(it.file);
         });
 
-        const input = li.querySelector(".name-input");
-        // --- single click: do not focus/select input (display only) ---
-        input.addEventListener("mousedown", (e) => {
-            if (input.readOnly) {
-                e.preventDefault(); // prevent focus/selection only
-            }
+        const input = li.querySelector('.name-input');
+        input.addEventListener('mousedown', (e) => {
+            if (input.readOnly) e.preventDefault();
         });
-        input.addEventListener("click", (e) => {
+        input.addEventListener('click', (e) => {
             if (input.readOnly) {
                 e.preventDefault();
-                li.click(); // delegate selection to li
+                li.click();
             }
         });
-
-        // --- double click: enable edit mode ---
-        input.addEventListener("dblclick", (e) => {
+        input.addEventListener('dblclick', (e) => {
             e.preventDefault();
             e.stopPropagation();
             input.readOnly = false;
@@ -1097,10 +1168,8 @@ async function renderFileList() {
             input.select();
         });
 
-
-        // ★ roomphoto でも名前変更は許可するので常に blur を登録
-        input.addEventListener("blur", async (e) => {
-            const nv = (e.target.value || "").trim();
+        input.addEventListener('blur', async (e) => {
+            const nv = (e.target.value || '').trim();
             if (!nv || nv === name) return;
             try {
                 setStatus('名称を変更中…', 'orange');
@@ -1108,56 +1177,94 @@ async function renderFileList() {
                 setStatus('名称を変更しました。', 'green');
                 await reloadIndex();
                 await renderFileList();
-                input.readOnly = true;
-                input.tabIndex = -1;
             } catch (err) {
                 console.error(err);
                 setStatus('名称変更に失敗: ' + (err?.message || err), 'red');
                 await reloadIndex();
                 await renderFileList();
-                input.readOnly = true;
-                input.tabIndex = -1;
             }
         });
 
-        // Enter → blur
-        input.addEventListener("keydown", (e) => {
-            if (e.key === "Enter") {
+        input.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
                 e.preventDefault();
                 input.blur();
             }
         });
 
-        // ★ 削除ボタンは「locked=false のときだけ」付ける
         if (!locked) {
-            li.querySelector(".delete")?.addEventListener("click", async (e) => {
+            li.querySelector('.delete')?.addEventListener('click', async (e) => {
                 e.preventDefault();
                 e.stopPropagation();
-                if (!confirm(`「${name}」を一覧から削除します。ファイル自体は削除されません。よろしいですか？`))
-                    return;
+                if (!confirm(`「${name}」をゴミ箱へ移動します。ファイル自体は削除されません。よろしいですか？`)) return;
                 await deleteIndexItem(it.file);
                 await reloadIndex();
                 await renderFileList();
-                input.readOnly = true;
-                input.tabIndex = -1;
+            });
+        }
+    }
+
+    // ---------- render trash ----------
+    if (showTrash) {
+        const header = document.createElement('div');
+        header.className = 'trash-header';
+        header.textContent = `ゴミ箱（${trashRows.length}）`;
+        els.fileList.appendChild(header);
+
+        if (!trashRows.length) {
+            const empty = document.createElement('div');
+            empty.className = 'trash-empty';
+            empty.textContent = '（ゴミ箱は空です）';
+            els.fileList.appendChild(empty);
+            return;
+        }
+
+        for (const it of trashRows) {
+            const name = it.name || prettifyNameFromFile(it.file);
+            const li = document.createElement('div');
+            li.className = 'fileitem trashed';
+            li.dataset.file = it.file;
+            li.draggable = false;
+            li.setAttribute('draggable', 'false');
+
+            li.innerHTML = `
+                <span class="drag muted">≡</span>
+                <div class="name">
+                    <span class="trash-badge" title="論理削除（インデックス上で非表示）">🗑</span>
+                    <input type="text" class="name-input" value="${name}" title="${it.file}" readonly tabindex="-1">
+                </div>
+                <div class="meta">
+                    <button class="restore" title="一覧に戻す">↩</button>
+                </div>`;
+
+            els.fileList.appendChild(li);
+
+            li.addEventListener('click', async (e) => {
+                if (e.target.closest('button') || e.target.closest('input')) return;
+                await openByFilename(it.file);
+            });
+
+            li.querySelector('.restore')?.addEventListener('click', async (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                if (!confirm(`「${name}」をゴミ箱から復帰します。よろしいですか？`)) return;
+                await restoreIndexItem(it.file);
+                await reloadIndex();
+                await renderFileList();
             });
         }
     }
 }
 
 function getDragAfterElement(container, y) {
-    const els2 = [...container.querySelectorAll('.fileitem:not(.dragging)')];
-    return els2.reduce( (closest, child) => {
+    const els2 = [...container.querySelectorAll('.fileitem:not(.dragging):not(.trashed)')];
+    return els2.reduce((closest, child) => {
         const box = child.getBoundingClientRect();
         const offset = y - box.top - box.height / 2;
-        return (offset < 0 && offset > closest.offset) ? {
-            offset,
-            element: child
-        } : closest;
-    }
-    , {
-        offset: Number.NEGATIVE_INFINITY
-    }).element;
+        return (offset < 0 && offset > closest.offset)
+            ? { offset, element: child }
+            : closest;
+    }, { offset: Number.NEGATIVE_INFINITY }).element;
 }
 
 /* ---------- Open / Save ---------- */

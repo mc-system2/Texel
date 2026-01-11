@@ -1056,23 +1056,53 @@ function normalizePromptFilename(filename) {
     return f;
 }
 
+
+// --- Texel共通プロンプト（クライアント配下探索を行わない） ---
+const COMMON_PROMPT_FILES = new Set([
+    "texel-floorplan.json",
+    "texel-pdf-image.json",
+]);
+
 function resolvePromptFetchCandidates(filename, clientId) {
     // 仕様：
     // 1) clientId がある場合は「client/<clientId>/」を先に探索
     // 2) 見つからなければ Texel 共通（直下）へフォールバック
     // 3) 既に client/ 配下が明示されている場合はそのまま（フォールバックしない）
+    //
+    // 追加仕様（Type-R/Type-S の互換）：
+    // - client フォルダへのコピー時に texel-r-*.json / texel-s-*.json が texel-*.json に正規化されているケースがあるため、
+    //   client/<cid>/texel-r-xxx.json を探す前に client/<cid>/texel-xxx.json を優先探索する。
     const f = normalizePromptFilename(filename);
-    if (!f)
-        return [];
+    if (!f) return [];
 
-    if (f.toLowerCase().startsWith("client/"))
-        return [f];
+    const fl = f.toLowerCase();
+
+    // 明示的なパスはそのまま（探索しない）
+    if (fl.startsWith("client/")) return [f];
+
+    // Texel 共通プロンプトは client/ を探索しない
+    if (COMMON_PROMPT_FILES.has(fl)) return [f];
 
     const list = [];
-    if (clientId)
-        list.push(`client/${clientId}/${f}`);
+
+    // texel-r-xxx.json / texel-s-xxx.json → client では texel-xxx.json に正規化されている互換
+    const m = /^texel-(r|s)-([a-z0-9\-]+)\.json$/i.exec(f);
+
+    if (clientId) {
+        if (m) {
+            // まず正規化名（texel-xxx.json）を優先
+            list.push(`client/${clientId}/texel-${m[2]}.json`);
+            // その上で、もし client 側に texel-r- / texel-s- のまま存在する場合にも対応
+            list.push(`client/${clientId}/${f}`);
+        } else {
+            list.push(`client/${clientId}/${f}`);
+        }
+    }
+
+    // 最後に Texel 共通（直下）
     list.push(f);
-    return Array.from(new Set(list));
+
+    return Array.from(new Set(list.filter(Boolean)));
 }
 
 // ===== Prompt Index: Safe Loader =====
@@ -1207,7 +1237,6 @@ async function saveExportJson() {
 
       const text = String(ta.value || "");
       out.push({ file, name, text });
-      if (out.length >= 10) break;
     }
     return out;
   }
@@ -1225,19 +1254,16 @@ async function saveExportJson() {
     }
   } else {
     // 3) 取れたらキャッシュ更新
-    __lastOrderedOutputHeaders = orderedOutputHeaders.slice(0, 10);
-    __lastOrderedOutputs = orderedOutputs.slice(0, 10);
+    __lastOrderedOutputHeaders = orderedOutputHeaders.slice();
+    __lastOrderedOutputs = orderedOutputs.slice();
   }
-
-  // 4) 10枠に整形
-  orderedOutputHeaders = new Array(10).fill("").map((_, i) => {
-    const h = String(orderedOutputHeaders[i] || "").trim();
-    return h || `予備${i + 1}`;
+  // 4) 枠数はDOM（＝インデックスの並び）に合わせて可変。
+  //    ただしヘッダー空欄は列名安定のため「予備N」で補完。
+  orderedOutputHeaders = orderedOutputHeaders.map((h, i) => {
+    const v = String(h || "").trim();
+    return v || `予備${i + 1}`;
   });
-  orderedOutputs = new Array(10).fill(null).map((_, i) => {
-    const it = orderedOutputs[i];
-    return it ? { file: it.file || "", name: it.name || "", text: it.text || "" } : { file: "", name: "", text: "" };
-  });
+  const orderedOutputSlotCount = orderedOutputs.length;
 
   const exportJson = {
     propertyCode,
@@ -1253,6 +1279,7 @@ async function saveExportJson() {
     // ★順序確定
     orderedOutputHeaders,
     orderedOutputs,
+    orderedOutputSlotCount,
 
     // 既存互換も残す（必要なら）
     suggestions: document.querySelector("#suggestion-area textarea")?.value.trim() || "",
@@ -3734,6 +3761,34 @@ function buildSuggestionStepsFromIndex(promptIndex) {
     return steps;
 }
 
+
+// --- Rate-limit / backoff helpers (429対策) ---
+const _texelDelay = (ms) => new Promise(r => setTimeout(r, ms));
+let _lastGptCallAt = 0;
+const MIN_GPT_INTERVAL_MS = 1500; // 連続呼び出しの間隔（必要なら調整）
+async function waitForGptSlot() {
+  const now = Date.now();
+  const wait = Math.max(0, (_lastGptCallAt + MIN_GPT_INTERVAL_MS) - now);
+  if (wait > 0) await _texelDelay(wait);
+  _lastGptCallAt = Date.now();
+}
+async function callSuggestFlowStepWithBackoff(args) {
+  const maxTry = 6;
+  let backoff = 1200;
+  for (let i = 1; i <= maxTry; i++) {
+    try {
+      return await callSuggestFlowStep(args);
+    } catch (e) {
+      const msg = String(e?.message || e || "");
+      const is429 = msg.includes("429") || /too many requests|rate limit|retry limit/i.test(msg);
+      if (!is429 || i === maxTry) throw e;
+      console.warn(`[rate] 429/backoff: attempt ${i}/${maxTry} wait ${backoff}ms`);
+      await _texelDelay(backoff + Math.floor(Math.random() * 250));
+      backoff = Math.min(backoff * 2, 20000);
+    }
+  }
+}
+
 async function runSuggestionStepsInOrder({steps, combined, isRetry}) {
     for (const s of steps) {
         const ta = s.textarea;
@@ -3745,7 +3800,8 @@ async function runSuggestionStepsInOrder({steps, combined, isRetry}) {
         if (s.lock)
             ta.readOnly = true;
 
-        const text = await callSuggestFlowStep({
+        await waitForGptSlot();
+        const text = await callSuggestFlowStepWithBackoff({
             promptKeyLike: s.keyLike,
             promptFile: s.promptFile,
             purpose: s.purpose,
@@ -3806,6 +3862,14 @@ async function onGenerateSuggestions(arg) {
 
     // index 取得（client/<id>/prompt-index.json）
     // ※ loadPromptIndexSafe を必ず通す（未定義エラー・取得失敗の握りつぶし対策）
+    // clientId が未入力のケースに備え、最後に確定した clientId を救済
+    if (!clientId) {
+      const last = (localStorage.getItem("texel_last_clientId") || "").trim();
+      if (last) clientId = last;
+    } else {
+      localStorage.setItem("texel_last_clientId", clientId);
+    }
+
     const promptIndex = await loadPromptIndexSafe(clientId);
     if (!promptIndex) {
       throw new Error("prompt-index.json を取得できませんでした（clientId=" + clientId + "）");
@@ -3881,7 +3945,8 @@ async function generatePortals({force=false, isRetry=false}={}) {
             continue;
 
         try {
-            const text = await callSuggestFlowStep({
+            await waitForGptSlot();
+        const text = await callSuggestFlowStepWithBackoff({
                 promptKeyLike: f.pkey,
                 promptFile: f.file,
                 purpose: f.purpose,
