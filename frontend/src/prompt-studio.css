@@ -279,90 +279,102 @@ body {
     color: #888;
 }
 
-
-/* ===== Trash UI & filelist icon alignment (2026-01-11) ===== */
-
-/* secondary action button */
-.btn.ghost {
-  background: transparent;
-  border: 1px solid rgba(0, 0, 0, 0.12);
-}
-.btn.ghost:hover {
-  background: rgba(0, 0, 0, 0.04);
-}
-.btn.ghost.active {
-  background: rgba(37, 99, 235, 0.10);
-  border-color: rgba(37, 99, 235, 0.35);
-}
-
-/* Fix: prevent delete/restore icon from overflowing the card */
+/* ===== Fix: trash icon button overflow (file list) =====
+   - 🗑 ボタンが右に“はみ出す”現象を抑止
+   - prompt-studio-filelist.css 側の指定（margin/position/transform等）を上書き
+*/
 #fileList .fileitem {
-  box-sizing: border-box;
-  overflow: hidden;
-  padding-right: 8px;
+  padding-right: 14px !important; /* 右端に余白を確保 */
 }
-#fileList .fileitem .name {
-  min-width: 0;
-}
-#fileList .fileitem .name-input {
-  width: 100%;
-  min-width: 0;
-}
+
 #fileList .fileitem .meta {
-  box-sizing: border-box;
+  flex: 0 0 44px !important;      /* ボタン分の幅を確保 */
   display: flex !important;
   align-items: center !important;
   justify-content: flex-end !important;
-  flex: 0 0 44px !important;
-  width: 44px !important;
-  padding-right: 4px;
-}
-#fileList .fileitem .meta > button {
-  width: 28px;
-  height: 28px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0;
-  margin: 0;
-  line-height: 1;
-  border-radius: 10px;
-}
-#fileList .fileitem .meta > button.delete,
-#fileList .fileitem .meta > button.restore {
-  border: 1px solid rgba(0, 0, 0, 0.12);
-  background: #fff;
-}
-#fileList .fileitem .meta > button.delete:hover,
-#fileList .fileitem .meta > button.restore:hover {
-  background: rgba(0, 0, 0, 0.04);
+  padding-right: 4px !important;
+  overflow: visible !important;
 }
 
-/* Trash section */
-.trash-header {
-  margin: 12px 0 6px;
-  padding: 8px 10px;
-  font-size: 12px;
-  font-weight: 600;
-  color: #666;
-  background: #f6f7f9;
-  border: 1px solid #e5e7eb;
-  border-radius: 10px;
+#fileList .fileitem .delete {
+  margin: 0 !important;
+  padding: 0 !important;
+  width: 28px !important;
+  height: 28px !important;
+  line-height: 1 !important;
+  font-size: 16px !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  border: 1px solid transparent !important;
+  border-radius: 10px !important;
+  background: transparent !important;
+
+  /* “はみ出し”の原因になりがちな指定を無効化 */
+  position: relative !important;
+  right: 0 !important;
+  transform: none !important;
 }
-.trash-empty {
-  padding: 8px 10px;
-  color: #888;
-  font-size: 12px;
+
+#fileList .fileitem .delete:hover {
+  background: #f2f4fa !important;
 }
-#fileList .fileitem.trashed {
-  opacity: 0.75;
+
+
+/* ===== Sidebar: add + Trash buttons row ===== */
+.side-actions {
+  flex-direction: column;
+  align-items: stretch;
 }
-#fileList .fileitem.trashed .drag {
-  opacity: 0.5;
+
+.side-actions-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
 }
-#fileList .fileitem.trashed .name-input {
-  text-decoration: line-through;
+
+/* secondary button (Trash toggle) - black text by default */
+.btn.secondary {
+  background: #fff;
+  color: #000;
+  border: 1px solid var(--line);
 }
-#fileList .fileitem.trashed .trash-badge {
-  margin-right: 6px;
+
+.btn.secondary:hover {
+  background: #f2f4fa;
+}
+
+.btn.secondary.active {
+  background: #111;
+  color: #fff;
+  border-color: #111;
+}
+
+
+/* ===== Trash mode list ===== */
+#fileList.trash-mode .drag {
+  visibility: hidden;
+}
+
+#fileList .fileitem .restore {
+  margin: 0 !important;
+  padding: 0 !important;
+  width: 28px !important;
+  height: 28px !important;
+  line-height: 1 !important;
+  font-size: 16px !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  border: 1px solid transparent !important;
+  border-radius: 10px !important;
+  background: transparent !important;
+  position: relative !important;
+  right: 0 !important;
+  transform: none !important;
+}
+
+#fileList .fileitem .restore:hover {
+  background: #f2f4fa !important;
 }
