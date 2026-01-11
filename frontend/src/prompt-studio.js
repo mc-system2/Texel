@@ -385,6 +385,11 @@ function normalizeIndex(x) {
             // 余計なフィールド（他形式の名残）を除去
             if ("prompt" in o) delete o.prompt;
             if ("params" in o) delete o.params;
+            // Exclude system index artifacts from editable list
+            o.items = (o.items || []).filter(it => {
+                const f = String(it?.file || "").trim().toLowerCase();
+                return f && f !== "prompt-index.json" && f !== "prompt-index.backup.json";
+            });
             return o;
         };
 
@@ -989,6 +994,7 @@ async function apiListClientPromptFiles(clientId) {
 
                 if (!rel.toLowerCase().endsWith(".json")) continue;
                 if (rel === "prompt-index.json") continue;
+                if (rel === "prompt-index.backup.json") continue;
                 out.push(rel);
             }
 
