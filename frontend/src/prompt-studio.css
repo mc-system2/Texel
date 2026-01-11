@@ -278,3 +278,44 @@ body {
 .fileitem.locked .name-input {
     color: #888;
 }
+
+/* ===== Fix: trash icon button overflow (file list) =====
+   - 🗑 ボタンが右に“はみ出す”現象を抑止
+   - prompt-studio-filelist.css 側の指定（margin/position/transform等）を上書き
+*/
+#fileList .fileitem {
+  padding-right: 14px !important; /* 右端に余白を確保 */
+}
+
+#fileList .fileitem .meta {
+  flex: 0 0 44px !important;      /* ボタン分の幅を確保 */
+  display: flex !important;
+  align-items: center !important;
+  justify-content: flex-end !important;
+  padding-right: 4px !important;
+  overflow: visible !important;
+}
+
+#fileList .fileitem .delete {
+  margin: 0 !important;
+  padding: 0 !important;
+  width: 28px !important;
+  height: 28px !important;
+  line-height: 1 !important;
+  font-size: 16px !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  border: 1px solid transparent !important;
+  border-radius: 10px !important;
+  background: transparent !important;
+
+  /* “はみ出し”の原因になりがちな指定を無効化 */
+  position: relative !important;
+  right: 0 !important;
+  transform: none !important;
+}
+
+#fileList .fileitem .delete:hover {
+  background: #f2f4fa !important;
+}
