@@ -624,42 +624,63 @@ function join(base, path) {
 // ===== プロンプト同期（保存後） =====
 // ===== プロンプト同期（保存後） =====
 async function syncClientPromptsAfterSave(currentClients) {
+    // 目的：Client Catalog の保存を契機に、必要最小限だけ prompt の同期を行う。
+    // 重要：クライアント名やSpreadsheet IDの変更だけでは、クライアントフォルダ（clientId）配下の
+    // prompt-index.json を再生成/上書きさせない（＝データ消失のリスクを下げる）。
+    //
+    // 同期対象（adds）：
+    // - 新規クライアント（前回カタログに存在しなかった code）
+    // - behavior が変わったクライアント（BASE ⇄ TYPE-R/TYPE-S）
+    //
+    // 削除対象（deletes）：
+    // - 前回カタログに存在し、今回存在しない code
+    //
+    // ※ BLOB のクライアントフォルダ名は clientId（＝ここでは code）で運用する前提。
+
     const nowMap = new Map(currentClients.map(c => [c.code, normalizeBehavior(c.behavior || "")]));
+
+    const forceSyncAll = (new URLSearchParams(location.search).get("forceSync") === "1");
+
 
     const deletes = [];
     for (const code of previousCatalogCodes.keys()) {
-        if (!nowMap.has(code))
-            deletes.push(code);
+        if (!nowMap.has(code)) deletes.push(code);
     }
 
-    // ★ ここを修正（name / spreadsheetId / createdAt を API に渡す）
     const adds = [];
     for (const c of currentClients) {
+        const code = String(c.code || "").toUpperCase();
+        if (!code) continue;
+
+        const nowBeh = normalizeBehavior(c.behavior || "");
+        const prevBeh = previousCatalogCodes.get(code); // undefined = 新規
+
+        const isNew = (prevBeh === undefined);
+        const behaviorChanged = (prevBeh !== undefined && prevBeh !== nowBeh);
+
+        if (!forceSyncAll && !isNew && !behaviorChanged) continue; // ★ 通常は名前変更等では同期しない（?forceSync=1 で全同期）
+
         adds.push({
-            code: c.code,
-            behavior: normalizeBehavior(c.behavior || ""),
+            // backend 側の期待フィールド揺れに備えて両方送る（どちらも同一値）
+            code,
+            clientId: code,
+            behavior: nowBeh,
             name: c.name || "",
             spreadsheetId: c.spreadsheetId || "",
             createdAt: c.createdAt || ""
         });
     }
 
-    if (adds.length === 0 && deletes.length === 0)
-        return;
+    if (adds.length === 0 && deletes.length === 0) return;
 
     setStatus("プロンプト同期中…");
     const url = join(els.apiBase.value, "SyncClientPrompts");
-    const payload = {
-        adds,
-        deletes
-    };
+    const payload = { adds, deletes };
 
     try {
         const res = await fetch(url, {
             method: "POST",
-            headers: {
-                "Content-Type": "application/json; charset=utf-8"
-            },
+            headers: { "Content-Type": "application/json; charset=utf-8" },
             body: JSON.stringify(payload)
         });
 
@@ -672,9 +693,7 @@ async function syncClientPromptsAfterSave(currentClients) {
                 result = await res.json();
             } else {
                 rawText = await res.text();
-                try {
-                    result = JSON.parse(rawText);
-                } catch {}
+                try { result = JSON.parse(rawText); } catch {}
             }
         } catch {}
 
@@ -698,6 +717,7 @@ async function syncClientPromptsAfterSave(currentClients) {
 }
 
 // ---- 起動時自動読込 ----
+
 window.addEventListener("DOMContentLoaded", async () => {
     // 1) URLパラメータ / localStorage で既に apiBase が埋まっている場合はそれを優先
     //    （getApiBase → setApiBase の処理でここまでに反映済み）

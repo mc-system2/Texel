@@ -373,7 +373,14 @@ function findClientMetaFromCatalog(catalog, clientId) {
     Array.isArray(catalog.items) ? catalog.items :
     Array.isArray(catalog.clients) ? catalog.clients :
     Array.isArray(catalog.data) ? catalog.data : [];
-  return arr.find(x => (x?.clientId || x?.id || "") === clientId) || null;
+  return arr.find(x => (x?.clientId || x?.id || x?.code || x?.client || "") === clientId) || null;
+}
+
+function normalizeBehaviorFromCatalogValue(v) {
+  const s = String(v || "").trim().toUpperCase();
+  if (s === "R" || s === "TYPE-R" || s === "TYPER") return "TYPE-R";
+  if (s === "S" || s === "TYPE-S" || s === "TYPES") return "TYPE-S";
+  return "BASE";
 }
 
 function normalizeIndex(x) {
@@ -461,21 +468,36 @@ async function ensurePromptIndex(clientId, behavior, bootstrap=true) {
       promptIndexPath = path;
       promptIndexEtag = r.etag || null;
 
-      // If header fields are missing in index, backfill from client-catalog and persist (index is canonical thereafter)
-      if ((!idx.name || !idx.spreadsheetId) && typeof loadClientCatalogSafe === "function") {
+      // Sync header meta with client-catalog safely (items are never reset here)
+      if (typeof loadClientCatalogSafe === "function") {
         try {
-          const catalog = await loadClientCatalogSafe();
-          const meta = findClientMetaFromCatalog(catalog, clientId);
+          const catalogJson = await loadClientCatalogSafe();
+          const meta = findClientMetaFromCatalog(catalogJson, clientId);
           if (meta) {
+            const desiredName = String(meta.name || "").trim();
+            const desiredSheet = String(meta.spreadsheetId || "").trim();
+
+            // behavior は catalog 側に値がある場合のみ追随（R/S/空=BASE を許容）
+            const hasMetaBehavior = (meta.behavior !== undefined && meta.behavior !== null);
+            const desiredBehavior = hasMetaBehavior ? normalizeBehaviorFromCatalogValue(meta.behavior) : null;
+
             let changedMeta = false;
-            if (!idx.name && meta.name) { idx.name = meta.name; changedMeta = true; }
-            if (!idx.spreadsheetId && meta.spreadsheetId) { idx.spreadsheetId = meta.spreadsheetId; changedMeta = true; }
-            if (!idx.behavior && (meta.behavior || behavior)) { idx.behavior = meta.behavior || behavior; changedMeta = true; }
+
+            if (desiredName && desiredName !== idx.name) { idx.name = desiredName; changedMeta = true; }
+            if (desiredSheet && desiredSheet !== idx.spreadsheetId) { idx.spreadsheetId = desiredSheet; changedMeta = true; }
+            if (desiredBehavior && desiredBehavior !== idx.behavior) { idx.behavior = desiredBehavior; changedMeta = true; }
+
+            // createdAt は一度入ったら上書きしない（未設定の場合のみ補完）
             if (!idx.createdAt && meta.createdAt) { idx.createdAt = meta.createdAt; changedMeta = true; }
+
             if (changedMeta) {
               idx.updatedAt = new Date().toISOString();
-              const savedMeta = await apiSavePromptIndexWithBackup(clientId, path, idx, promptIndexEtag).catch(() => null);
-              if (savedMeta && savedMeta.ok) promptIndexEtag = savedMeta.etag || promptIndexEtag;
+              const saved = await apiSavePromptIndexWithBackup(clientId, idxPath, idx, promptIndexEtag);
+              if (saved?.status === 200) {
+                promptIndex = normalizeIndex(saved.data) || idx;
+                promptIndexEtag = saved.etag || promptIndexEtag;
+                idx = promptIndex;
+              }
             }
           }
         } catch {}
